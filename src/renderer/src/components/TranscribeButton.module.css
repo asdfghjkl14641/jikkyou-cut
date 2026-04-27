@@ -50,6 +50,17 @@
   transition: width 200ms ease-out;
 }
 
+.progressIndeterminate {
+  width: 30%;
+  animation: indeterminate 1.6s ease-in-out infinite;
+}
+
+@keyframes indeterminate {
+  0%   { margin-left: -30%; }
+  50%  { margin-left: 50%; }
+  100% { margin-left: 100%; }
+}
+
 .progressMeta {
   display: flex;
   align-items: center;

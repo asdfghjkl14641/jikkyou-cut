@@ -2,10 +2,11 @@ import { app, BrowserWindow, ipcMain } from 'electron';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 import { registerMediaScheme, handleMediaProtocol } from './mediaProtocol';
-import { openVideoFileDialog, openModelFileDialog } from './fileDialog';
+import { openVideoFileDialog } from './fileDialog';
 import { buildMenu } from './menu';
 import { loadConfig, saveConfig } from './config';
-import { startTranscription, cancelTranscription } from './whisper';
+import * as secureStorage from './secureStorage';
+import * as gemini from './gemini';
 import type { AppConfig } from '../common/config';
 import type { TranscriptionStartArgs } from '../common/types';
 
@@ -47,32 +48,41 @@ function registerIpcHandlers() {
     return openVideoFileDialog(mainWindow);
   });
 
-  ipcMain.handle('dialog:openModel', async () => {
-    if (!mainWindow) return null;
-    return openModelFileDialog(mainWindow);
-  });
-
+  // settings (non-secret)
   ipcMain.handle('settings:get', () => loadConfig());
   ipcMain.handle('settings:save', (_e, partial: Partial<AppConfig>) =>
     saveConfig(partial),
   );
 
-  ipcMain.handle('transcription:start', async (_e, args: TranscriptionStartArgs) => {
-    const config = await loadConfig();
-    if (!config.whisperModelPath) {
-      throw new Error('Whisperモデルが設定されていません');
+  // API key — raw key only crosses the boundary inbound.
+  ipcMain.handle('apiKey:has', () => secureStorage.hasSecret());
+  ipcMain.handle('apiKey:set', async (_e, key: string) => {
+    if (typeof key !== 'string' || key.length === 0) {
+      throw new Error('APIキーが空です');
     }
-    return startTranscription({
+    await secureStorage.saveSecret(key);
+  });
+  ipcMain.handle('apiKey:clear', () => secureStorage.deleteSecret());
+  ipcMain.handle('apiKey:validate', (_e, key: string) =>
+    gemini.validateApiKey(key),
+  );
+
+  // transcription
+  ipcMain.handle('transcription:start', async (_e, args: TranscriptionStartArgs) => {
+    const apiKey = await secureStorage.loadSecret();
+    if (!apiKey) throw new Error('APIキーが設定されていません');
+    const config = await loadConfig();
+    return gemini.transcribe({
       videoFilePath: args.videoFilePath,
-      modelPath: config.whisperModelPath,
       durationSec: args.durationSec,
+      apiKey,
+      context: config.transcriptionContext,
       onProgress: (p) => {
         mainWindow?.webContents.send('transcription:progress', p);
       },
     });
   });
-
-  ipcMain.handle('transcription:cancel', () => cancelTranscription());
+  ipcMain.handle('transcription:cancel', () => gemini.cancelTranscription());
 }
 
 app.whenReady().then(() => {

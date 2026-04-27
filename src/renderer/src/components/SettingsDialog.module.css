@@ -55,12 +55,13 @@
   margin-bottom: 6px;
 }
 
-.pathRow {
+.row {
   display: flex;
   gap: 8px;
+  align-items: center;
 }
 
-.pathInput {
+.input {
   flex: 1;
   padding: 6px 10px;
   border: 1px solid #ccc;
@@ -71,20 +72,28 @@
   min-width: 0;
 }
 
-.browseButton {
-  appearance: none;
-  background: #fff;
-  border: 1px solid #ccc;
+.statusOk {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  background: #e8f5e9;
+  border: 1px solid #a5d6a7;
+  color: #1b5e20;
   border-radius: 4px;
-  padding: 6px 14px;
   font-size: 13px;
-  font-family: inherit;
-  cursor: pointer;
-  flex-shrink: 0;
 }
 
-.browseButton:hover {
-  background: #f0f0f0;
+.linkButton {
+  appearance: none;
+  background: transparent;
+  border: none;
+  color: #1565c0;
+  text-decoration: underline;
+  cursor: pointer;
+  font-size: 12px;
+  font-family: inherit;
+  padding: 0;
 }
 
 .help {
@@ -144,7 +153,8 @@
   cursor: pointer;
 }
 
-.saveButton:disabled {
-  background: #b0bec5;
+.saveButton:disabled,
+.cancelButton:disabled {
+  opacity: 0.5;
   cursor: not-allowed;
 }

@@ -4,7 +4,12 @@ import type {
   TranscriptionResult,
 } from '../../../common/types';
 
-type TranscriptionStatus = 'idle' | 'running' | 'success' | 'error' | 'cancelled';
+type TranscriptionStatus =
+  | 'idle'
+  | 'running'
+  | 'success'
+  | 'error'
+  | 'cancelled';
 
 type EditorState = {
   filePath: string | null;
@@ -81,12 +86,14 @@ export const useEditorStore = create<EditorState>((set) => ({
     set({
       transcription: result,
       transcriptionStatus: 'success',
+      transcriptionProgress: null,
     }),
 
   failTranscription: (msg) =>
     set({
       transcriptionStatus: 'error',
       transcriptionError: msg,
+      transcriptionProgress: null,
     }),
 
   cancelTranscription: () =>

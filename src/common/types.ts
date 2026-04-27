@@ -9,17 +9,20 @@ export type TranscriptCue = {
 };
 
 export type TranscriptionResult = {
-  modelPath: string;
   language: string;
   cues: TranscriptCue[];
   srtFilePath: string;
   generatedAt: number;
 };
 
+export type TranscriptionPhase = 'extracting' | 'uploading' | 'transcribing';
+
 export type TranscriptionProgress = {
-  outTimeMicros: number;
-  durationMicros: number;
-  speed?: number;
+  phase: TranscriptionPhase;
+  // 0..1 when known (extracting, uploading)
+  ratio?: number;
+  // accumulated seconds when ratio is unknown (transcribing)
+  elapsedSec?: number;
 };
 
 export type TranscriptionStartArgs = {
@@ -27,19 +30,35 @@ export type TranscriptionStartArgs = {
   durationSec: number;
 };
 
-// Distinguishes user-cancelled runs from real errors so the UI can suppress error banners.
+export type ApiKeyValidationResult = {
+  valid: boolean;
+  error?: string;
+};
+
+// Distinguishes user-cancelled runs from real errors.
 export const TRANSCRIPTION_CANCELLED = 'TRANSCRIPTION_CANCELLED';
 
 export type IpcApi = {
+  // file dialogs
   openFileDialog: () => Promise<string | null>;
-  openModelFileDialog: () => Promise<string | null>;
   getPathForFile: (file: File) => string;
+
+  // menu events
   onMenuOpenFile: (cb: () => void) => () => void;
   onMenuOpenSettings: (cb: () => void) => () => void;
 
+  // settings (non-secret)
   getSettings: () => Promise<AppConfig>;
   saveSettings: (partial: Partial<AppConfig>) => Promise<AppConfig>;
 
+  // API key (secret) — raw key only crosses the boundary inbound.
+  // The renderer can never read the stored key back.
+  hasApiKey: () => Promise<boolean>;
+  setApiKey: (key: string) => Promise<void>;
+  clearApiKey: () => Promise<void>;
+  validateApiKey: (key: string) => Promise<ApiKeyValidationResult>;
+
+  // transcription
   startTranscription: (args: TranscriptionStartArgs) => Promise<TranscriptionResult>;
   cancelTranscription: () => Promise<void>;
   onTranscriptionProgress: (

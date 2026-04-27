@@ -1,45 +1,72 @@
 import { useEffect, useRef, useState } from 'react';
-import type { AppConfig } from '../../../common/config';
 import styles from './SettingsDialog.module.css';
 
 type Props = {
   open: boolean;
-  initial: AppConfig;
+  hasApiKey: boolean;
   onClose: () => void;
-  onSave: (partial: Partial<AppConfig>) => Promise<unknown>;
+  onValidateApiKey: (key: string) => Promise<{ valid: boolean; error?: string }>;
+  onSaveApiKey: (key: string) => Promise<void>;
+  onClearApiKey: () => Promise<void>;
 };
 
-const MODEL_DOWNLOAD_URL = 'https://huggingface.co/ggerganov/whisper.cpp/tree/main';
+const API_KEY_DOC_URL = 'https://aistudio.google.com/app/apikey';
 
-export default function SettingsDialog({ open, initial, onClose, onSave }: Props) {
+export default function SettingsDialog({
+  open,
+  hasApiKey,
+  onClose,
+  onValidateApiKey,
+  onSaveApiKey,
+  onClearApiKey,
+}: Props) {
   const ref = useRef<HTMLDialogElement>(null);
-  const [modelPath, setModelPath] = useState(initial.whisperModelPath ?? '');
+  const [keyInput, setKeyInput] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
 
   useEffect(() => {
     if (open) {
-      setModelPath(initial.whisperModelPath ?? '');
+      setKeyInput('');
       setError(null);
+      setSaving(false);
       ref.current?.showModal();
     } else {
       ref.current?.close();
     }
-  }, [open, initial.whisperModelPath]);
-
-  const handleBrowse = async () => {
-    const picked = await window.api.openModelFileDialog();
-    if (picked) setModelPath(picked);
-  };
+  }, [open]);
 
   const handleSave = async () => {
+    const key = keyInput.trim();
+    if (!key) {
+      setError('APIキーを入力してください');
+      return;
+    }
     setSaving(true);
     setError(null);
     try {
-      await onSave({ whisperModelPath: modelPath.trim() || null });
+      const result = await onValidateApiKey(key);
+      if (!result.valid) {
+        setError(result.error ?? 'APIキーが無効です');
+        setSaving(false);
+        return;
+      }
+      await onSaveApiKey(key);
+      // Drop the key from local component state; never echo back.
+      setKeyInput('');
       onClose();
     } catch (err) {
       setError((err as Error).message);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const handleClear = async () => {
+    setSaving(true);
+    setError(null);
+    try {
+      await onClearApiKey();
     } finally {
       setSaving(false);
     }
@@ -59,6 +86,7 @@ export default function SettingsDialog({ open, initial, onClose, onSave }: Props
           className={styles.closeButton}
           onClick={onClose}
           aria-label="閉じる"
+          disabled={saving}
         >
           ×
         </button>
@@ -66,50 +94,63 @@ export default function SettingsDialog({ open, initial, onClose, onSave }: Props
 
       <div className={styles.body}>
         <div className={styles.section}>
-          <label className={styles.label} htmlFor="model-path">
-            Whisperモデルファイル
+          <label className={styles.label} htmlFor="api-key">
+            Gemini APIキー
           </label>
-          <div className={styles.pathRow}>
+
+          {hasApiKey && (
+            <div className={styles.statusOk}>
+              <span>✓ 設定済み</span>
+              <button
+                type="button"
+                className={styles.linkButton}
+                onClick={handleClear}
+                disabled={saving}
+              >
+                削除
+              </button>
+            </div>
+          )}
+
+          <div className={styles.row} style={{ marginTop: hasApiKey ? 12 : 0 }}>
             <input
-              id="model-path"
-              type="text"
-              className={styles.pathInput}
-              value={modelPath}
-              onChange={(e) => setModelPath(e.target.value)}
-              placeholder="C:\path\to\ggml-large-v3-turbo-q5_0.bin"
+              id="api-key"
+              type="password"
+              className={styles.input}
+              value={keyInput}
+              onChange={(e) => setKeyInput(e.target.value)}
+              placeholder={hasApiKey ? '新しいキーを入力して上書き...' : 'AIza...'}
               spellCheck={false}
+              autoComplete="off"
+              disabled={saving}
             />
-            <button
-              type="button"
-              className={styles.browseButton}
-              onClick={handleBrowse}
-            >
-              参照...
-            </button>
           </div>
           <div className={styles.help}>
-            推奨: <code>ggml-large-v3-turbo-q5_0.bin</code> (約 547 MB、日本語精度・速度ともに良好)
-            <br />
-            軽量お試し用に <code>ggml-base.bin</code> (約 142 MB) も使用可。日本語精度は劣ります。
-            <br />
-            ダウンロード:{' '}
-            <a href={MODEL_DOWNLOAD_URL} target="_blank" rel="noreferrer">
-              {MODEL_DOWNLOAD_URL}
+            Google AI Studio で発行できます:{' '}
+            <a href={API_KEY_DOC_URL} target="_blank" rel="noreferrer">
+              {API_KEY_DOC_URL}
             </a>
+            <br />
+            キーはOSの資格情報マネージャ(Windowsの場合DPAPI)で暗号化保存されます。
           </div>
           {error && <div className={styles.error}>{error}</div>}
         </div>
       </div>
 
       <div className={styles.footer}>
-        <button type="button" className={styles.cancelButton} onClick={onClose}>
+        <button
+          type="button"
+          className={styles.cancelButton}
+          onClick={onClose}
+          disabled={saving}
+        >
           キャンセル
         </button>
         <button
           type="button"
           className={styles.saveButton}
           onClick={handleSave}
-          disabled={saving}
+          disabled={saving || keyInput.trim().length === 0}
         >
           {saving ? '保存中...' : '保存'}
         </button>

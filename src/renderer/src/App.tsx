@@ -1,12 +1,14 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useCallback } from 'react';
 import { useEditorStore } from './store/editorStore';
 import { useSettings } from './hooks/useSettings';
 import DropZone from './components/DropZone';
 import VideoPlayer from './components/VideoPlayer';
-import ModelSetupBanner from './components/ModelSetupBanner';
+import ApiKeySetupBanner from './components/ApiKeySetupBanner';
 import SettingsDialog from './components/SettingsDialog';
 import TranscribeButton from './components/TranscribeButton';
 import TranscriptList from './components/TranscriptList';
+import TranscriptionContextForm from './components/TranscriptionContextForm';
+import type { TranscriptionContext } from '../../common/config';
 import styles from './App.module.css';
 
 export default function App() {
@@ -16,7 +18,7 @@ export default function App() {
   const clearFile = useEditorStore((s) => s.clearFile);
   const setDuration = useEditorStore((s) => s.setDuration);
 
-  const { settings, save } = useSettings();
+  const { view, save, validateApiKey, setApiKey, clearApiKey } = useSettings();
   const [settingsOpen, setSettingsOpen] = useState(false);
 
   useEffect(
@@ -33,8 +35,15 @@ export default function App() {
     [],
   );
 
-  const modelConfigured = !!settings?.whisperModelPath;
-  const showBanner = settings != null && !modelConfigured;
+  const handleContextChange = useCallback(
+    (next: TranscriptionContext) => {
+      void save({ transcriptionContext: next });
+    },
+    [save],
+  );
+
+  const apiKeyConfigured = view?.hasApiKey ?? false;
+  const showBanner = view != null && !apiKeyConfigured;
 
   return (
     <main className={styles.app}>
@@ -65,7 +74,7 @@ export default function App() {
       </header>
 
       {showBanner && (
-        <ModelSetupBanner onOpenSettings={() => setSettingsOpen(true)} />
+        <ApiKeySetupBanner onOpenSettings={() => setSettingsOpen(true)} />
       )}
 
       <section className={styles.body}>
@@ -75,7 +84,13 @@ export default function App() {
               <VideoPlayer filePath={filePath} onDuration={setDuration} />
             </div>
             <div className={styles.right}>
-              <TranscribeButton modelConfigured={modelConfigured} />
+              {view && (
+                <TranscriptionContextForm
+                  initial={view.config.transcriptionContext}
+                  onChange={handleContextChange}
+                />
+              )}
+              <TranscribeButton apiKeyConfigured={apiKeyConfigured} />
               <TranscriptList />
             </div>
           </>
@@ -86,12 +101,14 @@ export default function App() {
         )}
       </section>
 
-      {settings && (
+      {view && (
         <SettingsDialog
           open={settingsOpen}
-          initial={settings}
+          hasApiKey={view.hasApiKey}
           onClose={() => setSettingsOpen(false)}
-          onSave={save}
+          onValidateApiKey={validateApiKey}
+          onSaveApiKey={setApiKey}
+          onClearApiKey={clearApiKey}
         />
       )}
     </main>

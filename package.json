@@ -17,6 +17,7 @@
     "tsc": "tsc --build"
   },
   "dependencies": {
+    "@google/genai": "^1.50.1",
     "execa": "^9.6.1",
     "nanoid": "^5.1.9",
     "zustand": "^5.0.2"

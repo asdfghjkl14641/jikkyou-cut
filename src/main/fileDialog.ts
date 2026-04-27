@@ -12,16 +12,3 @@ export async function openVideoFileDialog(parent: BrowserWindow): Promise<string
   if (result.canceled || result.filePaths.length === 0) return null;
   return result.filePaths[0] ?? null;
 }
-
-export async function openModelFileDialog(parent: BrowserWindow): Promise<string | null> {
-  const result = await dialog.showOpenDialog(parent, {
-    title: 'Whisperモデルファイルを選択',
-    properties: ['openFile'],
-    filters: [
-      { name: 'Whisperモデル (.bin)', extensions: ['bin'] },
-      { name: 'すべてのファイル', extensions: ['*'] },
-    ],
-  });
-  if (result.canceled || result.filePaths.length === 0) return null;
-  return result.filePaths[0] ?? null;
-}

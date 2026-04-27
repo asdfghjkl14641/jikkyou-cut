@@ -1,5 +1,5 @@
 import { contextBridge, ipcRenderer, webUtils } from 'electron';
-import type { IpcApi } from '../common/types';
+import type { IpcApi, TranscriptionProgress } from '../common/types';
 
 const onChannel = (channel: string) => (cb: () => void) => {
   const listener = () => cb();
@@ -11,7 +11,6 @@ const onChannel = (channel: string) => (cb: () => void) => {
 
 const api: IpcApi = {
   openFileDialog: () => ipcRenderer.invoke('dialog:openFile'),
-  openModelFileDialog: () => ipcRenderer.invoke('dialog:openModel'),
   getPathForFile: (file) => webUtils.getPathForFile(file),
   onMenuOpenFile: onChannel('menu:openFile'),
   onMenuOpenSettings: onChannel('menu:openSettings'),
@@ -19,12 +18,17 @@ const api: IpcApi = {
   getSettings: () => ipcRenderer.invoke('settings:get'),
   saveSettings: (partial) => ipcRenderer.invoke('settings:save', partial),
 
+  hasApiKey: () => ipcRenderer.invoke('apiKey:has'),
+  setApiKey: (key) => ipcRenderer.invoke('apiKey:set', key),
+  clearApiKey: () => ipcRenderer.invoke('apiKey:clear'),
+  validateApiKey: (key) => ipcRenderer.invoke('apiKey:validate', key),
+
   startTranscription: (args) => ipcRenderer.invoke('transcription:start', args),
   cancelTranscription: () => ipcRenderer.invoke('transcription:cancel'),
   onTranscriptionProgress: (cb) => {
     const listener = (
       _e: Electron.IpcRendererEvent,
-      p: Parameters<typeof cb>[0],
+      p: TranscriptionProgress,
     ) => cb(p);
     ipcRenderer.on('transcription:progress', listener);
     return () => {
