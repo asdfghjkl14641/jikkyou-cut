@@ -1,6 +1,10 @@
 import { Menu, type BrowserWindow, type MenuItemConstructorOptions } from 'electron';
 
 export function buildMenu(getMainWindow: () => BrowserWindow | null) {
+  const send = (channel: string) => () => {
+    getMainWindow()?.webContents.send(channel);
+  };
+
   const template: MenuItemConstructorOptions[] = [
     {
       label: 'ファイル',
@@ -8,9 +12,12 @@ export function buildMenu(getMainWindow: () => BrowserWindow | null) {
         {
           label: '開く...',
           accelerator: 'CmdOrCtrl+O',
-          click: () => {
-            getMainWindow()?.webContents.send('menu:openFile');
-          },
+          click: send('menu:openFile'),
+        },
+        {
+          label: '設定...',
+          accelerator: 'CmdOrCtrl+,',
+          click: send('menu:openSettings'),
         },
         { type: 'separator' },
         { role: 'quit', label: '終了' },

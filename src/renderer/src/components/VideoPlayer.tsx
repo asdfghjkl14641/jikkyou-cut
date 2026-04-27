@@ -1,12 +1,15 @@
 import { useEffect, useRef, useState, type SyntheticEvent } from 'react';
 import styles from './VideoPlayer.module.css';
 
-type Props = { filePath: string };
+type Props = {
+  filePath: string;
+  onDuration?: (sec: number) => void;
+};
 
 const toMediaUrl = (absPath: string) =>
   `media://localhost/${encodeURIComponent(absPath)}`;
 
-export default function VideoPlayer({ filePath }: Props) {
+export default function VideoPlayer({ filePath, onDuration }: Props) {
   const videoRef = useRef<HTMLVideoElement>(null);
   const [error, setError] = useState<string | null>(null);
 
@@ -29,6 +32,13 @@ export default function VideoPlayer({ filePath }: Props) {
     }
   };
 
+  const handleLoadedMetadata = () => {
+    const d = videoRef.current?.duration;
+    if (d != null && Number.isFinite(d) && d > 0) {
+      onDuration?.(d);
+    }
+  };
+
   return (
     <div className={styles.player}>
       {error && <div className={styles.errorBanner}>{error}</div>}
@@ -39,6 +49,7 @@ export default function VideoPlayer({ filePath }: Props) {
         controls
         className={styles.video}
         onError={handleError}
+        onLoadedMetadata={handleLoadedMetadata}
       />
     </div>
   );
