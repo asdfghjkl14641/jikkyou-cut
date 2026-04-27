@@ -1,10 +1,16 @@
-import { app, BrowserWindow } from 'electron';
+import { app, BrowserWindow, ipcMain } from 'electron';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
+import { registerMediaScheme, handleMediaProtocol } from './mediaProtocol';
+import { openVideoFileDialog } from './fileDialog';
+import { buildMenu } from './menu';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 let mainWindow: BrowserWindow | null = null;
+
+// must be called before `app.ready`
+registerMediaScheme();
 
 function createWindow() {
   mainWindow = new BrowserWindow({
@@ -19,6 +25,10 @@ function createWindow() {
     },
   });
 
+  mainWindow.on('closed', () => {
+    mainWindow = null;
+  });
+
   const devServerUrl = process.env['ELECTRON_RENDERER_URL'];
   if (devServerUrl) {
     mainWindow.loadURL(devServerUrl);
@@ -29,6 +39,14 @@ function createWindow() {
 }
 
 app.whenReady().then(() => {
+  handleMediaProtocol();
+  buildMenu(() => mainWindow);
+
+  ipcMain.handle('dialog:openFile', async () => {
+    if (!mainWindow) return null;
+    return openVideoFileDialog(mainWindow);
+  });
+
   createWindow();
 
   app.on('activate', () => {
