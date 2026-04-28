@@ -1,0 +1,83 @@
+.timeline {
+  height: 80px;
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  background: #fafafa;
+  border-top: 1px solid #e0e0e0;
+  padding: 6px 16px;
+  box-sizing: border-box;
+  user-select: none;
+}
+
+.placeholder {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #999;
+  font-size: 12px;
+}
+
+.labels {
+  display: flex;
+  justify-content: space-between;
+  font-size: 10px;
+  font-family: ui-monospace, 'Cascadia Code', 'Consolas', monospace;
+  color: #757575;
+  margin-bottom: 4px;
+}
+
+.track {
+  position: relative;
+  flex: 1;
+  background: #e0e0e0;
+  border-radius: 3px;
+  overflow: hidden;
+  cursor: pointer;
+}
+
+.kept {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  background: #1976d2;
+  transition: background-color 100ms;
+}
+
+.track:hover .kept {
+  background: #2196f3;
+}
+
+.cursor {
+  position: absolute;
+  top: -4px;
+  bottom: -4px;
+  width: 2px;
+  background: #d32f2f;
+  pointer-events: none;
+  margin-left: -1px;
+  z-index: 2;
+}
+
+.cursor::before,
+.cursor::after {
+  content: '';
+  position: absolute;
+  left: 50%;
+  width: 0;
+  height: 0;
+  border-left: 4px solid transparent;
+  border-right: 4px solid transparent;
+  transform: translateX(-50%);
+}
+
+.cursor::before {
+  top: -4px;
+  border-top: 5px solid #d32f2f;
+}
+
+.cursor::after {
+  bottom: -4px;
+  border-bottom: 5px solid #d32f2f;
+}

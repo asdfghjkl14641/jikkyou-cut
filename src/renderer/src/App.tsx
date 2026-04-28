@@ -12,6 +12,8 @@ import RestoreBanner from './components/RestoreBanner';
 import SettingsDialog from './components/SettingsDialog';
 import TranscribeButton from './components/TranscribeButton';
 import EditableTranscriptList from './components/EditableTranscriptList';
+import Timeline from './components/Timeline';
+import ExportPreview from './components/ExportPreview';
 import TranscriptionContextForm from './components/TranscriptionContextForm';
 import type { TranscriptionContext } from '../../common/config';
 import styles from './App.module.css';
@@ -22,6 +24,7 @@ export default function App() {
   const setFile = useEditorStore((s) => s.setFile);
   const clearFile = useEditorStore((s) => s.clearFile);
   const setDuration = useEditorStore((s) => s.setDuration);
+  const setCurrentSec = useEditorStore((s) => s.setCurrentSec);
   const restoreFromProject = useEditorStore((s) => s.restoreFromProject);
 
   const { view, save, validateApiKey, setApiKey, clearApiKey } = useSettings();
@@ -147,11 +150,16 @@ export default function App() {
         {filePath ? (
           <>
             <div className={styles.left}>
-              <VideoPlayer
-                ref={videoRef}
-                filePath={filePath}
-                onDuration={setDuration}
-              />
+              <div className={styles.videoArea}>
+                <VideoPlayer
+                  ref={videoRef}
+                  filePath={filePath}
+                  onDuration={setDuration}
+                  onCurrentTime={setCurrentSec}
+                />
+              </div>
+              <ExportPreview />
+              <Timeline onSeek={handleSeek} />
             </div>
             <div className={styles.right}>
               {view && (

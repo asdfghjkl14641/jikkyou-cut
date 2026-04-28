@@ -11,6 +11,8 @@ import styles from './VideoPlayer.module.css';
 type Props = {
   filePath: string;
   onDuration?: (sec: number) => void;
+  // Called frequently while playing (rAF), once on seek/pause/end.
+  onCurrentTime?: (sec: number) => void;
 };
 
 export type VideoPlayerHandle = {
@@ -24,13 +26,40 @@ const toMediaUrl = (absPath: string) =>
 const NOT_SUPPORTED_DEFER_MS = 500;
 
 const VideoPlayer = forwardRef<VideoPlayerHandle, Props>(function VideoPlayer(
-  { filePath, onDuration },
+  { filePath, onDuration, onCurrentTime },
   ref,
 ) {
   const videoRef = useRef<HTMLVideoElement>(null);
   const notSupportedTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const rafRef = useRef<number | null>(null);
+  // Latest onCurrentTime captured by ref so the rAF loop sees the freshest
+  // callback without restarting on each render.
+  const onCurrentTimeRef = useRef(onCurrentTime);
+  onCurrentTimeRef.current = onCurrentTime;
+
   const [fatalError, setFatalError] = useState<string | null>(null);
   const [networkWarning, setNetworkWarning] = useState<string | null>(null);
+
+  const stopTicking = () => {
+    if (rafRef.current != null) {
+      cancelAnimationFrame(rafRef.current);
+      rafRef.current = null;
+    }
+  };
+
+  const startTicking = () => {
+    stopTicking();
+    const tick = () => {
+      const v = videoRef.current;
+      if (!v) {
+        rafRef.current = null;
+        return;
+      }
+      onCurrentTimeRef.current?.(v.currentTime);
+      rafRef.current = requestAnimationFrame(tick);
+    };
+    rafRef.current = requestAnimationFrame(tick);
+  };
 
   useImperativeHandle(
     ref,
@@ -66,6 +95,8 @@ const VideoPlayer = forwardRef<VideoPlayerHandle, Props>(function VideoPlayer(
       clearTimeout(notSupportedTimerRef.current);
       notSupportedTimerRef.current = null;
     }
+    // Reset stale playback position from the previous file.
+    onCurrentTimeRef.current?.(0);
   }, [filePath]);
 
   useEffect(
@@ -73,6 +104,7 @@ const VideoPlayer = forwardRef<VideoPlayerHandle, Props>(function VideoPlayer(
       if (notSupportedTimerRef.current) {
         clearTimeout(notSupportedTimerRef.current);
       }
+      stopTicking();
     },
     [],
   );
@@ -136,6 +168,18 @@ const VideoPlayer = forwardRef<VideoPlayerHandle, Props>(function VideoPlayer(
       notSupportedTimerRef.current = null;
     }
     if (networkWarning) setNetworkWarning(null);
+    startTicking();
+  };
+
+  const handlePauseOrEnded = () => {
+    stopTicking();
+    const v = videoRef.current;
+    if (v) onCurrentTimeRef.current?.(v.currentTime);
+  };
+
+  const handleSeeked = () => {
+    const v = videoRef.current;
+    if (v) onCurrentTimeRef.current?.(v.currentTime);
   };
 
   const handleLoadedMetadata = () => {
@@ -159,6 +203,9 @@ const VideoPlayer = forwardRef<VideoPlayerHandle, Props>(function VideoPlayer(
         className={styles.video}
         onError={handleError}
         onPlaying={handlePlaying}
+        onPause={handlePauseOrEnded}
+        onEnded={handlePauseOrEnded}
+        onSeeked={handleSeeked}
         onLoadedMetadata={handleLoadedMetadata}
       />
     </div>

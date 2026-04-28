@@ -99,6 +99,19 @@
   background: #cfe5fb;
 }
 
+/* Playback indicator — survives across deleted/focused/selected combos.    */
+.cuePlaying {
+  border-left-color: #d32f2f;
+}
+
+.playingIcon {
+  display: inline-block;
+  color: #d32f2f;
+  margin-right: 4px;
+  font-size: 10px;
+  vertical-align: middle;
+}
+
 .cueDeleted .text {
   text-decoration: line-through;
   color: #999;

@@ -1,0 +1,33 @@
+.preview {
+  font-size: 12px;
+  color: #555;
+  padding: 6px 16px;
+  background: #fff;
+  border-top: 1px solid #f0f0f0;
+  font-family: ui-monospace, 'Cascadia Code', 'Consolas', monospace;
+  flex-shrink: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+
+.original {
+  color: #757575;
+}
+
+.arrow {
+  color: #999;
+}
+
+.exported {
+  color: #1976d2;
+  font-weight: 600;
+}
+
+.delta {
+  color: #d32f2f;
+}
+
+.percent {
+  color: #d32f2f;
+}

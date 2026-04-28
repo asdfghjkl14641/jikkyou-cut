@@ -1,4 +1,4 @@
-import { useEffect, useRef, type MouseEvent } from 'react';
+import { useEffect, useMemo, useRef, type MouseEvent } from 'react';
 import { useEditorStore } from '../store/editorStore';
 import styles from './EditableTranscriptList.module.css';
 
@@ -23,6 +23,21 @@ export default function EditableTranscriptList({ onSeek }: Props) {
   const past = useEditorStore((s) => s.past);
   const future = useEditorStore((s) => s.future);
 
+  // Derive currentCueIndex from currentSec via a memoising selector. Returns
+  // the same number across rAF ticks unless the playhead crosses a cue
+  // boundary, so this row's render skips when the index is stable.
+  const currentCueIndex = useEditorStore((s) => {
+    if (s.cues.length === 0) return null;
+    const t = s.currentSec;
+    for (let i = 0; i < s.cues.length; i += 1) {
+      const c = s.cues[i];
+      if (!c) continue;
+      if (t < c.startSec) return null;
+      if (t < c.endSec) return i;
+    }
+    return null;
+  });
+
   const selectByIndex = useEditorStore((s) => s.selectByIndex);
   const extendSelectionTo = useEditorStore((s) => s.extendSelectionTo);
   const undo = useEditorStore((s) => s.undo);
@@ -38,9 +53,12 @@ export default function EditableTranscriptList({ onSeek }: Props) {
     });
   }, [focusedIndex]);
 
-  const handleRowClick = (e: MouseEvent<HTMLDivElement>, index: number, startSec: number) => {
+  const handleRowClick = (
+    e: MouseEvent<HTMLDivElement>,
+    index: number,
+    startSec: number,
+  ) => {
     if (e.shiftKey) {
-      // Range extension — does not seek, focus stays at the anchor.
       e.preventDefault();
       extendSelectionTo(index);
       return;
@@ -48,6 +66,11 @@ export default function EditableTranscriptList({ onSeek }: Props) {
     selectByIndex(index);
     onSeek?.(startSec);
   };
+
+  const deletedCount = useMemo(
+    () => cues.reduce((n, c) => n + (c.deleted ? 1 : 0), 0),
+    [cues],
+  );
 
   if (status === 'success' && transcription && cues.length === 0) {
     return (
@@ -68,8 +91,6 @@ export default function EditableTranscriptList({ onSeek }: Props) {
       </div>
     );
   }
-
-  const deletedCount = cues.reduce((n, c) => n + (c.deleted ? 1 : 0), 0);
 
   return (
     <div className={styles.container}>
@@ -112,10 +133,12 @@ export default function EditableTranscriptList({ onSeek }: Props) {
         {cues.map((cue, index) => {
           const isSelected = selectedIds.has(cue.id);
           const isFocused = focusedIndex === index;
+          const isPlaying = currentCueIndex === index;
           const className = [
             styles.cue,
             isSelected ? styles.cueSelected : '',
             isFocused ? styles.cueFocused : '',
+            isPlaying ? styles.cuePlaying : '',
             cue.deleted ? styles.cueDeleted : '',
           ]
             .filter(Boolean)
@@ -130,6 +153,11 @@ export default function EditableTranscriptList({ onSeek }: Props) {
               tabIndex={-1}
             >
               <div className={styles.timecode}>
+                {isPlaying && (
+                  <span className={styles.playingIcon} aria-label="再生中">
+                    ▶
+                  </span>
+                )}
                 {formatTimecode(cue.startSec)}
               </div>
               <div className={styles.text}>{cue.text}</div>

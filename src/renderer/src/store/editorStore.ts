@@ -18,6 +18,9 @@ type EditorState = {
   filePath: string | null;
   fileName: string | null;
   durationSec: number | null;
+  // Live playback position. Updated ~60 Hz by VideoPlayer's rAF loop while
+  // playing; updated once on seek/pause/load.
+  currentSec: number;
 
   transcription: TranscriptionResult | null;
   cues: TranscriptCue[];
@@ -40,6 +43,7 @@ type EditorState = {
   setFile: (absPath: string) => void;
   clearFile: () => void;
   setDuration: (sec: number) => void;
+  setCurrentSec: (sec: number) => void;
 
   // transcription lifecycle
   startTranscription: () => void;
@@ -101,6 +105,7 @@ export const useEditorStore = create<EditorState>((set, get) => ({
   filePath: null,
   fileName: null,
   durationSec: null,
+  currentSec: 0,
 
   transcription: null,
   cues: [],
@@ -120,6 +125,7 @@ export const useEditorStore = create<EditorState>((set, get) => ({
       filePath: absPath,
       fileName: basename(absPath),
       durationSec: null,
+      currentSec: 0,
       transcription: null,
       cues: [],
       selectedIds: new Set<string>(),
@@ -137,6 +143,7 @@ export const useEditorStore = create<EditorState>((set, get) => ({
       filePath: null,
       fileName: null,
       durationSec: null,
+      currentSec: 0,
       transcription: null,
       cues: [],
       selectedIds: new Set<string>(),
@@ -150,6 +157,10 @@ export const useEditorStore = create<EditorState>((set, get) => ({
     }),
 
   setDuration: (sec) => set({ durationSec: sec }),
+
+  setCurrentSec: (sec) => {
+    if (Number.isFinite(sec)) set({ currentSec: sec });
+  },
 
   startTranscription: () =>
     set({
