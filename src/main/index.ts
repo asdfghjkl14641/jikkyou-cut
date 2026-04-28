@@ -7,8 +7,9 @@ import { buildMenu } from './menu';
 import { loadConfig, saveConfig } from './config';
 import * as secureStorage from './secureStorage';
 import * as gemini from './gemini';
+import * as project from './project';
 import type { AppConfig } from '../common/config';
-import type { TranscriptionStartArgs } from '../common/types';
+import type { TranscriptCue, TranscriptionStartArgs } from '../common/types';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -83,6 +84,19 @@ function registerIpcHandlers() {
     });
   });
   ipcMain.handle('transcription:cancel', () => gemini.cancelTranscription());
+
+  // project file
+  ipcMain.handle('project:load', (_e, videoFilePath: string) =>
+    project.loadProject(videoFilePath),
+  );
+  ipcMain.handle(
+    'project:save',
+    (_e, videoFilePath: string, cues: TranscriptCue[]) =>
+      project.saveProject(videoFilePath, cues),
+  );
+  ipcMain.handle('project:clear', (_e, videoFilePath: string) =>
+    project.clearProject(videoFilePath),
+  );
 }
 
 app.whenReady().then(() => {

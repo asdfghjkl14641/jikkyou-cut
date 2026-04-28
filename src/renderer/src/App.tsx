@@ -1,12 +1,17 @@
-import { useEffect, useState, useCallback } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { useEditorStore } from './store/editorStore';
 import { useSettings } from './hooks/useSettings';
+import { useEditKeyboard } from './hooks/useEditKeyboard';
+import { useProjectAutoSave } from './hooks/useProjectAutoSave';
 import DropZone from './components/DropZone';
-import VideoPlayer from './components/VideoPlayer';
+import VideoPlayer, {
+  type VideoPlayerHandle,
+} from './components/VideoPlayer';
 import ApiKeySetupBanner from './components/ApiKeySetupBanner';
+import RestoreBanner from './components/RestoreBanner';
 import SettingsDialog from './components/SettingsDialog';
 import TranscribeButton from './components/TranscribeButton';
-import TranscriptList from './components/TranscriptList';
+import EditableTranscriptList from './components/EditableTranscriptList';
 import TranscriptionContextForm from './components/TranscriptionContextForm';
 import type { TranscriptionContext } from '../../common/config';
 import styles from './App.module.css';
@@ -17,9 +22,57 @@ export default function App() {
   const setFile = useEditorStore((s) => s.setFile);
   const clearFile = useEditorStore((s) => s.clearFile);
   const setDuration = useEditorStore((s) => s.setDuration);
+  const restoreFromProject = useEditorStore((s) => s.restoreFromProject);
 
   const { view, save, validateApiKey, setApiKey, clearApiKey } = useSettings();
   const [settingsOpen, setSettingsOpen] = useState(false);
+
+  const videoRef = useRef<VideoPlayerHandle>(null);
+
+  // `nonce` lets the banner remount (and re-trigger its fade animation +
+  // auto-dismiss timer) when a different restore happens for a new file.
+  const [restoreInfo, setRestoreInfo] = useState<{
+    total: number;
+    deleted: number;
+    nonce: number;
+  } | null>(null);
+
+  const dismissRestoreBanner = useCallback(() => setRestoreInfo(null), []);
+
+  useEditKeyboard({
+    togglePlayPause: () => videoRef.current?.togglePlayPause(),
+  });
+
+  useProjectAutoSave();
+
+  // Try to restore an existing `<basename>.jcut.json` whenever a video is
+  // loaded. If none exists, the cues stay empty and the user has to run a
+  // fresh transcription.
+  useEffect(() => {
+    // Clear any leftover banner from a previous video before the new
+    // loadProject call settles.
+    setRestoreInfo(null);
+    if (!filePath) return;
+    let alive = true;
+    window.api
+      .loadProject(filePath)
+      .then((cues) => {
+        if (!alive || !cues || cues.length === 0) return;
+        restoreFromProject(cues);
+        const deleted = cues.reduce((n, c) => n + (c.deleted ? 1 : 0), 0);
+        setRestoreInfo({
+          total: cues.length,
+          deleted,
+          nonce: Date.now(),
+        });
+      })
+      .catch((err) => {
+        console.warn('[project] load failed:', err);
+      });
+    return () => {
+      alive = false;
+    };
+  }, [filePath, restoreFromProject]);
 
   useEffect(
     () =>
@@ -41,6 +94,10 @@ export default function App() {
     },
     [save],
   );
+
+  const handleSeek = useCallback((sec: number) => {
+    videoRef.current?.seekTo(sec);
+  }, []);
 
   const apiKeyConfigured = view?.hasApiKey ?? false;
   const showBanner = view != null && !apiKeyConfigured;
@@ -77,11 +134,24 @@ export default function App() {
         <ApiKeySetupBanner onOpenSettings={() => setSettingsOpen(true)} />
       )}
 
+      {restoreInfo && (
+        <RestoreBanner
+          key={restoreInfo.nonce}
+          total={restoreInfo.total}
+          deleted={restoreInfo.deleted}
+          onDismiss={dismissRestoreBanner}
+        />
+      )}
+
       <section className={styles.body}>
         {filePath ? (
           <>
             <div className={styles.left}>
-              <VideoPlayer filePath={filePath} onDuration={setDuration} />
+              <VideoPlayer
+                ref={videoRef}
+                filePath={filePath}
+                onDuration={setDuration}
+              />
             </div>
             <div className={styles.right}>
               {view && (
@@ -91,7 +161,7 @@ export default function App() {
                 />
               )}
               <TranscribeButton apiKeyConfigured={apiKeyConfigured} />
-              <TranscriptList />
+              <EditableTranscriptList onSeek={handleSeek} />
             </div>
           </>
         ) : (

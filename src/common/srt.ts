@@ -40,6 +40,7 @@ export function parseSrt(content: string): TranscriptCue[] {
       startSec: toSec(m[1]!, m[2]!, m[3]!, m[4]!),
       endSec: toSec(m[5]!, m[6]!, m[7]!, m[8]!),
       text,
+      deleted: false,
     });
   }
   return cues;

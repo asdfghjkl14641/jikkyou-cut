@@ -91,7 +91,17 @@ export default function TranscribeButton({ apiKeyConfigured }: Props) {
       )}
 
       {status === 'error' && error && (
-        <div className={styles.errorBanner}>{error}</div>
+        <div className={styles.errorBanner}>
+          <div className={styles.errorMessage}>{error}</div>
+          <button
+            type="button"
+            className={styles.retryButton}
+            onClick={start}
+            disabled={!canStart}
+          >
+            再試行
+          </button>
+        </div>
       )}
     </div>
   );

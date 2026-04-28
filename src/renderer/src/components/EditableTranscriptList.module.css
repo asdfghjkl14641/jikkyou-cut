@@ -1,0 +1,143 @@
+.container {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  background: #fff;
+}
+
+.empty {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex: 1;
+  color: #888;
+  font-size: 13px;
+  padding: 16px;
+  text-align: center;
+}
+
+.summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 16px;
+  font-size: 11px;
+  color: #757575;
+  border-bottom: 1px solid #f0f0f0;
+  background: #fafafa;
+}
+
+.summaryRight {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.miniButton {
+  appearance: none;
+  border: 1px solid #ccc;
+  background: #fff;
+  border-radius: 3px;
+  padding: 2px 8px;
+  cursor: pointer;
+  font-size: 11px;
+  font-family: inherit;
+  color: #333;
+}
+
+.miniButton:hover:not(:disabled) {
+  background: #f0f0f0;
+}
+
+.miniButton:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.list {
+  flex: 1;
+  overflow-y: auto;
+  padding: 4px 0;
+}
+
+.cue {
+  display: grid;
+  grid-template-columns: 64px 1fr;
+  gap: 8px;
+  padding: 6px 16px 6px 12px;
+  border-bottom: 1px solid #f0f0f0;
+  border-left: 4px solid transparent;
+  font-size: 13px;
+  line-height: 1.5;
+  cursor: pointer;
+  user-select: none;
+}
+
+.cue:last-child {
+  border-bottom: none;
+}
+
+.cue:hover {
+  background: #f8f9fa;
+}
+
+.cueSelected {
+  background: #e3f2fd;
+}
+
+.cueSelected:hover {
+  background: #d6eaff;
+}
+
+/* The anchor (focusedIndex) — drawn slightly stronger than range members.  */
+.cueFocused {
+  border-left-color: #1e88e5;
+}
+
+.cueFocused.cueSelected {
+  background: #cfe5fb;
+}
+
+.cueDeleted .text {
+  text-decoration: line-through;
+  color: #999;
+}
+
+.cueDeleted .timecode {
+  color: #bbb;
+}
+
+.timecode {
+  color: #757575;
+  font-family: ui-monospace, 'Cascadia Code', 'Consolas', monospace;
+  font-size: 11px;
+  padding-top: 2px;
+}
+
+.text {
+  color: #222;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.hintBar {
+  padding: 8px 16px;
+  border-top: 1px solid #f0f0f0;
+  background: #fafafa;
+  font-size: 11px;
+  color: #888;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+
+.hintBar kbd {
+  font-family: ui-monospace, 'Cascadia Code', 'Consolas', monospace;
+  background: #fff;
+  border: 1px solid #ccc;
+  border-radius: 3px;
+  padding: 1px 5px;
+  font-size: 10px;
+  color: #333;
+}

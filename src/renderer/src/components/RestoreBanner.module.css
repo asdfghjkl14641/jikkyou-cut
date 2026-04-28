@@ -1,0 +1,36 @@
+.banner {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 16px;
+  background: #e8f5e9;
+  border-bottom: 1px solid #c8e6c9;
+  color: #1b5e20;
+  font-size: 13px;
+  cursor: pointer;
+  user-select: none;
+  /* Fade in over 150 ms, hold, then fade out over the last ~500 ms.
+     The component's useEffect calls onDismiss at 5 s so the unmount
+     coincides with full opacity 0. */
+  animation: restoreBannerLifecycle 5s ease forwards;
+}
+
+.banner:hover {
+  background: #dcedc8;
+}
+
+.icon {
+  font-weight: bold;
+  font-size: 14px;
+}
+
+.message {
+  flex: 1;
+}
+
+@keyframes restoreBannerLifecycle {
+  0%   { opacity: 0; transform: translateY(-3px); }
+  3%   { opacity: 1; transform: translateY(0); }
+  90%  { opacity: 1; }
+  100% { opacity: 0; transform: translateY(-3px); }
+}

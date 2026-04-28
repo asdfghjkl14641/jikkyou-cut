@@ -35,6 +35,13 @@ const api: IpcApi = {
       ipcRenderer.removeListener('transcription:progress', listener);
     };
   },
+
+  loadProject: (videoFilePath) =>
+    ipcRenderer.invoke('project:load', videoFilePath),
+  saveProject: (videoFilePath, cues) =>
+    ipcRenderer.invoke('project:save', videoFilePath, cues),
+  clearProject: (videoFilePath) =>
+    ipcRenderer.invoke('project:clear', videoFilePath),
 };
 
 contextBridge.exposeInMainWorld('api', api);

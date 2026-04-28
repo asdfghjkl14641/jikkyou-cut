@@ -33,6 +33,9 @@ export async function extractAudioToTemp(args: ExtractArgs): Promise<string> {
     '-progress', 'pipe:1',
   ];
 
+  console.log('[audio-extract] cmd:', 'ffmpeg', ffmpegArgs.join(' '));
+  console.log('[audio-extract] tmp:', tmpPath);
+
   const proc = execa('ffmpeg', ffmpegArgs, {
     cancelSignal: signal,
     encoding: 'utf8',
@@ -67,5 +70,18 @@ export async function extractAudioToTemp(args: ExtractArgs): Promise<string> {
     throw new Error(`動画から音声を取得できませんでした: ${detail}`);
   }
   onRatio(1);
+
+  try {
+    const st = await fs.stat(tmpPath);
+    console.log(
+      `[audio-extract] done: size=${st.size} bytes (${(st.size / 1024 / 1024).toFixed(2)} MB)`,
+    );
+    // Last few stderr lines tend to summarise final stats; capture for diagnostics.
+    const stderrTail = stderrBuf.trim().split(/\r?\n/).slice(-5).join('\n');
+    console.log('[audio-extract] stderr tail:\n' + stderrTail);
+  } catch {
+    // ignore
+  }
+
   return tmpPath;
 }

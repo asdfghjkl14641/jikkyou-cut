@@ -73,9 +73,17 @@ function mapError(err: unknown): Error {
   if (
     status === 401 ||
     status === 403 ||
-    /API key not valid|invalid api key|UNAUTHENTICATED|PERMISSION_DENIED/i.test(msg)
+    /API key not valid|invalid api key|API key expired|API_KEY_INVALID|UNAUTHENTICATED|PERMISSION_DENIED/i.test(msg)
   ) {
-    return new Error('APIキーが無効です。設定を確認してください');
+    return new Error('APIキーが無効または期限切れです。設定を確認してください');
+  }
+  if (
+    status === 503 ||
+    /UNAVAILABLE|currently experiencing high demand|service is unavailable/i.test(msg)
+  ) {
+    return new Error(
+      'Gemini APIが現在混雑しています。数分後にもう一度お試しください。',
+    );
   }
   if (status === 429 || /RESOURCE_EXHAUSTED|rate.?limit/i.test(msg)) {
     if (/quota/i.test(msg)) {
@@ -118,9 +126,9 @@ export async function validateApiKey(
     if (
       status === 401 ||
       status === 403 ||
-      /API key not valid|UNAUTHENTICATED|PERMISSION_DENIED/i.test(msg)
+      /API key not valid|invalid api key|API key expired|API_KEY_INVALID|UNAUTHENTICATED|PERMISSION_DENIED/i.test(msg)
     ) {
-      return { valid: false, error: 'APIキーが無効です' };
+      return { valid: false, error: 'APIキーが無効または期限切れです' };
     }
     if (/network|ENOTFOUND|ECONNRESET|ECONNREFUSED|ETIMEDOUT|fetch failed/i.test(msg)) {
       return { valid: false, error: 'ネットワーク接続を確認してください' };
@@ -152,6 +160,14 @@ async function uploadAndWaitActive(
   );
   onRatio(1);
 
+  console.log('[gemini-upload] result:', {
+    name: uploaded.name,
+    sizeBytes: uploaded.sizeBytes,
+    mimeType: uploaded.mimeType,
+    state: uploaded.state,
+    uri: uploaded.uri ? '<set>' : '<missing>',
+  });
+
   if (!uploaded.name || !uploaded.uri) {
     throw new Error('Geminiへのアップロード結果が無効です');
   }
@@ -159,6 +175,7 @@ async function uploadAndWaitActive(
   // Poll until the file becomes ACTIVE (or fails).
   const start = Date.now();
   let state = uploaded.state;
+  let pollCount = 0;
   while (state !== 'ACTIVE') {
     if (signal.aborted) throw new Error('aborted');
     if (state === 'FAILED') {
@@ -171,7 +188,14 @@ async function uploadAndWaitActive(
     if (signal.aborted) throw new Error('aborted');
     const fetched = await client.files.get({ name: uploaded.name });
     state = fetched.state;
+    pollCount += 1;
+    console.log(
+      `[gemini-upload] poll #${pollCount} state=${state} elapsed=${Date.now() - start}ms`,
+    );
   }
+  console.log(
+    `[gemini-upload] ACTIVE after ${pollCount} polls (${Date.now() - start}ms)`,
+  );
 
   return {
     name: uploaded.name,
@@ -265,8 +289,27 @@ export async function transcribe({
       ac.signal,
     );
 
-    const srtText = stripCodeFences(response.text ?? '');
+    // Diagnostic dump: full response object minus the giant text body, plus
+    // the head of the text body for inspection. This is intentionally noisy
+    // so we can investigate empty/short responses.
+    const candidate = response.candidates?.[0];
+    console.log('[gemini-response] usageMetadata:', response.usageMetadata);
+    console.log('[gemini-response] promptFeedback:', response.promptFeedback);
+    console.log('[gemini-response] modelVersion:', response.modelVersion);
+    console.log('[gemini-response] finishReason:', candidate?.finishReason);
+    console.log('[gemini-response] safetyRatings:', candidate?.safetyRatings);
+    console.log('[gemini-response] candidate keys:', candidate ? Object.keys(candidate) : null);
+
+    const rawText = response.text ?? '';
+    console.log(
+      `[gemini-response] text length=${rawText.length}, head 500 chars:\n${rawText.slice(0, 500)}`,
+    );
+
+    const srtText = stripCodeFences(rawText);
     const cues = parseSrt(srtText);
+    console.log(
+      `[gemini-response] after strip: length=${srtText.length}, parsed cues=${cues.length}`,
+    );
 
     await fs.rm(finalSrt, { force: true });
     await fs.writeFile(finalSrt, srtText, 'utf8');

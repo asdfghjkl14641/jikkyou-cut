@@ -6,6 +6,9 @@ export type TranscriptCue = {
   startSec: number;
   endSec: number;
   text: string;
+  // Edit state — `deleted: true` means the cue (and its underlying video
+  // region) is marked for removal. Persisted with the project file.
+  deleted: boolean;
 };
 
 export type TranscriptionResult = {
@@ -64,4 +67,9 @@ export type IpcApi = {
   onTranscriptionProgress: (
     cb: (p: TranscriptionProgress) => void,
   ) => () => void;
+
+  // project file (`<basename>.jcut.json` next to the video)
+  loadProject: (videoFilePath: string) => Promise<TranscriptCue[] | null>;
+  saveProject: (videoFilePath: string, cues: TranscriptCue[]) => Promise<void>;
+  clearProject: (videoFilePath: string) => Promise<void>;
 };
