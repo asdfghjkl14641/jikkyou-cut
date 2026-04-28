@@ -1,5 +1,9 @@
 import { contextBridge, ipcRenderer, webUtils } from 'electron';
-import type { IpcApi, TranscriptionProgress } from '../common/types';
+import type {
+  ExportProgress,
+  IpcApi,
+  TranscriptionProgress,
+} from '../common/types';
 
 const onChannel = (channel: string) => (cb: () => void) => {
   const listener = () => cb();
@@ -42,6 +46,18 @@ const api: IpcApi = {
     ipcRenderer.invoke('project:save', videoFilePath, cues),
   clearProject: (videoFilePath) =>
     ipcRenderer.invoke('project:clear', videoFilePath),
+
+  startExport: (args) => ipcRenderer.invoke('export:start', args),
+  cancelExport: () => ipcRenderer.invoke('export:cancel'),
+  onExportProgress: (cb) => {
+    const listener = (_e: Electron.IpcRendererEvent, p: ExportProgress) =>
+      cb(p);
+    ipcRenderer.on('export:progress', listener);
+    return () => {
+      ipcRenderer.removeListener('export:progress', listener);
+    };
+  },
+  revealInFolder: (p) => ipcRenderer.invoke('shell:revealInFolder', p),
 };
 
 contextBridge.exposeInMainWorld('api', api);

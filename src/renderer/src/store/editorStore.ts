@@ -1,5 +1,7 @@
 import { create } from 'zustand';
 import type {
+  ExportProgress,
+  ExportResult,
   TranscriptCue,
   TranscriptionProgress,
   TranscriptionResult,
@@ -11,6 +13,8 @@ type TranscriptionStatus =
   | 'success'
   | 'error'
   | 'cancelled';
+
+type ExportStatus = 'idle' | 'running' | 'success' | 'error' | 'cancelled';
 
 const HISTORY_LIMIT = 100;
 
@@ -38,6 +42,11 @@ type EditorState = {
   transcriptionStatus: TranscriptionStatus;
   transcriptionProgress: TranscriptionProgress | null;
   transcriptionError: string | null;
+
+  exportStatus: ExportStatus;
+  exportProgress: ExportProgress | null;
+  exportResult: ExportResult | null;
+  exportError: string | null;
 
   // file lifecycle
   setFile: (absPath: string) => void;
@@ -70,6 +79,14 @@ type EditorState = {
   // undo / redo
   undo: () => void;
   redo: () => void;
+
+  // export lifecycle
+  startExportState: () => void;
+  setExportProgress: (p: ExportProgress) => void;
+  succeedExport: (result: ExportResult) => void;
+  failExport: (msg: string) => void;
+  cancelExportState: () => void;
+  resetExportState: () => void;
 };
 
 const basename = (absPath: string): string => {
@@ -120,6 +137,11 @@ export const useEditorStore = create<EditorState>((set, get) => ({
   transcriptionProgress: null,
   transcriptionError: null,
 
+  exportStatus: 'idle',
+  exportProgress: null,
+  exportResult: null,
+  exportError: null,
+
   setFile: (absPath) =>
     set({
       filePath: absPath,
@@ -136,6 +158,10 @@ export const useEditorStore = create<EditorState>((set, get) => ({
       transcriptionStatus: 'idle',
       transcriptionProgress: null,
       transcriptionError: null,
+      exportStatus: 'idle',
+      exportProgress: null,
+      exportResult: null,
+      exportError: null,
     }),
 
   clearFile: () =>
@@ -154,6 +180,10 @@ export const useEditorStore = create<EditorState>((set, get) => ({
       transcriptionStatus: 'idle',
       transcriptionProgress: null,
       transcriptionError: null,
+      exportStatus: 'idle',
+      exportProgress: null,
+      exportResult: null,
+      exportError: null,
     }),
 
   setDuration: (sec) => set({ durationSec: sec }),
@@ -367,4 +397,42 @@ export const useEditorStore = create<EditorState>((set, get) => ({
       future: future.slice(0, -1),
     });
   },
+
+  startExportState: () =>
+    set({
+      exportStatus: 'running',
+      exportProgress: null,
+      exportResult: null,
+      exportError: null,
+    }),
+
+  setExportProgress: (p) => set({ exportProgress: p }),
+
+  succeedExport: (result) =>
+    set({
+      exportStatus: 'success',
+      exportResult: result,
+      exportProgress: null,
+    }),
+
+  failExport: (msg) =>
+    set({
+      exportStatus: 'error',
+      exportError: msg,
+      exportProgress: null,
+    }),
+
+  cancelExportState: () =>
+    set({
+      exportStatus: 'cancelled',
+      exportProgress: null,
+    }),
+
+  resetExportState: () =>
+    set({
+      exportStatus: 'idle',
+      exportProgress: null,
+      exportResult: null,
+      exportError: null,
+    }),
 }));

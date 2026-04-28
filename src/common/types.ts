@@ -40,6 +40,30 @@ export type ApiKeyValidationResult = {
 
 // Distinguishes user-cancelled runs from real errors.
 export const TRANSCRIPTION_CANCELLED = 'TRANSCRIPTION_CANCELLED';
+export const EXPORT_CANCELLED = 'EXPORT_CANCELLED';
+
+export type ExportRegion = {
+  startSec: number;
+  endSec: number;
+};
+
+export type ExportStartArgs = {
+  videoFilePath: string;
+  regions: ExportRegion[];
+};
+
+export type ExportProgress = {
+  ratio: number; // 0..1
+  elapsedSec: number;
+  speed?: number;
+};
+
+export type ExportResult = {
+  outputPath: string;
+  sizeBytes: number;
+  durationSec: number; // total kept duration
+  generatedAt: number;
+};
 
 export type IpcApi = {
   // file dialogs
@@ -72,4 +96,10 @@ export type IpcApi = {
   loadProject: (videoFilePath: string) => Promise<TranscriptCue[] | null>;
   saveProject: (videoFilePath: string, cues: TranscriptCue[]) => Promise<void>;
   clearProject: (videoFilePath: string) => Promise<void>;
+
+  // export
+  startExport: (args: ExportStartArgs) => Promise<ExportResult>;
+  cancelExport: () => Promise<void>;
+  onExportProgress: (cb: (p: ExportProgress) => void) => () => void;
+  revealInFolder: (path: string) => Promise<void>;
 };

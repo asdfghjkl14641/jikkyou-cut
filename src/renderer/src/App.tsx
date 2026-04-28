@@ -14,6 +14,7 @@ import TranscribeButton from './components/TranscribeButton';
 import EditableTranscriptList from './components/EditableTranscriptList';
 import Timeline from './components/Timeline';
 import ExportPreview from './components/ExportPreview';
+import ExportProgressDialog from './components/ExportProgressDialog';
 import TranscriptionContextForm from './components/TranscriptionContextForm';
 import type { TranscriptionContext } from '../../common/config';
 import styles from './App.module.css';
@@ -189,6 +190,8 @@ export default function App() {
           onClearApiKey={clearApiKey}
         />
       )}
+
+      <ExportProgressDialog />
     </main>
   );
 }

@@ -1,4 +1,4 @@
-import { app, BrowserWindow, ipcMain } from 'electron';
+import { app, BrowserWindow, ipcMain, shell } from 'electron';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 import { registerMediaScheme, handleMediaProtocol } from './mediaProtocol';
@@ -8,8 +8,13 @@ import { loadConfig, saveConfig } from './config';
 import * as secureStorage from './secureStorage';
 import * as gemini from './gemini';
 import * as project from './project';
+import * as exportModule from './export';
 import type { AppConfig } from '../common/config';
-import type { TranscriptCue, TranscriptionStartArgs } from '../common/types';
+import type {
+  ExportStartArgs,
+  TranscriptCue,
+  TranscriptionStartArgs,
+} from '../common/types';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -97,6 +102,21 @@ function registerIpcHandlers() {
   ipcMain.handle('project:clear', (_e, videoFilePath: string) =>
     project.clearProject(videoFilePath),
   );
+
+  // export
+  ipcMain.handle('export:start', async (_e, args: ExportStartArgs) =>
+    exportModule.startExport({
+      videoFilePath: args.videoFilePath,
+      regions: args.regions,
+      onProgress: (p) => {
+        mainWindow?.webContents.send('export:progress', p);
+      },
+    }),
+  );
+  ipcMain.handle('export:cancel', () => exportModule.cancelExport());
+  ipcMain.handle('shell:revealInFolder', (_e, p: string) => {
+    shell.showItemInFolder(p);
+  });
 }
 
 app.whenReady().then(() => {

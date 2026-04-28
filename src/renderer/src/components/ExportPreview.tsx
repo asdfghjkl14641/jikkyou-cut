@@ -1,6 +1,7 @@
 import { useMemo } from 'react';
 import { useEditorStore } from '../store/editorStore';
 import { deriveKeptRegions } from '../../../common/segments';
+import ExportButton from './ExportButton';
 import styles from './ExportPreview.module.css';
 
 const formatHMS = (totalSec: number): string => {
@@ -35,19 +36,22 @@ export default function ExportPreview() {
 
   return (
     <div className={styles.preview}>
-      <span>
-        <span className={styles.original}>元: {formatHMS(durationSec)}</span>{' '}
-        <span className={styles.arrow}>→</span>{' '}
-        <span className={styles.exported}>
-          書き出し: {formatHMS(summary.keptSec)}
+      <div className={styles.summary}>
+        <span>
+          <span className={styles.original}>元: {formatHMS(durationSec)}</span>{' '}
+          <span className={styles.arrow}>→</span>{' '}
+          <span className={styles.exported}>
+            書き出し: {formatHMS(summary.keptSec)}
+          </span>
         </span>
-      </span>
-      <span>
-        <span className={styles.delta}>(-{formatHMS(summary.cutSec)},</span>{' '}
-        <span className={styles.percent}>
-          {summary.cutPercent.toFixed(0)}%カット)
+        <span>
+          <span className={styles.delta}>(-{formatHMS(summary.cutSec)},</span>{' '}
+          <span className={styles.percent}>
+            {summary.cutPercent.toFixed(0)}%カット)
+          </span>
         </span>
-      </span>
+      </div>
+      <ExportButton />
     </div>
   );
 }
