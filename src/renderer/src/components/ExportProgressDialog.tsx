@@ -1,6 +1,7 @@
 import { useEffect, useRef } from 'react';
 import { useEditorStore } from '../store/editorStore';
 import { useExport } from '../hooks/useExport';
+import { CheckCircle, AlertCircle } from 'lucide-react';
 import styles from './ExportProgressDialog.module.css';
 
 const formatHMS = (totalSec: number): string => {
@@ -123,13 +124,13 @@ export default function ExportProgressDialog() {
     <>
       <div className={styles.header}>
         <h2 className={styles.title}>
-          <span className={styles.iconOk}>✓</span>
+          <CheckCircle strokeWidth={1.5} size={18} className={styles.iconOk} />
           書き出しが完了しました
         </h2>
       </div>
       <div className={styles.body}>
         <div className={styles.successInfo}>
-          <div>
+          <div className={styles.successFileName}>
             {result ? basename(result.outputPath) : projectedOutputName}
           </div>
           {result && (
@@ -139,7 +140,7 @@ export default function ExportProgressDialog() {
             </div>
           )}
           {result && (
-            <div className={styles.meta}>
+            <div className={styles.metaPath}>
               {result.outputPath}
             </div>
           )}
@@ -164,7 +165,7 @@ export default function ExportProgressDialog() {
     <>
       <div className={styles.header}>
         <h2 className={styles.title}>
-          <span className={styles.iconError}>⚠</span>
+          <AlertCircle size={18} className={styles.iconError} />
           書き出しエラー
         </h2>
       </div>

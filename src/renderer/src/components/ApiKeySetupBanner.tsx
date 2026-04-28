@@ -1,3 +1,4 @@
+import { KeyRound } from 'lucide-react';
 import styles from './ApiKeySetupBanner.module.css';
 
 type Props = {
@@ -8,7 +9,7 @@ export default function ApiKeySetupBanner({ onOpenSettings }: Props) {
   return (
     <div className={styles.banner}>
       <div className={styles.message}>
-        <span className={styles.icon}>⚠</span>
+        <KeyRound size={16} className={styles.icon} />
         <span>
           Gemini APIキーが設定されていません。文字起こしを行うにはAPIキーを設定してください。
         </span>

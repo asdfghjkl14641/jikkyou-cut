@@ -1,6 +1,7 @@
 import { useEditorStore } from '../store/editorStore';
 import { useTranscription } from '../hooks/useTranscription';
 import type { TranscriptionPhase } from '../../../common/types';
+import { Wand2, X, RotateCw } from 'lucide-react';
 import styles from './TranscribeButton.module.css';
 
 type Props = {
@@ -8,8 +9,8 @@ type Props = {
 };
 
 const PHASE_LABEL: Record<TranscriptionPhase, string> = {
-  extracting: '音声を抽出中',
-  uploading: 'Geminiにアップロード中',
+  extracting: '抽出中',
+  uploading: 'アップロード中',
   transcribing: '文字起こし中',
 };
 
@@ -54,10 +55,10 @@ export default function TranscribeButton({ apiKeyConfigured }: Props) {
               ? 'Gemini APIキーを設定してください'
               : durationSec == null
                 ? '動画の長さを取得中です'
-                : undefined
+                : '文字起こしを開始'
           }
         >
-          文字起こしを開始
+          <Wand2 strokeWidth={1.5} size={20} />
         </button>
       )}
 
@@ -70,24 +71,25 @@ export default function TranscribeButton({ apiKeyConfigured }: Props) {
             />
           </div>
           <div className={styles.progressMeta}>
-            <span>
+            <span className={styles.progressText}>
               {phaseLabel}
-              {percent != null && ` (${percent.toFixed(0)}%)`}
-              {elapsedLabel != null && ` (${elapsedLabel} 経過)`}
+              {percent != null && ` ${percent.toFixed(0)}%`}
+              {elapsedLabel != null && ` (${elapsedLabel})`}
             </span>
             <button
               type="button"
               className={styles.cancelButton}
               onClick={cancel}
+              title="中止"
             >
-              中止
+              <X strokeWidth={1.5} size={14} />
             </button>
           </div>
         </div>
       )}
 
       {status === 'cancelled' && (
-        <div className={styles.statusNote}>文字起こしを中止しました。</div>
+        <div className={styles.statusNote}>中止しました</div>
       )}
 
       {status === 'error' && error && (
@@ -98,8 +100,9 @@ export default function TranscribeButton({ apiKeyConfigured }: Props) {
             className={styles.retryButton}
             onClick={start}
             disabled={!canStart}
+            title="再試行"
           >
-            再試行
+            <RotateCw strokeWidth={1.5} size={14} />
           </button>
         </div>
       )}

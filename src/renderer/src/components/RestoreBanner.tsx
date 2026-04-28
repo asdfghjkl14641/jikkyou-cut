@@ -1,4 +1,5 @@
 import { useEffect } from 'react';
+import { CheckCircle } from 'lucide-react';
 import styles from './RestoreBanner.module.css';
 
 type Props = {
@@ -22,7 +23,7 @@ export default function RestoreBanner({ total, deleted, onDismiss }: Props) {
       role="status"
       aria-live="polite"
     >
-      <span className={styles.icon}>✓</span>
+      <CheckCircle size={16} className={styles.icon} />
       <span className={styles.message}>
         編集状態を復元しました({total}件、{deleted}件削除済み)
       </span>

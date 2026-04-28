@@ -10,6 +10,7 @@ import VideoPlayer, {
 import ApiKeySetupBanner from './components/ApiKeySetupBanner';
 import RestoreBanner from './components/RestoreBanner';
 import SettingsDialog from './components/SettingsDialog';
+import { OperationsDialog } from './components/OperationsDialog';
 import TranscribeButton from './components/TranscribeButton';
 import EditableTranscriptList from './components/EditableTranscriptList';
 import Timeline from './components/Timeline';
@@ -17,6 +18,7 @@ import ExportPreview from './components/ExportPreview';
 import ExportProgressDialog from './components/ExportProgressDialog';
 import TranscriptionContextForm from './components/TranscriptionContextForm';
 import type { TranscriptionContext } from '../../common/config';
+import { X, Settings, Scissors } from 'lucide-react';
 import styles from './App.module.css';
 
 export default function App() {
@@ -30,6 +32,7 @@ export default function App() {
 
   const { view, save, validateApiKey, setApiKey, clearApiKey } = useSettings();
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [operationsOpen, setOperationsOpen] = useState(false);
 
   const videoRef = useRef<VideoPlayerHandle>(null);
 
@@ -92,6 +95,11 @@ export default function App() {
     [],
   );
 
+  useEffect(
+    () => window.api.onMenuOpenOperations?.(() => setOperationsOpen(true)),
+    [],
+  );
+
   const handleContextChange = useCallback(
     (next: TranscriptionContext) => {
       void save({ transcriptionContext: next });
@@ -109,27 +117,43 @@ export default function App() {
   return (
     <main className={styles.app}>
       <header className={styles.header}>
-        <h1 className={styles.title}>jikkyou-cut</h1>
+        <div className={styles.brand}>
+          <div className={styles.logoIcon}>
+            <Scissors strokeWidth={1.5} size={18} />
+          </div>
+          <h1 className={styles.title}>jikkyou-cut</h1>
+        </div>
         <div className={styles.headerRight}>
+          {view && (
+            <TranscriptionContextForm
+              initial={view.config.transcriptionContext}
+              onChange={handleContextChange}
+            />
+          )}
+          <TranscribeButton apiKeyConfigured={apiKeyConfigured} />
+
+          <div className={styles.headerDivider} />
+
           {fileName && (
             <div className={styles.fileInfo}>
-              <span>{fileName}</span>
+              <span className={styles.fileName}>{fileName}</span>
               <button
                 type="button"
                 className={styles.iconButton}
                 onClick={clearFile}
+                title="閉じる"
               >
-                閉じる
+                <X strokeWidth={1.5} size={18} />
               </button>
             </div>
           )}
           <button
             type="button"
-            className={styles.iconButton}
+            className={`${styles.iconButton} ${styles.settingsButton}`}
             onClick={() => setSettingsOpen(true)}
             title="設定"
           >
-            ⚙ 設定
+            <Settings strokeWidth={1.5} size={18} />
           </button>
         </div>
       </header>
@@ -150,7 +174,7 @@ export default function App() {
       <section className={styles.body}>
         {filePath ? (
           <>
-            <div className={styles.left}>
+            <div className={styles.topHalf}>
               <div className={styles.videoArea}>
                 <VideoPlayer
                   ref={videoRef}
@@ -159,18 +183,13 @@ export default function App() {
                   onCurrentTime={setCurrentSec}
                 />
               </div>
+              <div className={styles.transcriptArea}>
+                <EditableTranscriptList onSeek={handleSeek} />
+              </div>
+            </div>
+            <div className={styles.bottomHalf}>
               <ExportPreview />
               <Timeline onSeek={handleSeek} />
-            </div>
-            <div className={styles.right}>
-              {view && (
-                <TranscriptionContextForm
-                  initial={view.config.transcriptionContext}
-                  onChange={handleContextChange}
-                />
-              )}
-              <TranscribeButton apiKeyConfigured={apiKeyConfigured} />
-              <EditableTranscriptList onSeek={handleSeek} />
             </div>
           </>
         ) : (
@@ -190,6 +209,10 @@ export default function App() {
           onClearApiKey={clearApiKey}
         />
       )}
+      <OperationsDialog
+        isOpen={operationsOpen}
+        onClose={() => setOperationsOpen(false)}
+      />
 
       <ExportProgressDialog />
     </main>

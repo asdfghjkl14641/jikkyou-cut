@@ -73,6 +73,7 @@ export type IpcApi = {
   // menu events
   onMenuOpenFile: (cb: () => void) => () => void;
   onMenuOpenSettings: (cb: () => void) => () => void;
+  onMenuOpenOperations: (cb: () => void) => () => void;
 
   // settings (non-secret)
   getSettings: () => Promise<AppConfig>;

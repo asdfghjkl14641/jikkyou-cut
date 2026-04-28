@@ -3,63 +3,114 @@
   flex-direction: column;
   height: 100vh;
   margin: 0;
-  font-family:
-    -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Yu Gothic UI',
-    'Hiragino Sans', sans-serif;
-  color: #222;
-  background: #fff;
+  background: var(--bg-base);
+  color: var(--text-primary);
 }
 
 .header {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 8px 16px;
-  border-bottom: 1px solid #e0e0e0;
-  background: #fafafa;
+  padding: 0 var(--space-4);
+  height: 48px;
+  background: rgba(30, 33, 41, 0.7);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+  border-bottom: 1px solid var(--border-subtle);
   flex-shrink: 0;
+  z-index: 10;
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.2);
+}
+
+.brand {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.logoIcon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--accent-primary);
+  background: rgba(59, 130, 246, 0.1);
+  padding: 4px;
+  border-radius: var(--radius-md);
 }
 
 .title {
-  font-size: 14px;
+  font-size: var(--font-size-md);
   margin: 0;
-  font-weight: 600;
+  font-weight: var(--font-weight-semibold);
+  letter-spacing: 0.02em;
+  background: linear-gradient(to right, var(--text-primary), var(--text-secondary));
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
 }
 
 .headerRight {
   display: flex;
   align-items: center;
-  gap: 12px;
-  font-size: 13px;
-  color: #555;
+  gap: var(--space-4);
+  font-size: var(--font-size-sm);
+  color: var(--text-secondary);
 }
 
 .fileInfo {
   display: flex;
   align-items: center;
-  gap: 12px;
+  gap: var(--space-3);
+  padding-right: var(--space-4);
+  border-right: 1px solid var(--border-subtle);
+}
+
+.fileName {
+  font-family: var(--font-mono);
+  color: var(--text-muted);
+  max-width: 200px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .iconButton {
   appearance: none;
-  border: 1px solid #ccc;
-  background: #fff;
-  border-radius: 4px;
-  padding: 4px 10px;
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--text-secondary);
+  border-radius: var(--radius-md);
+  padding: var(--space-2);
   cursor: pointer;
-  font-size: 12px;
-  font-family: inherit;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: all var(--transition-fast);
 }
 
 .iconButton:hover {
-  background: #f0f0f0;
+  background: var(--bg-surface-hover);
+  color: var(--text-primary);
+}
+
+.settingsButton:hover {
+  background: rgba(59, 130, 246, 0.1);
+  color: var(--accent-primary-hover);
+}
+
+.headerDivider {
+  width: 1px;
+  height: 20px;
+  background: var(--border-subtle);
+  margin: 0 var(--space-2);
 }
 
 .body {
   flex: 1;
   display: flex;
+  flex-direction: column;
   min-height: 0;
-  background: #f5f5f5;
+  background: var(--bg-base);
+  position: relative;
 }
 
 .bodyEmpty {
@@ -67,30 +118,90 @@
   display: flex;
   align-items: center;
   justify-content: center;
+  background: radial-gradient(circle at center, var(--bg-surface) 0%, var(--bg-base) 100%);
 }
 
-.left {
-  flex: 1.6;
-  min-width: 0;
+.emptyStateContent {
   display: flex;
   flex-direction: column;
-  background: #000;
+  align-items: center;
+  text-align: center;
+  animation: fadeIn 0.5s ease-out forwards;
+}
+
+@keyframes fadeIn {
+  from { opacity: 0; transform: translateY(10px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+.emptyStateIconWrapper {
+  width: 80px;
+  height: 80px;
+  background: rgba(59, 130, 246, 0.05);
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin-bottom: var(--space-4);
+  box-shadow: 0 0 30px rgba(59, 130, 246, 0.1);
+  border: 1px solid rgba(59, 130, 246, 0.1);
+}
+
+.emptyStateIcon {
+  color: var(--accent-primary);
+  opacity: 0.8;
+}
+
+.emptyStateTitle {
+  font-size: var(--font-size-lg);
+  font-weight: var(--font-weight-bold);
+  color: var(--text-primary);
+  margin: 0 0 var(--space-2) 0;
+  letter-spacing: 0.02em;
+}
+
+.emptyStateDesc {
+  font-size: var(--font-size-sm);
+  color: var(--text-muted);
+  line-height: 1.6;
+  margin: 0;
+}
+
+.topHalf {
+  flex: 1.5; /* Takes more space for video and transcript */
+  min-height: 0;
+  display: flex;
+  flex-direction: row;
 }
 
 .videoArea {
-  flex: 1;
-  min-height: 0;
+  flex: 1.5; /* Video gets slightly more width than transcript if desired, or 1 for equal */
+  min-width: 0;
   display: flex;
+  background: #000;
   align-items: stretch;
   justify-content: stretch;
 }
 
-.right {
+.transcriptArea {
   flex: 1;
   min-width: 320px;
   max-width: 480px;
   display: flex;
   flex-direction: column;
-  border-left: 1px solid #e0e0e0;
-  background: #fff;
+  background: var(--bg-surface);
+  border-left: 1px solid var(--border-subtle);
+  box-shadow: -4px 0 20px rgba(0, 0, 0, 0.1);
+  z-index: 5;
+}
+
+.bottomHalf {
+  flex: 1; /* Takes remaining height, approx 35-40% depending on window size */
+  min-height: 200px;
+  max-height: 400px; /* Don't let timeline get too tall */
+  display: flex;
+  flex-direction: column;
+  border-top: 1px solid var(--border-subtle);
+  background: var(--bg-surface);
+  z-index: 4;
 }

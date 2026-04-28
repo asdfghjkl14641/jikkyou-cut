@@ -1,4 +1,5 @@
 import { useCallback, useState, type DragEvent } from 'react';
+import { UploadCloud } from 'lucide-react';
 import styles from './DropZone.module.css';
 
 type Props = {
@@ -43,8 +44,13 @@ export default function DropZone({ onFileSelected }: Props) {
       onDragLeave={handleDragLeave}
       onDrop={handleDrop}
     >
-      <div className={styles.primary}>動画ファイルをここにドロップ</div>
-      <div className={styles.secondary}>または クリックして選択</div>
+      <div className={styles.iconWrapper}>
+        <UploadCloud size={40} className={styles.icon} />
+      </div>
+      <div className={styles.textContainer}>
+        <div className={styles.primary}>動画ファイルをここにドロップ</div>
+        <div className={styles.secondary}>または クリックしてメニューから選択</div>
+      </div>
     </button>
   );
 }

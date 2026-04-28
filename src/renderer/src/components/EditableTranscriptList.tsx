@@ -1,5 +1,6 @@
-import { useEffect, useMemo, useRef, type MouseEvent } from 'react';
+import { useEffect, useRef, type MouseEvent } from 'react';
 import { useEditorStore } from '../store/editorStore';
+import { Play } from 'lucide-react';
 import styles from './EditableTranscriptList.module.css';
 
 type Props = {
@@ -20,8 +21,6 @@ export default function EditableTranscriptList({ onSeek }: Props) {
   const cues = useEditorStore((s) => s.cues);
   const selectedIds = useEditorStore((s) => s.selectedIds);
   const focusedIndex = useEditorStore((s) => s.focusedIndex);
-  const past = useEditorStore((s) => s.past);
-  const future = useEditorStore((s) => s.future);
 
   // Derive currentCueIndex from currentSec via a memoising selector. Returns
   // the same number across rAF ticks unless the playhead crosses a cue
@@ -40,9 +39,6 @@ export default function EditableTranscriptList({ onSeek }: Props) {
 
   const selectByIndex = useEditorStore((s) => s.selectByIndex);
   const extendSelectionTo = useEditorStore((s) => s.extendSelectionTo);
-  const undo = useEditorStore((s) => s.undo);
-  const redo = useEditorStore((s) => s.redo);
-  const resetAllDeleted = useEditorStore((s) => s.resetAllDeleted);
 
   const focusedRowRef = useRef<HTMLDivElement | null>(null);
 
@@ -67,11 +63,6 @@ export default function EditableTranscriptList({ onSeek }: Props) {
     onSeek?.(startSec);
   };
 
-  const deletedCount = useMemo(
-    () => cues.reduce((n, c) => n + (c.deleted ? 1 : 0), 0),
-    [cues],
-  );
-
   if (status === 'success' && transcription && cues.length === 0) {
     return (
       <div className={styles.container}>
@@ -94,41 +85,6 @@ export default function EditableTranscriptList({ onSeek }: Props) {
 
   return (
     <div className={styles.container}>
-      <div className={styles.summary}>
-        <span>
-          {cues.length} 件 ({deletedCount} 件削除)
-        </span>
-        <span className={styles.summaryRight}>
-          <button
-            type="button"
-            className={styles.miniButton}
-            onClick={undo}
-            disabled={past.length === 0}
-            title="元に戻す (Ctrl+Z)"
-          >
-            ↩ Undo
-          </button>
-          <button
-            type="button"
-            className={styles.miniButton}
-            onClick={redo}
-            disabled={future.length === 0}
-            title="やり直し (Ctrl+Shift+Z)"
-          >
-            ↪ Redo
-          </button>
-          <button
-            type="button"
-            className={styles.miniButton}
-            onClick={resetAllDeleted}
-            disabled={deletedCount === 0}
-            title="削除をすべて取り消す"
-          >
-            リセット
-          </button>
-        </span>
-      </div>
-
       <div className={styles.list}>
         {cues.map((cue, index) => {
           const isSelected = selectedIds.has(cue.id);
@@ -155,10 +111,10 @@ export default function EditableTranscriptList({ onSeek }: Props) {
               <div className={styles.timecode}>
                 {isPlaying && (
                   <span className={styles.playingIcon} aria-label="再生中">
-                    ▶
+                    <Play size={10} fill="currentColor" />
                   </span>
                 )}
-                {formatTimecode(cue.startSec)}
+                <span>{formatTimecode(cue.startSec)}</span>
               </div>
               <div className={styles.text}>{cue.text}</div>
             </div>
@@ -172,7 +128,7 @@ export default function EditableTranscriptList({ onSeek }: Props) {
         <span><kbd>Ctrl</kbd>+<kbd>A</kbd> 全選択</span>
         <span><kbd>D</kbd> 削除/復活</span>
         <span><kbd>Space</kbd> 再生</span>
-        <span><kbd>Ctrl</kbd>+<kbd>Z</kbd> 元に戻す</span>
+        <span><kbd>Ctrl</kbd>+<kbd>Z</kbd> Undo</span>
       </div>
     </div>
   );

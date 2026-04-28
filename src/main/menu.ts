@@ -23,9 +23,16 @@ export function buildMenu(getMainWindow: () => BrowserWindow | null) {
         { role: 'quit', label: '終了' },
       ],
     },
-    { role: 'editMenu', label: '編集' },
-    { role: 'viewMenu', label: '表示' },
-    { role: 'windowMenu', label: 'ウィンドウ' },
+    {
+      label: '操作',
+      submenu: [
+        {
+          label: '操作パネルを開く',
+          accelerator: 'CmdOrCtrl+Shift+O',
+          click: send('menu:openOperations'),
+        },
+      ],
+    },
   ];
   Menu.setApplicationMenu(Menu.buildFromTemplate(template));
 }

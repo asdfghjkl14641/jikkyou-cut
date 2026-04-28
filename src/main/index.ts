@@ -1,4 +1,4 @@
-import { app, BrowserWindow, ipcMain, shell } from 'electron';
+import { app, BrowserWindow, ipcMain, shell, nativeTheme } from 'electron';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 import { registerMediaScheme, handleMediaProtocol } from './mediaProtocol';
@@ -120,6 +120,7 @@ function registerIpcHandlers() {
 }
 
 app.whenReady().then(() => {
+  nativeTheme.themeSource = 'dark';
   handleMediaProtocol();
   buildMenu(() => mainWindow);
   registerIpcHandlers();

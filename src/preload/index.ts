@@ -18,6 +18,7 @@ const api: IpcApi = {
   getPathForFile: (file) => webUtils.getPathForFile(file),
   onMenuOpenFile: onChannel('menu:openFile'),
   onMenuOpenSettings: onChannel('menu:openSettings'),
+  onMenuOpenOperations: onChannel('menu:openOperations'),
 
   getSettings: () => ipcRenderer.invoke('settings:get'),
   saveSettings: (partial) => ipcRenderer.invoke('settings:save', partial),

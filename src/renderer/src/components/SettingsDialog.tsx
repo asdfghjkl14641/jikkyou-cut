@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
+import { X, CheckCircle } from 'lucide-react';
 import styles from './SettingsDialog.module.css';
 
 type Props = {
@@ -88,7 +89,7 @@ export default function SettingsDialog({
           aria-label="閉じる"
           disabled={saving}
         >
-          ×
+          <X size={18} strokeWidth={1.5} />
         </button>
       </div>
 
@@ -100,7 +101,8 @@ export default function SettingsDialog({
 
           {hasApiKey && (
             <div className={styles.statusOk}>
-              <span>✓ 設定済み</span>
+              <CheckCircle size={16} strokeWidth={1.5} className={styles.statusIcon} />
+              <span>設定済み</span>
               <button
                 type="button"
                 className={styles.linkButton}

@@ -12,6 +12,7 @@ import {
   decidePreviewSkip,
   deriveKeptRegions,
 } from '../../../common/segments';
+import { AlertTriangle, XCircle } from 'lucide-react';
 import styles from './VideoPlayer.module.css';
 
 type Props = {
@@ -241,9 +242,17 @@ const VideoPlayer = forwardRef<VideoPlayerHandle, Props>(function VideoPlayer(
 
   return (
     <div className={styles.player}>
-      {fatalError && <div className={styles.errorBanner}>{fatalError}</div>}
+      {fatalError && (
+        <div className={styles.errorBanner}>
+          <XCircle strokeWidth={1.5} size={18} />
+          <span>{fatalError}</span>
+        </div>
+      )}
       {!fatalError && networkWarning && (
-        <div className={styles.warningBanner}>{networkWarning}</div>
+        <div className={styles.warningBanner}>
+          <AlertTriangle strokeWidth={1.5} size={18} />
+          <span>{networkWarning}</span>
+        </div>
       )}
       <video
         ref={videoRef}

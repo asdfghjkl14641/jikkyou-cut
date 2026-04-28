@@ -1,9 +1,9 @@
 .dropZone {
   appearance: none;
-  border: 2px dashed #888;
-  border-radius: 12px;
-  background: #fafafa;
-  color: #333;
+  border: 2px dashed var(--border-subtle);
+  border-radius: var(--radius-xl);
+  background: rgba(255, 255, 255, 0.02);
+  color: var(--text-primary);
   padding: 64px 32px;
   width: min(640px, 80%);
   min-height: 240px;
@@ -11,31 +11,61 @@
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  gap: 12px;
+  gap: var(--space-4);
   cursor: pointer;
   font-family: inherit;
-  font-size: 16px;
-  transition: border-color 120ms, background-color 120ms;
+  transition: all var(--transition-normal);
+  backdrop-filter: blur(8px);
 }
 
 .dropZone:hover,
 .dropZone:focus-visible {
-  border-color: #1e88e5;
-  background: #f0f7ff;
+  border-color: var(--accent-primary);
+  background: rgba(59, 130, 246, 0.05);
+  box-shadow: 0 0 30px rgba(59, 130, 246, 0.1);
   outline: none;
 }
 
 .dragOver {
-  border-color: #1e88e5;
-  background: #e3f2fd;
+  border-color: var(--accent-primary);
+  background: rgba(59, 130, 246, 0.1);
+  transform: scale(1.02);
+}
+
+.iconWrapper {
+  width: 80px;
+  height: 80px;
+  background: rgba(59, 130, 246, 0.1);
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--accent-primary);
+  box-shadow: 0 0 20px rgba(59, 130, 246, 0.2);
+  margin-bottom: var(--space-2);
+  transition: transform var(--transition-normal);
+}
+
+.dropZone:hover .iconWrapper,
+.dragOver .iconWrapper {
+  transform: scale(1.1);
+}
+
+.textContainer {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--space-2);
 }
 
 .primary {
-  font-weight: 600;
-  font-size: 18px;
+  font-weight: var(--font-weight-semibold);
+  font-size: var(--font-size-lg);
+  letter-spacing: 0.02em;
 }
 
 .secondary {
-  color: #666;
-  font-size: 13px;
+  color: var(--text-muted);
+  font-size: var(--font-size-sm);
+  line-height: 1.6;
 }

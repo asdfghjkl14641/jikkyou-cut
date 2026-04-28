@@ -1,23 +1,36 @@
 .button {
   appearance: none;
-  background: #1976d2;
-  color: #fff;
-  border: none;
-  border-radius: 4px;
-  padding: 6px 14px;
-  font-size: 12px;
-  font-family: inherit;
-  font-weight: 600;
+  background: var(--accent-primary);
+  color: var(--text-inverse);
+  border: 1px solid transparent;
+  border-radius: var(--radius-md);
+  padding: 0 var(--space-2);
+  height: 32px;
+  width: 32px;
   cursor: pointer;
   flex-shrink: 0;
-  white-space: nowrap;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: all var(--transition-fast);
+  box-shadow: var(--shadow-sm);
 }
 
 .button:hover:not(:disabled) {
-  background: #1565c0;
+  background: var(--accent-primary-hover);
+  transform: translateY(-1px);
+  box-shadow: var(--shadow-md);
+}
+
+.button:active:not(:disabled) {
+  transform: translateY(0);
+  box-shadow: var(--shadow-sm);
 }
 
 .button:disabled {
-  background: #b0bec5;
+  background: var(--bg-elevated);
+  color: var(--text-muted);
+  border: 1px solid var(--border-subtle);
   cursor: not-allowed;
+  box-shadow: none;
 }

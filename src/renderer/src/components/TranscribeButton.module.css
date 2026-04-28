@@ -1,52 +1,58 @@
 .container {
   display: flex;
-  flex-direction: column;
-  gap: 8px;
-  padding: 12px 16px;
-  border-bottom: 1px solid #e0e0e0;
-  background: #fff;
-  flex-shrink: 0;
+  align-items: center;
+  position: relative;
 }
 
 .startButton {
   appearance: none;
-  background: #1e88e5;
+  background: var(--accent-primary);
   color: #fff;
-  border: none;
-  border-radius: 4px;
-  padding: 10px 16px;
-  font-size: 14px;
-  font-weight: 600;
-  font-family: inherit;
+  border: 1px solid transparent;
+  border-radius: var(--radius-md);
+  padding: var(--space-2);
   cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: all var(--transition-fast);
 }
 
 .startButton:hover:not(:disabled) {
-  background: #1565c0;
+  background: var(--accent-primary-hover);
+  box-shadow: 0 4px 12px rgba(79, 70, 229, 0.4);
 }
 
 .startButton:disabled {
-  background: #b0bec5;
+  background: var(--bg-surface-hover);
+  color: var(--text-muted);
   cursor: not-allowed;
 }
 
 .progressRow {
   display: flex;
-  flex-direction: column;
-  gap: 6px;
+  align-items: center;
+  gap: var(--space-3);
+  background: rgba(0,0,0,0.2);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  padding: 4px 8px;
+  min-width: 200px;
 }
 
 .progressBar {
-  width: 100%;
-  height: 8px;
-  background: #eceff1;
-  border-radius: 4px;
+  flex: 1;
+  height: 4px;
+  background: rgba(0, 0, 0, 0.4);
+  border-radius: var(--radius-full);
   overflow: hidden;
+  box-shadow: inset 0 1px 2px rgba(0,0,0,0.5);
 }
 
 .progressFill {
   height: 100%;
-  background: linear-gradient(90deg, #1e88e5, #42a5f5);
+  background: linear-gradient(90deg, var(--accent-primary), #818CF8);
+  box-shadow: 0 0 10px rgba(79, 70, 229, 0.5);
   transition: width 200ms ease-out;
 }
 
@@ -64,38 +70,53 @@
 .progressMeta {
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  font-size: 12px;
-  color: #555;
+  gap: var(--space-2);
+}
+
+.progressText {
+  font-size: 10px;
+  color: var(--text-secondary);
+  font-family: var(--font-mono);
+  white-space: nowrap;
 }
 
 .cancelButton {
   appearance: none;
-  background: #fff;
-  color: #b71c1c;
-  border: 1px solid #b71c1c;
-  border-radius: 4px;
-  padding: 4px 12px;
-  font-size: 12px;
-  font-family: inherit;
+  background: transparent;
+  color: var(--text-secondary);
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  padding: 2px;
   cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: all var(--transition-fast);
 }
 
 .cancelButton:hover {
-  background: #ffebee;
+  background: rgba(239, 68, 68, 0.1);
+  color: var(--accent-danger);
 }
 
 .errorBanner {
-  background: #fde8e8;
-  border: 1px solid #f5b3b3;
-  color: #b71c1c;
-  border-radius: 4px;
-  padding: 8px 12px;
-  font-size: 12px;
+  position: absolute;
+  top: calc(100% + var(--space-2));
+  right: 0;
+  width: max-content;
+  max-width: 320px;
+  background: var(--bg-elevated);
+  border: 1px solid rgba(239, 68, 68, 0.3);
+  color: var(--accent-danger);
+  border-radius: var(--radius-md);
+  padding: var(--space-2) var(--space-3);
+  font-size: var(--font-size-xs);
   line-height: 1.5;
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: var(--space-2);
+  z-index: 50;
+  box-shadow: var(--shadow-lg);
 }
 
 .errorMessage {
@@ -106,26 +127,36 @@
 .retryButton {
   appearance: none;
   align-self: flex-end;
-  background: #b71c1c;
-  color: #fff;
-  border: none;
-  border-radius: 4px;
-  padding: 4px 14px;
-  font-size: 12px;
-  font-family: inherit;
+  background: transparent;
+  color: var(--accent-danger);
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  padding: 4px;
   cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: all var(--transition-fast);
 }
 
 .retryButton:hover:not(:disabled) {
-  background: #8e0000;
+  background: rgba(239, 68, 68, 0.1);
 }
 
 .retryButton:disabled {
-  background: #b0bec5;
+  color: var(--text-muted);
   cursor: not-allowed;
 }
 
 .statusNote {
-  font-size: 12px;
-  color: #555;
+  position: absolute;
+  top: calc(100% + var(--space-2));
+  right: 0;
+  font-size: 10px;
+  color: var(--text-muted);
+  background: var(--bg-elevated);
+  padding: 4px 8px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border-subtle);
+  white-space: nowrap;
 }

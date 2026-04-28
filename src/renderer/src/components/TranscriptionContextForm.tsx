@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import type { TranscriptionContext } from '../../../common/config';
+import { SlidersHorizontal } from 'lucide-react';
 import styles from './TranscriptionContextForm.module.css';
 
 type Props = {
@@ -56,16 +57,12 @@ export default function TranscriptionContextForm({ initial, onChange }: Props) {
     <div className={styles.container}>
       <button
         type="button"
-        className={styles.header}
+        className={`${styles.header} ${open ? styles.headerOpen : ''}`}
         onClick={() => setOpen((v) => !v)}
+        title="文字起こしコンテキスト（精度向上設定）"
       >
-        <span className={styles.headerLabel}>
-          <span className={`${styles.chevron} ${open ? styles.chevronOpen : ''}`}>
-            ▶
-          </span>
-          📝 ゲーム情報を追加(精度向上)
-          {filled && <span className={styles.badge}>入力済み</span>}
-        </span>
+        <SlidersHorizontal strokeWidth={1.5} size={18} />
+        {filled && <span className={styles.indicator} />}
       </button>
 
       {open && (
@@ -87,7 +84,7 @@ export default function TranscriptionContextForm({ initial, onChange }: Props) {
 
           <div className={styles.field}>
             <label className={styles.fieldLabel} htmlFor="ctx-chars">
-              登場するキャラ名・固有名詞
+              登場キャラ・固有名詞
             </label>
             <textarea
               id="ctx-chars"
@@ -96,13 +93,13 @@ export default function TranscriptionContextForm({ initial, onChange }: Props) {
               value={draft.characters}
               onChange={updateField('characters')}
               onBlur={flushOnBlur}
-              placeholder="例: ペコリーヌ、コッコロ、キャル(改行またはカンマ区切り)"
+              placeholder="カンマ区切り"
             />
           </div>
 
           <div className={styles.field}>
             <label className={styles.fieldLabel} htmlFor="ctx-phrases">
-              配信者の口癖
+              口癖・よく使う言葉
             </label>
             <input
               id="ctx-phrases"
@@ -111,13 +108,13 @@ export default function TranscriptionContextForm({ initial, onChange }: Props) {
               value={draft.catchphrases}
               onChange={updateField('catchphrases')}
               onBlur={flushOnBlur}
-              placeholder="例: いやー、マジで、ありがとうございます"
+              placeholder=""
             />
           </div>
 
           <div className={styles.field}>
             <label className={styles.fieldLabel} htmlFor="ctx-notes">
-              その他の補足情報
+              補足情報
             </label>
             <textarea
               id="ctx-notes"
@@ -126,7 +123,7 @@ export default function TranscriptionContextForm({ initial, onChange }: Props) {
               value={draft.notes}
               onChange={updateField('notes')}
               onBlur={flushOnBlur}
-              placeholder="例: 第○話のクエスト周回中、声が小さい"
+              placeholder=""
             />
           </div>
 

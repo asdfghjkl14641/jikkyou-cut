@@ -2,6 +2,7 @@ import { useMemo } from 'react';
 import { useEditorStore } from '../store/editorStore';
 import { useExport } from '../hooks/useExport';
 import { deriveKeptRegions } from '../../../common/segments';
+import { Download } from 'lucide-react';
 import styles from './ExportButton.module.css';
 
 export default function ExportButton() {
@@ -31,9 +32,9 @@ export default function ExportButton() {
       className={styles.button}
       onClick={start}
       disabled={disabledReason !== null}
-      title={disabledReason ?? '書き出し'}
+      title={disabledReason ?? '書き出しを実行'}
     >
-      📤 書き出し
+      <Download strokeWidth={1.5} size={18} />
     </button>
   );
 }

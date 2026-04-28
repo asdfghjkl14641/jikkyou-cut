@@ -2,6 +2,7 @@ import { useMemo } from 'react';
 import { useEditorStore } from '../store/editorStore';
 import { deriveKeptRegions } from '../../../common/segments';
 import ExportButton from './ExportButton';
+import { MonitorPlay, ArrowRight, Scissors } from 'lucide-react';
 import styles from './ExportPreview.module.css';
 
 const formatHMS = (totalSec: number): string => {
@@ -40,30 +41,41 @@ export default function ExportPreview() {
     <div className={styles.preview}>
       <label
         className={styles.previewToggle}
-        title="削除済み区間を自動でスキップして再生します"
+        title="削除済み区間をスキップして再生"
       >
-        <input
-          type="checkbox"
-          checked={previewMode}
-          onChange={(e) => setPreviewMode(e.target.checked)}
-        />
-        <span>プレビュー再生</span>
+        <div className={`${styles.checkboxWrapper} ${previewMode ? styles.checked : ''}`}>
+          <MonitorPlay strokeWidth={1.5} size={18} className={styles.checkboxIcon} />
+          <input
+            type="checkbox"
+            className={styles.hiddenInput}
+            checked={previewMode}
+            onChange={(e) => setPreviewMode(e.target.checked)}
+          />
+        </div>
       </label>
+      
+      <div className={styles.divider} />
+
       <div className={styles.summary}>
-        <span>
-          <span className={styles.original}>元: {formatHMS(durationSec)}</span>{' '}
-          <span className={styles.arrow}>→</span>{' '}
-          <span className={styles.exported}>
-            書き出し: {formatHMS(summary.keptSec)}
-          </span>
-        </span>
-        <span>
-          <span className={styles.delta}>(-{formatHMS(summary.cutSec)},</span>{' '}
+        <div className={styles.timeGroup}>
+          <span className={styles.original}>{formatHMS(durationSec)}</span>
+        </div>
+        
+        <ArrowRight strokeWidth={1.5} size={14} className={styles.arrow} />
+        
+        <div className={styles.timeGroup}>
+          <span className={styles.exported}>{formatHMS(summary.keptSec)}</span>
+        </div>
+
+        <div className={styles.deltaGroup}>
+          <Scissors strokeWidth={1.5} size={14} className={styles.scissors} />
+          <span className={styles.delta}>-{formatHMS(summary.cutSec)}</span>
           <span className={styles.percent}>
-            {summary.cutPercent.toFixed(0)}%カット)
+            ({summary.cutPercent.toFixed(0)}%)
           </span>
-        </span>
+        </div>
       </div>
+      
       <ExportButton />
     </div>
   );
