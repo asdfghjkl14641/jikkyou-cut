@@ -48,6 +48,10 @@ type EditorState = {
   exportResult: ExportResult | null;
   exportError: string | null;
 
+  // Preview mode: while ON, playback auto-skips deleted regions so the user
+  // experiences the editor's projected output without rendering it.
+  previewMode: boolean;
+
   // file lifecycle
   setFile: (absPath: string) => void;
   clearFile: () => void;
@@ -87,6 +91,8 @@ type EditorState = {
   failExport: (msg: string) => void;
   cancelExportState: () => void;
   resetExportState: () => void;
+
+  setPreviewMode: (on: boolean) => void;
 };
 
 const basename = (absPath: string): string => {
@@ -141,6 +147,8 @@ export const useEditorStore = create<EditorState>((set, get) => ({
   exportProgress: null,
   exportResult: null,
   exportError: null,
+
+  previewMode: true,
 
   setFile: (absPath) =>
     set({
@@ -435,4 +443,6 @@ export const useEditorStore = create<EditorState>((set, get) => ({
       exportResult: null,
       exportError: null,
     }),
+
+  setPreviewMode: (on) => set({ previewMode: on }),
 }));

@@ -19,6 +19,8 @@ const formatHMS = (totalSec: number): string => {
 export default function ExportPreview() {
   const cues = useEditorStore((s) => s.cues);
   const durationSec = useEditorStore((s) => s.durationSec);
+  const previewMode = useEditorStore((s) => s.previewMode);
+  const setPreviewMode = useEditorStore((s) => s.setPreviewMode);
 
   const summary = useMemo(() => {
     if (durationSec == null || durationSec <= 0 || cues.length === 0) return null;
@@ -36,6 +38,17 @@ export default function ExportPreview() {
 
   return (
     <div className={styles.preview}>
+      <label
+        className={styles.previewToggle}
+        title="削除済み区間を自動でスキップして再生します"
+      >
+        <input
+          type="checkbox"
+          checked={previewMode}
+          onChange={(e) => setPreviewMode(e.target.checked)}
+        />
+        <span>プレビュー再生</span>
+      </label>
       <div className={styles.summary}>
         <span>
           <span className={styles.original}>元: {formatHMS(durationSec)}</span>{' '}

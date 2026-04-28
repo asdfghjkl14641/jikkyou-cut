@@ -2,10 +2,16 @@ import {
   forwardRef,
   useEffect,
   useImperativeHandle,
+  useMemo,
   useRef,
   useState,
   type SyntheticEvent,
 } from 'react';
+import { useEditorStore } from '../store/editorStore';
+import {
+  decidePreviewSkip,
+  deriveKeptRegions,
+} from '../../../common/segments';
 import styles from './VideoPlayer.module.css';
 
 type Props = {
@@ -24,6 +30,10 @@ const toMediaUrl = (absPath: string) =>
   `media://localhost/${encodeURIComponent(absPath)}`;
 
 const NOT_SUPPORTED_DEFER_MS = 500;
+// Minimum time between two auto-skips. Prevents recursive seeking when the
+// new currentTime momentarily lies in another deletion gap due to floating
+// point boundaries or back-to-back deletions.
+const SKIP_COOLDOWN_MS = 50;
 
 const VideoPlayer = forwardRef<VideoPlayerHandle, Props>(function VideoPlayer(
   { filePath, onDuration, onCurrentTime },
@@ -32,10 +42,20 @@ const VideoPlayer = forwardRef<VideoPlayerHandle, Props>(function VideoPlayer(
   const videoRef = useRef<HTMLVideoElement>(null);
   const notSupportedTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const rafRef = useRef<number | null>(null);
-  // Latest onCurrentTime captured by ref so the rAF loop sees the freshest
-  // callback without restarting on each render.
   const onCurrentTimeRef = useRef(onCurrentTime);
   onCurrentTimeRef.current = onCurrentTime;
+
+  const cues = useEditorStore((s) => s.cues);
+  const previewMode = useEditorStore((s) => s.previewMode);
+
+  const regions = useMemo(() => deriveKeptRegions(cues), [cues]);
+  const regionsRef = useRef(regions);
+  regionsRef.current = regions;
+
+  const previewModeRef = useRef(previewMode);
+  previewModeRef.current = previewMode;
+
+  const lastSkipAtRef = useRef(0);
 
   const [fatalError, setFatalError] = useState<string | null>(null);
   const [networkWarning, setNetworkWarning] = useState<string | null>(null);
@@ -56,6 +76,37 @@ const VideoPlayer = forwardRef<VideoPlayerHandle, Props>(function VideoPlayer(
         return;
       }
       onCurrentTimeRef.current?.(v.currentTime);
+
+      // Preview-mode auto-skip: while ON and the video is actively playing,
+      // jump out of any deletion gap into the next kept region.
+      if (previewModeRef.current && !v.paused && !v.seeking) {
+        const now = performance.now();
+        if (now - lastSkipAtRef.current > SKIP_COOLDOWN_MS) {
+          const decision = decidePreviewSkip(
+            v.currentTime,
+            regionsRef.current,
+          );
+          if (decision.kind === 'skip') {
+            lastSkipAtRef.current = now;
+            try {
+              v.currentTime = decision.toSec;
+            } catch {
+              // ignore — readyState may be insufficient
+            }
+          } else if (decision.kind === 'end') {
+            lastSkipAtRef.current = now;
+            try {
+              if (Number.isFinite(v.duration) && v.duration > 0) {
+                v.currentTime = v.duration;
+              }
+            } catch {
+              // ignore
+            }
+            v.pause();
+          }
+        }
+      }
+
       rafRef.current = requestAnimationFrame(tick);
     };
     rafRef.current = requestAnimationFrame(tick);
@@ -95,7 +146,6 @@ const VideoPlayer = forwardRef<VideoPlayerHandle, Props>(function VideoPlayer(
       clearTimeout(notSupportedTimerRef.current);
       notSupportedTimerRef.current = null;
     }
-    // Reset stale playback position from the previous file.
     onCurrentTimeRef.current?.(0);
   }, [filePath]);
 
