@@ -15,6 +15,13 @@
 
 ---
 
+## 2026-05-01 23:25 - コメント分析画面 UI MVP 着手(モックデータ先行)
+- 誰が: Antigravity
+- 何を: CommentAnalysisGraph コンポーネント新設、3 要素統合スコアの可視化、モックデータで動作確認可能な状態に
+- 理由: バックエンド(yt-dlp チャットリプレイ取得・スコア計算)着手前に UI 形を固めることで、データ構造の最終確定を逆算できるようにする
+- 影響: src/renderer/src/components/CommentAnalysisGraph.{tsx,module.css,mock.ts} 新規。App.tsx に動作確認用の一時組み込み(TODO コメント付き)
+- コミット: (未定)
+
 ## 2026-05-01 23:00 - ドキュメント整理(IDEAS.md + COMMENT_ANALYSIS_DESIGN.md 作成)
 
 - 誰が: Claude Code

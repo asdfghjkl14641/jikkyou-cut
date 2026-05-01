@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useEditorStore } from './store/editorStore';
 import { useSettings } from './hooks/useSettings';
 import { useEditKeyboard } from './hooks/useEditKeyboard';
@@ -23,6 +23,8 @@ import SubtitleSettingsDialog from './components/SubtitleSettingsDialog';
 import UrlDownloadDialog from './components/UrlDownloadDialog';
 import UrlDownloadProgressDialog from './components/UrlDownloadProgressDialog';
 import TermsOfServiceModal from './components/TermsOfServiceModal';
+import CommentAnalysisGraph from './components/CommentAnalysisGraph';
+import { generateMockAnalysis } from './components/CommentAnalysisGraph.mock';
 import type { UrlDownloadArgs, UrlDownloadProgress } from '../../common/types';
 import styles from './App.module.css';
 
@@ -43,6 +45,9 @@ export default function App() {
   const [tosOpen, setTosOpen] = useState(false);
   const [downloadProgressOpen, setDownloadProgressOpen] = useState(false);
   const [downloadProgress, setDownloadProgress] = useState<UrlDownloadProgress | null>(null);
+
+  // TODO: コメント分析画面 MVP 動作確認用モックデータ
+  const mockAnalysis = useMemo(() => generateMockAnalysis(3600, 5), []);
 
   const loadSubtitleSettings = useEditorStore((s) => s.loadSubtitleSettings);
 
@@ -345,6 +350,16 @@ export default function App() {
         progress={downloadProgress}
         onCancel={handleCancelDownload}
       />
+
+      {/* TODO: コメント分析画面 MVP 動作確認用一時組み込み */}
+      <div style={{ position: 'fixed', bottom: 0, left: 0, right: 0, zIndex: 100, pointerEvents: 'none' }}>
+        <div style={{ pointerEvents: 'auto', maxWidth: '800px', margin: '0 auto' }}>
+          <CommentAnalysisGraph 
+            analysis={mockAnalysis} 
+            onSeek={handleSeek}
+          />
+        </div>
+      </div>
     </main>
   );
 }

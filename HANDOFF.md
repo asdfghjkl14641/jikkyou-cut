@@ -40,8 +40,7 @@ Electron + React + TypeScript 製。**現在は配布前の "自分用ツール"
 - 編集ループ「URL DL or ファイル読み込み → 文字起こし(話者分離 hint) → テキスト編集(話者修正・行削除・スタイル上書き) → 字幕オーバーレイで確認 → 書き出し(字幕焼き込み)」が動作
 
 ### 次フェーズ
-
-- **コメント分析画面**(MVP) — 詳細は `docs/COMMENT_ANALYSIS_DESIGN.md`
+- **進行中**: コメント分析画面 (UI レイヤ完成、バックエンド待ち) — 詳細は `docs/COMMENT_ANALYSIS_DESIGN.md`
 - 長期構想は `IDEAS.md` 参照(AI動画ディレクター方向)
 
 ---
@@ -158,6 +157,8 @@ jikkyou-cut/
                 ├── TranscriptionContextForm.tsx
                 ├── UrlDownloadDialog.tsx       # 廃止予定 / 残置(DropZone に統合済)
                 ├── UrlDownloadProgressDialog.tsx
+                ├── CommentAnalysisGraph.tsx    # コメント分析盛り上がりスコアグラフ(新規)
+                ├── CommentAnalysisGraph.mock.ts # 分析グラフ用モックデータ生成
                 ├── VideoPlayer.tsx             # <video> ラッパ + rAF + プレビュースキップ
                 └── ViewModeTab.tsx             # リニア / 話者カラム 切替タブ
 ```
@@ -208,6 +209,7 @@ jikkyou-cut/
 | `ExportProgressDialog.tsx` | 書き出し進捗 / 完了 / エラー / 中止モーダル |
 | `TermsOfServiceModal.tsx` | URL DL 機能の初回利用同意モーダル |
 | `OperationsDialog.tsx` | 操作一覧(キーボードショートカット等の参照画面) |
+| `CommentAnalysisGraph.tsx` | コメント分析結果をヒートマップ状のグラフで可視化(3要素統合スコア) |
 
 ---
 

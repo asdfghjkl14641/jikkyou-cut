@@ -1,0 +1,145 @@
+.container {
+  display: flex;
+  flex-direction: column;
+  background: var(--bg-surface);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-lg);
+  padding: var(--space-4);
+  margin: var(--space-4);
+  gap: var(--space-3);
+  box-shadow: var(--shadow-md);
+  user-select: none;
+}
+
+.header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.title {
+  margin: 0;
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-bold);
+  color: var(--text-primary);
+}
+
+.legend {
+  display: flex;
+  gap: var(--space-3);
+}
+
+.legendItem {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  font-size: 10px;
+  color: var(--text-muted);
+}
+
+.dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+}
+
+.graphArea {
+  position: relative;
+  height: 140px;
+  background: var(--bg-base);
+  border-radius: var(--radius-sm);
+  border: 1px solid rgba(255, 255, 255, 0.05);
+  cursor: pointer;
+  overflow: hidden;
+}
+
+.bars {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  display: flex;
+  align-items: flex-end;
+}
+
+.bar {
+  position: absolute;
+  bottom: 0;
+  min-width: 1px;
+  transition: height var(--transition-base), background-color var(--transition-fast);
+}
+
+.graphArea:hover .bar {
+  filter: brightness(1.1);
+}
+
+.cursor {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 2px;
+  background: var(--accent-danger);
+  pointer-events: none;
+  margin-left: -1px;
+  z-index: 5;
+  box-shadow: 0 0 10px var(--accent-danger);
+}
+
+.cursor::after {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 50%;
+  transform: translateX(-50%);
+  border-left: 6px solid transparent;
+  border-right: 6px solid transparent;
+  border-top: 6px solid var(--accent-danger);
+}
+
+.tooltip {
+  position: absolute;
+  top: 10px;
+  z-index: 10;
+  background: rgba(15, 17, 23, 0.95);
+  backdrop-filter: blur(8px);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  padding: var(--space-2) var(--space-3);
+  pointer-events: none;
+  box-shadow: var(--shadow-xl);
+  min-width: 140px;
+  animation: fadeIn var(--transition-fast);
+}
+
+@keyframes fadeIn {
+  from { opacity: 0; transform: translateY(5px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+.tooltipTime {
+  font-family: var(--font-mono);
+  font-size: var(--font-size-xs);
+  color: var(--text-muted);
+  margin-bottom: var(--space-1);
+}
+
+.tooltipTotal {
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-bold);
+  color: var(--text-primary);
+  margin-bottom: var(--space-2);
+}
+
+.totalValue {
+  color: #FB923C;
+}
+
+.tooltipDetail {
+  font-size: 10px;
+  color: var(--text-secondary);
+  line-height: 1.4;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
