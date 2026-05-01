@@ -1,4 +1,4 @@
-import type { SubtitlePosition, SubtitleStyle, TranscriptCue } from './types';
+import type { SubtitlePosition, SpeakerPreset, TranscriptCue, SpeakerStyle } from './types';
 import type { KeptRegion } from './segments';
 
 // Most-likely bug source for the whole subtitle pipeline. The export concat
@@ -93,33 +93,36 @@ const escapeAssText = (text: string): string =>
 export type BuildAssArgs = {
   cues: readonly TranscriptCue[];
   keptRegions: readonly KeptRegion[];
-  style: SubtitleStyle;
+  preset: SpeakerPreset;
   videoWidth: number;
   videoHeight: number;
 };
 
-export function buildAss(args: BuildAssArgs): string {
-  const { cues, keptRegions, style, videoWidth, videoHeight } = args;
+function buildStyleLine(style: SpeakerStyle): string {
   const alignment = positionToAlignment(style.position);
   const primaryColour = hexToAss(style.textColor);
   const outlineColour = hexToAss(style.outlineColor);
   const backColour = hexToAss(style.shadow.color);
-  const shadowDepth = style.shadow.enabled
-    ? Math.max(0, style.shadow.offsetPx)
-    : 0;
+  const shadowDepth = style.shadow.enabled ? Math.max(0, style.shadow.offsetPx) : 0;
   const outline = Math.max(0, style.outlineWidth);
-  // Margin from the corresponding edge in the alignment direction. middle
-  // alignment ignores it.
   const marginV = style.position === 'middle' ? 0 : 60;
+  const styleName = `Speaker_${style.speakerId}`;
+  return `Style: ${styleName},${style.fontFamily},${style.fontSize},${primaryColour},${primaryColour},${outlineColour},${backColour},0,0,0,0,100,100,0,0,1,${outline},${shadowDepth},${alignment},20,20,${marginV},1`;
+}
 
-  // V4+ Style fields:
-  // Name,Fontname,Fontsize,PrimaryColour,SecondaryColour,OutlineColour,
-  // BackColour,Bold,Italic,Underline,StrikeOut,ScaleX,ScaleY,Spacing,Angle,
-  // BorderStyle,Outline,Shadow,Alignment,MarginL,MarginR,MarginV,Encoding
-  // BorderStyle=1 → outline + drop shadow. BackColour drives the shadow.
-  const styleLine =
-    `Style: Default,${style.fontFamily},${style.fontSize},${primaryColour},${primaryColour},${outlineColour},${backColour},` +
-    `0,0,0,0,100,100,0,0,1,${outline},${shadowDepth},${alignment},20,20,${marginV},1`;
+export function buildAss(args: BuildAssArgs): string {
+  const { cues, keptRegions, preset, videoWidth, videoHeight } = args;
+
+  const styleLines: string[] = [];
+  const speakerStyleMap = new Map<string, string>();
+
+  // Use 'default' if the preset lacks it somehow
+  const fallbackStyleName = `Speaker_default`;
+
+  for (const speaker of preset.speakerStyles) {
+    styleLines.push(buildStyleLine(speaker));
+    speakerStyleMap.set(speaker.speakerId, `Speaker_${speaker.speakerId}`);
+  }
 
   const events: string[] = [];
   for (const cue of cues) {
@@ -129,16 +132,34 @@ export function buildAss(args: BuildAssArgs): string {
 
     const startMapped = convertTimecode(cue.startSec, keptRegions);
     if (startMapped == null) continue;
-    // Pull the end time back a touch so an exact-equal endSec→startSec.next
-    // boundary (common with ASR) doesn't sit in the next region's interior.
     const endMapped = convertTimecodeClamped(
       Math.max(cue.startSec, cue.endSec - 1e-6),
       keptRegions,
     );
     if (endMapped == null || endMapped <= startMapped) continue;
 
+    let styleName = fallbackStyleName;
+    if (cue.styleOverride) {
+      // Phase 2: custom override per cue
+      const overrideStyleName = `Cue_${cue.id}`;
+      if (!styleLines.find(l => l.startsWith(`Style: ${overrideStyleName},`))) {
+        styleLines.push(buildStyleLine({ ...cue.styleOverride, speakerId: cue.id } as SpeakerStyle).replace(`Speaker_${cue.id}`, overrideStyleName));
+      }
+      styleName = overrideStyleName;
+    } else if (cue.speaker && speakerStyleMap.has(cue.speaker)) {
+      styleName = speakerStyleMap.get(cue.speaker)!;
+    } else if (speakerStyleMap.has('default')) {
+      styleName = speakerStyleMap.get('default')!;
+    } else {
+      // Very fallback if 'default' is somehow missing
+      styleName = 'Default';
+      if (!styleLines.find(l => l.startsWith('Style: Default,'))) {
+        styleLines.push(`Style: Default,Arial,48,&H00FFFFFF&,&H00FFFFFF&,&H00000000&,&H00000000&,0,0,0,0,100,100,0,0,1,2,0,2,20,20,60,1`);
+      }
+    }
+
     events.push(
-      `Dialogue: 0,${formatAssTime(startMapped)},${formatAssTime(endMapped)},Default,,0,0,0,,${escapeAssText(cue.text)}`,
+      `Dialogue: 0,${formatAssTime(startMapped)},${formatAssTime(endMapped)},${styleName},,0,0,0,,${escapeAssText(cue.text)}`,
     );
   }
 
@@ -152,7 +173,7 @@ export function buildAss(args: BuildAssArgs): string {
     '',
     '[V4+ Styles]',
     'Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding',
-    styleLine,
+    ...styleLines,
     '',
     '[Events]',
     'Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text',

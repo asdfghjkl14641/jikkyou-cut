@@ -1,7 +1,7 @@
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import { nanoid } from 'nanoid';
-import type { TranscriptCue } from '../common/types';
+import type { TranscriptCue, ProjectFile } from '../common/types';
 
 const PROJECT_VERSION = 1;
 
@@ -45,7 +45,7 @@ function normaliseCue(raw: unknown): TranscriptCue | null {
 
 export async function loadProject(
   videoFilePath: string,
-): Promise<TranscriptCue[] | null> {
+): Promise<ProjectFile | null> {
   let raw: string;
   try {
     raw = await fs.readFile(projectPathFor(videoFilePath), 'utf8');
@@ -61,7 +61,16 @@ export async function loadProject(
       const c = normaliseCue(r);
       if (c) out.push(c);
     }
-    return out;
+    const activePresetId = typeof data['activePresetId'] === 'string' ? data['activePresetId'] : undefined;
+    
+    return {
+      version: typeof data['version'] === 'number' ? data['version'] : PROJECT_VERSION,
+      videoFileName: typeof data['videoFileName'] === 'string' ? data['videoFileName'] : path.basename(videoFilePath),
+      language: typeof data['language'] === 'string' ? data['language'] : 'ja',
+      generatedAt: typeof data['generatedAt'] === 'number' ? data['generatedAt'] : Date.now(),
+      cues: out,
+      activePresetId,
+    };
   } catch {
     return null;
   }
@@ -70,13 +79,15 @@ export async function loadProject(
 export async function saveProject(
   videoFilePath: string,
   cues: TranscriptCue[],
+  activePresetId?: string,
 ): Promise<void> {
-  const project = {
+  const project: ProjectFile = {
     version: PROJECT_VERSION,
     videoFileName: path.basename(videoFilePath),
     language: 'ja',
     generatedAt: Date.now(),
     cues,
+    ...(activePresetId ? { activePresetId } : {}),
   };
   await fs.writeFile(
     projectPathFor(videoFilePath),

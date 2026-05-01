@@ -15,6 +15,22 @@
 
 ---
 
+## 2026-05-01 20:25 - 字幕設定・話者プリセット機能の詳細修正(Phase 1完了)
+
+- 誰が: Antigravity
+- 何を: `SubtitleSettingsDialog` にて追加された話者の削除機能(使用中のガード付き)の実装。また、`src/common/speakers.ts` にて `defaultSpeakerName` 関数を追加し、「スピーカー1」のようなデフォルト表示名への変換ロジックを実装。さらに `SpeakerDropdown.tsx` と連携して、カスタマイズされた話者名がバッジにも反映されるように修正。
+- 理由: 不要になった話者スタイルを消せるようにするとともに、初見で「speaker_0」のような無機質な内部IDが表示されるのを防ぎ、ユーザー体験を向上させるため。
+- 影響: `src/renderer/src/components/SubtitleSettingsDialog.tsx`, `src/common/speakers.ts`, `src/renderer/src/components/SpeakerDropdown.tsx`
+- コミット: (未定)
+
+## 2026-05-01 20:10 - 字幕設定の大規模リファクタ・話者ごとのプリセット機能(Phase B-3)
+
+- 誰が: Antigravity
+- 何を: `SpeakerPreset` データモデルへ移行し、`SubtitleSettingsDialog` を「左にスピーカーリスト・右に詳細設定」の2カラム構成へ完全リニューアル。`cues` に含まれる話者を自動でリストに追加する Reconciliation の実装や、FFmpegの `.ass` 出力時に話者ごとのスタイル(`Speaker_speaker_N`)を出し分ける仕組みを実装。
+- 理由: マルチスピーカーの実況・コラボ動画において、話者ごとに個別の字幕色・フォントをスムーズに適用し、プリセットとして永続化できるようにするため。
+- 影響: `types.ts`, `subtitleSettings.ts`, `project.ts`, `index.ts`, `SubtitleSettingsDialog.tsx/css`, `EditableTranscriptList.tsx`, `SubtitleOverlay.tsx`, `export.ts`, `subtitle.ts`, `editorStore.ts`, `App.tsx`
+- コミット: (未定)
+
 ## 2026-05-01 19:53 - 話者ID手動修正UI(Phase B-2)実装
 
 - 誰が: Antigravity

@@ -113,8 +113,8 @@ function registerIpcHandlers() {
   );
   ipcMain.handle(
     'project:save',
-    (_e, videoFilePath: string, cues: TranscriptCue[]) =>
-      project.saveProject(videoFilePath, cues),
+    (_e, videoFilePath: string, cues: TranscriptCue[], activePresetId?: string) =>
+      project.saveProject(videoFilePath, cues, activePresetId),
   );
   ipcMain.handle('project:clear', (_e, videoFilePath: string) =>
     project.clearProject(videoFilePath),

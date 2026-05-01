@@ -75,13 +75,34 @@
 }
 
 .rightColumn {
-  flex: 1;
+  flex: 2;
   display: flex;
   flex-direction: column;
   min-width: 0;
   overflow-y: auto;
   padding: var(--space-5);
   gap: var(--space-5);
+}
+
+.topBar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: var(--space-3) var(--space-5);
+  border-bottom: 1px solid var(--border-subtle);
+  background: rgba(0, 0, 0, 0.2);
+  gap: var(--space-4);
+}
+
+.presetGroup {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  flex: 1;
+}
+
+.presetGroup .select {
+  max-width: 300px;
 }
 
 .styleListSection {
@@ -196,18 +217,22 @@
 .previewSection {
   height: 200px;
   flex-shrink: 0;
-  border-top: 1px solid var(--border-subtle);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
   background: #000;
   display: flex;
   align-items: center;
   justify-content: center;
   position: relative;
   overflow: hidden;
+  margin-top: auto;
 }
 
 .previewText {
   white-space: nowrap;
   line-height: 1.2;
+  max-width: 100%;
+  overflow: hidden;
 }
 
 .settingGroup {

@@ -9,16 +9,17 @@ const DEBOUNCE_MS = 1000;
 export function useProjectAutoSave() {
   const filePath = useEditorStore((s) => s.filePath);
   const cues = useEditorStore((s) => s.cues);
+  const activePresetId = useEditorStore((s) => s.subtitleSettings?.activePresetId);
 
   useEffect(() => {
     if (!filePath || cues.length === 0) return;
 
     const handle = setTimeout(() => {
-      window.api.saveProject(filePath, cues).catch((err) => {
+      window.api.saveProject(filePath, cues, activePresetId ?? undefined).catch((err) => {
         console.warn('[project] save failed:', err);
       });
     }, DEBOUNCE_MS);
 
     return () => clearTimeout(handle);
-  }, [filePath, cues]);
+  }, [filePath, cues, activePresetId]);
 }

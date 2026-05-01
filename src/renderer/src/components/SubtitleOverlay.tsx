@@ -1,9 +1,9 @@
 import React, { useMemo } from 'react';
 import { useEditorStore } from '../store/editorStore';
-import type { SubtitleStyle } from '../../../common/types';
+import type { SpeakerStyle } from '../../../common/types';
 import styles from './SubtitleOverlay.module.css';
 
-function subtitleTextStyle(style: SubtitleStyle): React.CSSProperties {
+function subtitleTextStyle(style: SpeakerStyle): React.CSSProperties {
   return {
     fontFamily: `"${style.fontFamily}", sans-serif`,
     fontSize: `${style.fontSize / 2}px`,  // Scale down to 50% for preview
@@ -45,9 +45,15 @@ const SubtitleOverlay: React.FC = () => {
   
   if (!currentCue) return null;
   
-  const activeStyle = subtitleSettings.styles.find(
-    s => s.id === subtitleSettings.activeStyleId
+  const activePreset = subtitleSettings.presets.find(
+    p => p.id === subtitleSettings.activePresetId
   );
+  if (!activePreset) return null;
+  
+  let activeStyle = activePreset.speakerStyles.find(s => s.speakerId === currentCue.speaker);
+  if (!activeStyle) {
+    activeStyle = activePreset.speakerStyles.find(s => s.speakerId === 'default');
+  }
   if (!activeStyle) return null;
   
   return (

@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, type MouseEvent } from 'react';
 import { useEditorStore } from '../store/editorStore';
+import type { TranscriptCue } from '../../../common/types';
 import { findCueIndexForCurrent } from '../../../common/segments';
 import { Play, Subtitles } from 'lucide-react';
 import ViewModeTab from './ViewModeTab';
@@ -45,19 +46,24 @@ export default function EditableTranscriptList({ onSeek }: Props) {
   const toggleCueSubtitle = useEditorStore((s) => s.toggleCueSubtitle);
 
   const subtitleSettings = useEditorStore((s) => s.subtitleSettings);
-  const activeStyle = useMemo(() => {
+  const activePreset = useMemo(() => {
     if (!subtitleSettings) return null;
-    return subtitleSettings.styles.find(s => s.id === subtitleSettings.activeStyleId) ?? null;
+    return subtitleSettings.presets.find(p => p.id === subtitleSettings.activePresetId) ?? null;
   }, [subtitleSettings]);
 
   // Scale outline/shadow proportionally to the preview's actual rendered
   // size. The CSS pin below is 13px (matching the middle column), so we
   // divide the source style's designed-for-export font size into 13.
-  // (Don't set fontSize here — the CSS class owns it; an inline override
-  // would defeat the `!important` pin.)
   const PREVIEW_FONT_SIZE_PX = 13;
-  const previewStyle = useMemo(() => {
+  const getPreviewStyleForCue = (cue: TranscriptCue): React.CSSProperties | undefined => {
+    if (!activePreset) return undefined;
+    
+    let activeStyle = activePreset.speakerStyles.find(s => s.speakerId === cue.speaker);
+    if (!activeStyle) {
+      activeStyle = activePreset.speakerStyles.find(s => s.speakerId === 'default');
+    }
     if (!activeStyle) return undefined;
+
     const ratio = PREVIEW_FONT_SIZE_PX / (activeStyle.fontSize || 80);
     const outlineWidth = activeStyle.outlineWidth * ratio;
     const shadowOffset = activeStyle.shadow.offsetPx * ratio;
@@ -74,7 +80,7 @@ export default function EditableTranscriptList({ onSeek }: Props) {
     }
 
     return style;
-  }, [activeStyle]);
+  };
 
   // Stable map from raw speaker label ("speaker_0") to a 1-indexed display
   // number. Only render the badge when at least 2 distinct speakers were
@@ -232,13 +238,13 @@ export default function EditableTranscriptList({ onSeek }: Props) {
               </div>
 
               <div className={styles.cueRight}>
-                {!activeStyle ? (
+                {!activePreset ? (
                   <span className={styles.fallbackPreview}>{cue.text}</span>
                 ) : (
                   <span
                     className={styles.subtitlePreview}
                     style={{
-                      ...previewStyle,
+                      ...getPreviewStyleForCue(cue),
                       opacity: (!cue.showSubtitle || cue.deleted) ? 0.3 : 1,
                       textDecoration: cue.deleted ? 'line-through' : 'none',
                     }}

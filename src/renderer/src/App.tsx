@@ -100,12 +100,12 @@ export default function App() {
     let alive = true;
     window.api
       .loadProject(filePath)
-      .then((cues) => {
-        if (!alive || !cues || cues.length === 0) return;
-        restoreFromProject(cues);
-        const deleted = cues.reduce((n, c) => n + (c.deleted ? 1 : 0), 0);
+      .then((project) => {
+        if (!alive || !project || !project.cues || project.cues.length === 0) return;
+        restoreFromProject(project);
+        const deleted = project.cues.reduce((n, c) => n + (c.deleted ? 1 : 0), 0);
         setRestoreInfo({
-          total: cues.length,
+          total: project.cues.length,
           deleted,
           nonce: Date.now(),
         });

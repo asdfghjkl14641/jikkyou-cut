@@ -16,6 +16,8 @@ export type TranscriptCue = {
   // Diarization label from the ASR (e.g. "speaker_0"). Undefined when the
   // engine produced no speaker info or only one speaker. Persisted.
   speaker?: string;
+  // Optional style override for this specific cue (Phase B-3 extension point)
+  styleOverride?: SpeakerStyle;
 };
 
 export type TranscriptionResult = {
@@ -94,6 +96,15 @@ export type ExportResult = {
   generatedAt: number;
 };
 
+export type ProjectFile = {
+  version: number;
+  videoFileName: string;
+  language: string;
+  generatedAt: number;
+  cues: TranscriptCue[];
+  activePresetId?: string;
+};
+
 // ---- Subtitle types --------------------------------------------------------
 
 export type SubtitlePosition = 'bottom' | 'top' | 'middle';
@@ -104,6 +115,27 @@ export type SubtitleShadow = {
   offsetPx: number; // 1..10
 };
 
+export type SpeakerStyle = {
+  speakerId: string; // "speaker_0", "speaker_1", ... or "default"
+  speakerName: string; // User-visible name (e.g., "みのる", "デフォルト")
+  fontFamily: string; // e.g. "Noto Sans JP"
+  fontSize: number; // px (default 48)
+  textColor: string; // HEX
+  outlineColor: string; // HEX
+  outlineWidth: number; // px (1..10)
+  shadow: SubtitleShadow;
+  position: SubtitlePosition;
+};
+
+export type SpeakerPreset = {
+  id: string; // nanoid
+  name: string; // User-visible preset name
+  speakerStyles: SpeakerStyle[];
+  createdAt: number;
+  updatedAt: number;
+};
+
+// Deprecated: kept for migration only. Will be removed in future.
 export type SubtitleStyle = {
   id: string; // nanoid
   name: string; // user-visible label
@@ -119,8 +151,11 @@ export type SubtitleStyle = {
 
 export type SubtitleSettings = {
   enabled: boolean; // master ON/OFF for the subtitle feature
-  activeStyleId: string; // currently selected style
-  styles: SubtitleStyle[]; // builtin presets + user-authored styles
+  presets: SpeakerPreset[];
+  activePresetId: string | null;
+  // Kept for backward compatibility during migration
+  activeStyleId?: string;
+  styles?: SubtitleStyle[];
 };
 
 // ---- Font management -------------------------------------------------------
@@ -183,8 +218,8 @@ export type IpcApi = {
   ) => () => void;
 
   // project file (`<basename>.jcut.json` next to the video)
-  loadProject: (videoFilePath: string) => Promise<TranscriptCue[] | null>;
-  saveProject: (videoFilePath: string, cues: TranscriptCue[]) => Promise<void>;
+  loadProject: (videoFilePath: string) => Promise<ProjectFile | null>;
+  saveProject: (videoFilePath: string, cues: TranscriptCue[], activePresetId?: string) => Promise<void>;
   clearProject: (videoFilePath: string) => Promise<void>;
 
   // export

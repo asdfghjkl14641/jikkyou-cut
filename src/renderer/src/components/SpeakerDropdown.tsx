@@ -18,21 +18,31 @@ function generateNewSpeakerId(existingSpeakers: string[]): string {
   return `speaker_${next}`;
 }
 
-function formatSpeakerName(speaker: string | undefined, speakersList: string[]): string {
-  if (!speaker) return '—';
-  // simple mapping: speaker_0 -> 話者1, speaker_1 -> 話者2 based on sorted index
-  const idx = speakersList.indexOf(speaker);
-  if (idx !== -1) return `話者${idx + 1}`;
-  return speaker;
-}
+import { defaultSpeakerName } from '../../../common/speakers';
 
 export default function SpeakerDropdown({ cueId, currentSpeaker, renderBadge }: Props) {
   const cues = useEditorStore((s) => s.cues);
   const updateCueSpeaker = useEditorStore((s) => s.updateCueSpeaker);
+  const subtitleSettings = useEditorStore((s) => s.subtitleSettings);
+
   const [isOpen, setIsOpen] = useState(false);
   const [dropdownUp, setDropdownUp] = useState(false);
   const containerRef = useRef<HTMLDivElement>(null);
   const dropdownRef = useRef<HTMLDivElement>(null);
+
+  const activePreset = useMemo(() => {
+    if (!subtitleSettings) return null;
+    return subtitleSettings.presets.find(p => p.id === subtitleSettings.activePresetId) ?? null;
+  }, [subtitleSettings]);
+
+  const getSpeakerDisplayName = (speakerId: string | undefined): string => {
+    if (!speakerId) return '— なし —';
+    if (activePreset) {
+      const style = activePreset.speakerStyles.find(s => s.speakerId === speakerId);
+      if (style && style.speakerName) return style.speakerName;
+    }
+    return defaultSpeakerName(speakerId);
+  };
 
   const availableSpeakers = useMemo(() => {
     const set = new Set<string>();
@@ -91,8 +101,11 @@ export default function SpeakerDropdown({ cueId, currentSpeaker, renderBadge }: 
 
   // Default badge renderer
   const defaultRenderBadge = () => {
-    const idx = currentSpeaker ? availableSpeakers.indexOf(currentSpeaker) : -1;
-    const badgeText = idx !== -1 ? `[${idx + 1}]` : currentSpeaker ? `[?]` : `[—]`;
+    let badgeText = '[—]';
+    if (currentSpeaker) {
+      const name = getSpeakerDisplayName(currentSpeaker);
+      badgeText = `[${name}]`;
+    }
     
     return (
       <span 
@@ -101,6 +114,7 @@ export default function SpeakerDropdown({ cueId, currentSpeaker, renderBadge }: 
           e.stopPropagation();
           setIsOpen(!isOpen);
         }}
+        title="話者を変更"
       >
         {badgeText}{isOpen ? '▲' : '▼'}
       </span>
@@ -125,7 +139,7 @@ export default function SpeakerDropdown({ cueId, currentSpeaker, renderBadge }: 
                 onClick={() => handleSelect(spk)}
               >
                 {isActive ? <Check size={16} /> : <span className={styles.iconPlaceholder} />}
-                {formatSpeakerName(spk, availableSpeakers)}
+                {getSpeakerDisplayName(spk)}
               </button>
             );
           })}

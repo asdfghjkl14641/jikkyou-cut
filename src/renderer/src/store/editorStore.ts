@@ -6,6 +6,7 @@ import type {
   TranscriptionProgress,
   TranscriptionResult,
   SubtitleSettings,
+  ProjectFile,
 } from '../../../common/types';
 
 type TranscriptionStatus =
@@ -82,7 +83,7 @@ type EditorState = {
   resetTranscription: () => void;
 
   // restore from a saved project file (no history)
-  restoreFromProject: (cues: TranscriptCue[]) => void;
+  restoreFromProject: (project: ProjectFile) => void;
 
   // selection
   selectByIndex: (index: number) => void;
@@ -110,10 +111,10 @@ type EditorState = {
   setPreviewMode: (on: boolean) => void;
   bumpSeekNonce: () => void;
 
-  // subtitles
   subtitleSettings: SubtitleSettings | null;
   loadSubtitleSettings: () => Promise<void>;
   updateSubtitleSettings: (settings: SubtitleSettings) => void;
+  setActivePresetId: (presetId: string) => void;
   toggleCueSubtitle: (cueId: string) => void;
   updateCueSpeaker: (cueId: string, newSpeakerId: string | undefined) => void;
 
@@ -326,8 +327,24 @@ export const useEditorStore = create<EditorState>((set, get) => ({
     }),
 
   restoreFromProject: (incoming) => {
-    const cues = cloneCues(incoming);
+    const cues = cloneCues(incoming.cues);
     const initialFocus = cues.length > 0 ? 0 : null;
+    
+    // Update active preset if the project specified one
+    const { subtitleSettings } = get();
+    if (incoming.activePresetId && subtitleSettings) {
+      // Check if the preset actually exists before setting it
+      const presetExists = subtitleSettings.presets.some(p => p.id === incoming.activePresetId);
+      if (presetExists) {
+        set({
+          subtitleSettings: {
+            ...subtitleSettings,
+            activePresetId: incoming.activePresetId,
+          }
+        });
+      }
+    }
+    
     set({
       cues,
       selectedIds: cues[0]
@@ -523,6 +540,19 @@ export const useEditorStore = create<EditorState>((set, get) => ({
 
   updateSubtitleSettings: (settings) => {
     set({ subtitleSettings: settings });
+    window.api.subtitleSettings.save(settings).catch((err) => {
+      console.warn('[subtitleSettings] save failed:', err);
+    });
+  },
+
+  setActivePresetId: (presetId) => {
+    const { subtitleSettings } = get();
+    if (!subtitleSettings) return;
+    const nextSettings = { ...subtitleSettings, activePresetId: presetId };
+    set({ subtitleSettings: nextSettings });
+    window.api.subtitleSettings.save(nextSettings).catch((err) => {
+      console.warn('[subtitleSettings] save failed:', err);
+    });
   },
 
   toggleCueSubtitle: (cueId) => {

@@ -137,35 +137,53 @@ async function prepareSubtitles(args: {
   }
   if (!settings.enabled) return null;
 
-  const style: SubtitleStyle | undefined = settings.styles.find(
-    (s) => s.id === settings.activeStyleId,
+  const preset = settings.presets.find(
+    (p) => p.id === settings.activePresetId,
   );
-  if (!style) {
+  if (!preset) {
     console.warn(
-      '[export] active subtitle style not found, skipping subtitles',
+      '[export] active subtitle preset not found, skipping subtitles',
     );
     return null;
   }
 
-  const optedIn = args.cues.some(
+  const optedInCues = args.cues.filter(
     (c) => !c.deleted && c.showSubtitle && c.text.trim().length > 0,
   );
-  if (!optedIn) return null;
+  if (optedInCues.length === 0) return null;
 
   const installed = await listInstalledFonts().catch(() => []);
-  const hasFont = installed.some((f) => f.family === style.fontFamily);
-  if (!hasFont) {
-    console.warn(
-      `[export] font "${style.fontFamily}" not installed; skipping subtitles. Open the font manager and install it to enable burn-in.`,
-    );
-    return null;
+  
+  // Collect required fonts
+  const requiredFonts = new Set<string>();
+  for (const cue of optedInCues) {
+    if (cue.styleOverride) {
+      requiredFonts.add(cue.styleOverride.fontFamily);
+    } else {
+      const sp = preset.speakerStyles.find(s => s.speakerId === cue.speaker);
+      if (sp) requiredFonts.add(sp.fontFamily);
+      else {
+        const def = preset.speakerStyles.find(s => s.speakerId === 'default');
+        if (def) requiredFonts.add(def.fontFamily);
+      }
+    }
+  }
+
+  for (const family of requiredFonts) {
+    const hasFont = installed.some((f) => f.family === family);
+    if (!hasFont) {
+      console.warn(
+        `[export] font "${family}" not installed; skipping subtitles. Open the font manager and install it to enable burn-in.`,
+      );
+      return null;
+    }
   }
 
   const keptRegions = deriveKeptRegions(args.cues, args.durationSec);
   const ass = buildAss({
     cues: args.cues,
     keptRegions,
-    style,
+    preset,
     videoWidth: args.videoWidth,
     videoHeight: args.videoHeight,
   });

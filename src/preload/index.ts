@@ -44,8 +44,8 @@ const api: IpcApi = {
 
   loadProject: (videoFilePath) =>
     ipcRenderer.invoke('project:load', videoFilePath),
-  saveProject: (videoFilePath, cues) =>
-    ipcRenderer.invoke('project:save', videoFilePath, cues),
+  saveProject: (videoFilePath, cues, activePresetId) =>
+    ipcRenderer.invoke('project:save', videoFilePath, cues, activePresetId),
   clearProject: (videoFilePath) =>
     ipcRenderer.invoke('project:clear', videoFilePath),
 
