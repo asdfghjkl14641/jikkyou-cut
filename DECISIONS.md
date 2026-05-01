@@ -32,6 +32,14 @@
 - 影響: `src/common/config.ts`, `src/common/types.ts`, `src/main/config.ts`, `src/main/gladia.ts`, `src/main/index.ts`, `src/renderer/src/store/editorStore.ts`, `src/renderer/src/App.tsx`, `src/renderer/src/hooks/useTranscription.ts`, `src/renderer/src/components/TranscribeButton.tsx/module.css`
 - コミット: `5b408d1`
 
+## 2026-05-01 18:46 - 話者カラム表示モード(コラボ動画のテキスト整理用ビュー)
+
+- 誰が: Antigravity
+- 何を: `viewMode` state、`ViewModeTab` + `SpeakerColumnView` コンポーネント、リニア/話者カラム切替、カスタム2Dキーボード操作(useEditKeyboard)の実装。
+- 理由: コラボ動画で話者IDが混在する場合のテキスト修正・コピペ作業を最適化するため。
+- 影響: `editorStore.ts`, `EditableTranscriptList.tsx`, `useEditKeyboard.ts`, `ViewModeTab.tsx`(新規), `SpeakerColumnView.tsx`(新規)
+- コミット: (未定)
+
 ## 2026-05-01 18:08 - コラボトグルのデザイン刷新(iOS風スイッチ + 「マルチ」リネーム)
 
 - 誰が: Antigravity

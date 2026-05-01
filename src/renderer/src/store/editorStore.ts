@@ -122,6 +122,10 @@ type EditorState = {
   // survives restart.
   collaborationMode: boolean;
   setCollaborationMode: (mode: boolean) => void;
+
+  // View mode for cue list
+  viewMode: 'linear' | 'speaker-column';
+  setViewMode: (mode: 'linear' | 'speaker-column') => void;
 };
 
 const basename = (absPath: string): string => {
@@ -186,6 +190,8 @@ export const useEditorStore = create<EditorState>((set, get) => ({
   subtitleSettings: null,
 
   collaborationMode: false,
+  
+  viewMode: 'linear',
 
   setFile: (absPath) =>
     set({
@@ -209,6 +215,7 @@ export const useEditorStore = create<EditorState>((set, get) => ({
       exportProgress: null,
       exportResult: null,
       exportError: null,
+      viewMode: 'linear',
     }),
 
   clearFile: () =>
@@ -233,6 +240,7 @@ export const useEditorStore = create<EditorState>((set, get) => ({
       exportProgress: null,
       exportResult: null,
       exportError: null,
+      viewMode: 'linear',
     }),
 
   setDuration: (sec) => set({ durationSec: sec }),
@@ -534,4 +542,6 @@ export const useEditorStore = create<EditorState>((set, get) => ({
         console.warn('[settings] failed to persist collaborationMode:', err);
       });
   },
+
+  setViewMode: (mode) => set({ viewMode: mode }),
 }));

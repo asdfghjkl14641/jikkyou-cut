@@ -2,6 +2,8 @@ import { useEffect, useMemo, useRef, type MouseEvent } from 'react';
 import { useEditorStore } from '../store/editorStore';
 import { findCueIndexForCurrent } from '../../../common/segments';
 import { Play, Subtitles } from 'lucide-react';
+import ViewModeTab from './ViewModeTab';
+import SpeakerColumnView from './SpeakerColumnView';
 import styles from './EditableTranscriptList.module.css';
 
 type Props = {
@@ -23,6 +25,7 @@ export default function EditableTranscriptList({ onSeek }: Props) {
   const selectedIds = useEditorStore((s) => s.selectedIds);
   const focusedIndex = useEditorStore((s) => s.focusedIndex);
   const seekNonce = useEditorStore((s) => s.seekNonce);
+  const viewMode = useEditorStore((s) => s.viewMode);
 
   // Derive currentCueIndex from currentSec via a memoising selector that
   // also falls back to the nearest preceding cue when `currentSec` lies in
@@ -142,6 +145,7 @@ export default function EditableTranscriptList({ onSeek }: Props) {
   if (status === 'success' && transcription && cues.length === 0) {
     return (
       <div className={styles.container}>
+        <ViewModeTab />
         <div className={styles.empty}>
           文字起こし結果が0件でした(音声が検出されませんでした)。
         </div>
@@ -152,6 +156,7 @@ export default function EditableTranscriptList({ onSeek }: Props) {
   if (cues.length === 0) {
     return (
       <div className={styles.container}>
+        <ViewModeTab />
         <div className={styles.empty}>
           動画を読み込んで「文字起こしを開始」を押してください。
         </div>
@@ -161,8 +166,13 @@ export default function EditableTranscriptList({ onSeek }: Props) {
 
   return (
     <div className={styles.container}>
-      <div className={styles.list}>
-        {cues.map((cue, index) => {
+      <ViewModeTab />
+      {viewMode === 'speaker-column' ? (
+        <SpeakerColumnView onSeek={onSeek} />
+      ) : (
+        <>
+          <div className={styles.list}>
+            {cues.map((cue, index) => {
           const isSelected = selectedIds.has(cue.id);
           const isFocused = focusedIndex === index;
           const isPlaying = currentCueIndex === index;
@@ -240,16 +250,18 @@ export default function EditableTranscriptList({ onSeek }: Props) {
             </div>
           );
         })}
-      </div>
+          </div>
 
-      <div className={styles.hintBar}>
-        <span><kbd>↑</kbd>/<kbd>↓</kbd> 選択</span>
-        <span><kbd>Shift</kbd>+<kbd>↑</kbd>/<kbd>↓</kbd> 範囲</span>
-        <span><kbd>Ctrl</kbd>+<kbd>A</kbd> 全選択</span>
-        <span><kbd>D</kbd> 削除/復活</span>
-        <span><kbd>Space</kbd> 再生</span>
-        <span><kbd>Ctrl</kbd>+<kbd>Z</kbd> Undo</span>
-      </div>
+          <div className={styles.hintBar}>
+            <span><kbd>↑</kbd>/<kbd>↓</kbd> 選択</span>
+            <span><kbd>Shift</kbd>+<kbd>↑</kbd>/<kbd>↓</kbd> 範囲</span>
+            <span><kbd>Ctrl</kbd>+<kbd>A</kbd> 全選択</span>
+            <span><kbd>D</kbd> 削除/復活</span>
+            <span><kbd>Space</kbd> 再生</span>
+            <span><kbd>Ctrl</kbd>+<kbd>Z</kbd> Undo</span>
+          </div>
+        </>
+      )}
     </div>
   );
 }
