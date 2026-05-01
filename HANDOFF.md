@@ -108,7 +108,12 @@ jikkyou-cut/
     │   ├── project.ts         # <basename>.jcut.json load/save/clear
     │   ├── secureStorage.ts   # safeStorage で APIキー暗号化保存
     │   ├── subtitleSettings.ts # subtitle-settings.json load/save
-    │   └── urlDownload.ts     # yt-dlp 呼び出し(URL DL)
+    │   ├── urlDownload.ts     # yt-dlp 呼び出し(URL DL)
+    │   └── commentAnalysis/   # コメント分析オーケストレータ + 実装
+    │       ├── index.ts       # analyze({chat→viewers→scoring})オーケストレータ
+    │       ├── chatReplay.ts  # yt-dlp で live_chat / rechat を取得 + パース
+    │       ├── viewerStats.ts # playboard.co スクレイピング(ヒューリスティック)
+    │       └── scoring.ts     # 5 秒バケット + 3 要素重み付き統合スコア
     ├── preload/
     │   └── index.ts           # contextBridge で window.api を expose
     └── renderer/
@@ -165,7 +170,8 @@ type EditorState = {
 ## 5. IPC 通信
 
 **メインプロセスが唯一の真実源**。preload で `window.api` として expose される。
-主要な名前空間: `fonts`, `subtitleSettings`, `urlDownload`, `loadProject`, `saveProject`, `startTranscription`, `startExport` 等。
+主要な名前空間: `fonts`, `subtitleSettings`, `urlDownload`, `commentAnalysis`, `loadProject`, `saveProject`, `startTranscription`, `startExport` 等。
+- `commentAnalysis.{start, cancel, onProgress}` — `videoFilePath` + `sourceUrl`(URL DL 由来)+ `durationSec` を渡すと、yt-dlp チャット取得 → playboard 視聴者数取得 → 5 秒バケット 3 要素統合スコア計算 を順次実行して `CommentAnalysis` を返す。`onProgress` は phase=chat/viewers/scoring の 3 段階で発火。失敗時は graceful degradation(チャット 0 件 / 視聴者数なしモード)。
 
 ---
 

@@ -2,7 +2,7 @@
 
 > このファイルは「寝る前の状態を凍結」するためのドキュメント。
 > 次のセッション開始時に **冒頭をそのままコピペ** して Claude Code に貼ると即再開できる。
-> 作成: 2026-05-02 00:50(初版) / 更新: 2026-05-02 06:50 / 07:15(URL DL 進捗修正)/ 09:00(プログレッシブ DL spike 完了)
+> 作成: 2026-05-02 00:50(初版) / 更新: 06:50 / 07:15(URL DL 進捗修正)/ 09:00(プログレッシブ DL spike)/ 11:30(コメント分析バックエンド完成)
 
 ---
 
@@ -54,6 +54,16 @@
 ### 5. ドキュメント整理(`076240f`)
 - `IDEAS.md`(17 項目の長期構想)+ `docs/COMMENT_ANALYSIS_DESIGN.md`(次フェーズ MVP 設計)新規
 - `HANDOFF.md` 全面書き直し、`TODO.md` セクション再編
+
+### 7. コメント分析: 実データ取得 + スコア計算(`<NEW_HASH>`)
+- モック → 実データに置換、3 要素統合スコア(コメント密度 + 視聴者増加 + キーワード)を実 yt-dlp + playboard.co スクレイピング + ハードコード辞書から計算
+- `src/main/commentAnalysis/`: chatReplay(yt-dlp `--write-subs --sub-langs live_chat`/`rechat`)+ viewerStats(playboard `__NEXT_DATA__` 等のヒューリスティックパース)+ scoring(5 秒バケット 3 要素重み付き)+ index(orchestrator)
+- IPC `commentAnalysis.{start, cancel, onProgress}` を新設
+- editorStore `sourceUrl` 追加、URL DL 完了時に capture(`setFile()` 後に `setSourceUrl(url)` の順序必須)
+- ClipSelectView: マウント時に分析開始、loading/ready/error/no-source の 4 状態で UI 切替、失敗時はモック fallback
+- キャッシュ: `userData/comment-analysis/<videoId>-{chat,viewers}.json`(TTL 無制限)
+- 視聴者データなしモード: 重み 0.7/0/0.3 に切替で 2 要素スコア
+- 注意: playboard はサンドボックス IP からブロックされて実機検証できず、ヒューリスティック検出に賭けてある。ユーザ環境(日本)でハイドレーション JSON が見つからないログが出たら playboard の現行構造に合わせて `viewerStats.ts` をピンポイント修正
 
 ### 6. プログレッシブ DL + 並行文字起こしの技術検証(spike)(`b73faa0`)
 - ユーザ要望「2-4 時間の長尺配信 DL を待たず YouTube ライクに再生 + シーク」を実現するための土台調査
@@ -114,11 +124,11 @@
 
 ---
 
-## 1. 現在のリポジトリ状態(更新時刻 2026-05-02 09:00)
+## 1. 現在のリポジトリ状態(更新時刻 2026-05-02 11:30)
 
 ```
-HEAD = b73faa0 docs: プログレッシブ DL + 並行文字起こしの技術検証(spike)
-origin/main = b73faa0(同期済み)
+HEAD = <NEW_HASH> feat(comment-analysis): 実データ取得 + スコア計算ロジック実装
+origin/main = <NEW_HASH>(同期済み)
 working tree clean
 ```
 
@@ -154,6 +164,7 @@ a0a809e style(dropzone): remove 'or' text and divider
 | 3 フェーズ構造(load / clip-select / edit)| `1678746` | **実機確認済み** |
 | ドキュメント整理(IDEAS.md + COMMENT_ANALYSIS_DESIGN.md)| `076240f` | 完了 |
 | プログレッシブ DL spike(検証のみ、本実装未着手)| `b73faa0` | spike レポート完成 — `docs/PROGRESSIVE_DL_SPIKE_REPORT.md` 参照 |
+| コメント分析バックエンド(yt-dlp チャット + playboard 視聴者数 + 3 要素スコア) | `<NEW_HASH>` | 実装完了、ClipSelectView 結線済み — playboard はサンドボックス IP block で実機検証未済、ユーザ環境で動作確認必要 |
 
 ## 3. 進行中タスク(本セッション末尾時点)
 

@@ -12,8 +12,10 @@ import * as exportModule from './export';
 import * as fonts from './fonts';
 import * as subtitleSettings from './subtitleSettings';
 import * as urlDownload from './urlDownload';
+import * as commentAnalysis from './commentAnalysis';
 import type { AppConfig } from '../common/config';
 import type {
+  CommentAnalysisStartArgs,
   ExportStartArgs,
   SubtitleSettings,
   TranscriptCue,
@@ -184,6 +186,17 @@ function registerIpcHandlers() {
     });
   });
   ipcMain.handle('urlDownload:cancel', () => urlDownload.cancelDownload());
+
+  // Comment analysis(yt-dlp チャットリプレイ + playboard 視聴者数 + スコア)
+  ipcMain.handle(
+    'commentAnalysis:start',
+    async (_e, args: CommentAnalysisStartArgs) => {
+      return commentAnalysis.analyzeComments(args, (p) => {
+        mainWindow?.webContents.send('commentAnalysis:progress', p);
+      });
+    },
+  );
+  ipcMain.handle('commentAnalysis:cancel', () => commentAnalysis.cancelAnalysis());
 }
 
 app.whenReady().then(() => {

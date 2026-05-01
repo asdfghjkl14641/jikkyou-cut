@@ -202,6 +202,70 @@ export type UrlDownloadProgress = {
   eta: string;
 };
 
+// ---- Comment analysis -----------------------------------------------------
+
+// Single chat message in unified mid-form. yt-dlp's per-platform raw shapes
+// (YouTube `replayChatItemAction.*` JSONL, Twitch `comments[]` JSON) are
+// converted into this so the scoring stage doesn't care which platform
+// the data came from.
+export type ChatMessage = {
+  timeSec: number;
+  text: string;
+  author: string;
+  platform: 'youtube' | 'twitch';
+};
+
+// Per-bucket viewer count. `count` is concurrent viewers at `timeSec`.
+// playboard.co is the current data source; samples may be sparse (a few
+// hundred over a 4 hour stream) so the scoring stage interpolates to the
+// nearest bucket.
+export type ViewerSample = { timeSec: number; count: number };
+
+export type ViewerStats = {
+  samples: ViewerSample[];
+  // 'unavailable' when playboard returned nothing usable — scoring will
+  // run in the 2-element (density + keyword) mode and the renderer can
+  // dim the viewer-growth row in the tooltip.
+  source: 'playboard' | 'unavailable';
+  fetchedAt: string;
+};
+
+export type CommentAnalysisProgress = {
+  phase: 'chat' | 'viewers' | 'scoring';
+  percent: number;
+};
+
+export type CommentAnalysisStartArgs = {
+  videoFilePath: string;
+  // Source URL that the video was downloaded from. Required: chat replay
+  // and viewer stats both need the original platform URL. For local-file
+  // sessions (no URL) the renderer should not call analysis at all.
+  sourceUrl: string;
+  durationSec: number;
+};
+
+// Reuses the `CommentAnalysis` / `ScoreSample` shape exported by
+// `CommentAnalysisGraph.tsx` so renderer components can pass through
+// without translation.
+export type ScoreSample = {
+  timeSec: number;
+  commentDensity: number;
+  viewerGrowth: number;
+  keywordHits: number;
+  total: number;
+};
+
+export type CommentAnalysis = {
+  videoDurationSec: number;
+  bucketSizeSec: number;
+  samples: ScoreSample[];
+  // Source-of-truth flags so the UI can show "視聴者データなし" badges
+  // when playboard didn't return anything.
+  hasViewerStats: boolean;
+  chatMessageCount: number;
+  generatedAt: string;
+};
+
 export type UrlDownloadArgs = {
   url: string;
   quality: string;
@@ -273,5 +337,11 @@ export type IpcApi = {
     start: (args: UrlDownloadArgs) => Promise<{ filePath: string; title: string }>;
     cancel: () => Promise<void>;
     onProgress: (cb: (p: UrlDownloadProgress) => void) => () => void;
+  };
+
+  commentAnalysis: {
+    start: (args: CommentAnalysisStartArgs) => Promise<CommentAnalysis>;
+    cancel: () => Promise<void>;
+    onProgress: (cb: (p: CommentAnalysisProgress) => void) => () => void;
   };
 };

@@ -14,11 +14,15 @@
   - [ ] 並行文字起こし本実装
 
 - **コメント分析画面(MVP)** — 詳細は `docs/COMMENT_ANALYSIS_DESIGN.md` 参照
-  - [ ] yt-dlp でのチャットリプレイ取得(Claude Code)
-  - [ ] スコア計算ロジック(キーワード辞書 + 密度集計)
+  - [x] yt-dlp でのチャットリプレイ取得(YouTube + Twitch)
+  - [x] playboard.co での視聴者数取得(ヒューリスティックパース)
+  - [x] スコア計算ロジック(キーワード辞書 + 密度集計 + 視聴者増加)
+  - [x] ClipSelectView 結線(loading/ready/error/no-source の 4 状態)
+  - [ ] 次: ClipSelectView UI 改修(Antigravity)
+  - [ ] 自動候補抽出ボタン
+  - [ ] 区間複数選択
   - [ ] edit フェーズで clipRange を使った動画範囲絞り込み(Timeline/VideoPlayer 連携)
   - [ ] ProjectFile.clipRange 永続化
-  - [ ] 自動候補抽出ボタン
 
 
 ---
@@ -87,6 +91,7 @@
 
 ### 2026-05-02
 
+- コメント分析: 実データ取得 + スコア計算ロジック実装 — yt-dlp チャットリプレイ(YT live_chat / Twitch rechat)+ playboard.co スクレイピング + ハードコード辞書 + 5 秒バケット 3 要素統合スコア。`src/main/commentAnalysis/*` を新設、IPC 統合済み、ClipSelectView がモック→実分析に切替(失敗時はモック fallback)。`editorStore.sourceUrl` 追加、URL DL 完了時に capture
 - プログレッシブ DL + 並行文字起こしの技術検証(spike) — 4 論点(yt-dlp シーク追従 / `<video>` buffered / Gladia 並行 / プロセス管理)を実機 + 公式ドキュメントで検証、`docs/PROGRESSIVE_DL_SPIKE_REPORT.md` にまとめた。本実装は未着手、設計選択肢をユーザ判断待ちにエスカレート
 - URL DL 進捗 0.0% 固着の真因を実機ログで特定 → `--progress` 追加 — yt-dlp は `--print` 指定時に暗黙 quiet モードに入り、`--progress-template` 単独ではテンプレートを使うだけで出力自体は抑制されたまま。`--progress`(quiet モードでも進捗を強制表示するフラグ)を明示追加で解決。生 stdout に `JCUT_PROGRESS` 行が流れることを実 DL で確認
 - URL DL バグ修正(進捗 0.0% 固着 + DL 後動画再生不可) — yt-dlp 引数に `-f bestvideo[ext=mp4][vcodec^=avc1]+bestaudio[ext=m4a]/best[ext=mp4]/best` + `--progress-template` を追加。Chromium 互換 mp4-avc1-aac 強制 + 進捗パースの安定化(※ 後続コミットで `--progress` 追加も必要だったことが判明)

@@ -1,25 +1,96 @@
-import React, { useCallback, useMemo, useState, useEffect } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { ChevronLeft, Check, RotateCcw } from 'lucide-react';
 import { useEditorStore } from '../store/editorStore';
 import VideoPlayer from './VideoPlayer';
 import CommentAnalysisGraph from './CommentAnalysisGraph';
+import type { CommentAnalysis as CommentAnalysisGraphType } from './CommentAnalysisGraph';
 import { generateMockAnalysis } from './CommentAnalysisGraph.mock';
+import type {
+  CommentAnalysis,
+  CommentAnalysisProgress,
+} from '../../../common/types';
 import styles from './ClipSelectView.module.css';
+
+type AnalysisState =
+  | { kind: 'idle' }
+  | { kind: 'loading'; phase: CommentAnalysisProgress['phase'] }
+  | { kind: 'ready'; analysis: CommentAnalysis }
+  | { kind: 'error'; message: string }
+  | { kind: 'no-source' }; // local-file session, no URL to scrape from
+
+const PHASE_LABEL: Record<CommentAnalysisProgress['phase'], string> = {
+  chat: 'チャット取得中…',
+  viewers: '視聴者数取得中…',
+  scoring: 'スコア計算中…',
+};
 
 export default function ClipSelectView() {
   const filePath = useEditorStore((s) => s.filePath);
+  const sourceUrl = useEditorStore((s) => s.sourceUrl);
   const durationSec = useEditorStore((s) => s.durationSec);
   const clearFile = useEditorStore((s) => s.clearFile);
   const setPhase = useEditorStore((s) => s.setPhase);
   const setClipRange = useEditorStore((s) => s.setClipRange);
-  const bumpSeekNonce = useEditorStore((s) => s.bumpSeekNonce);
 
   const [localRange, setLocalRange] = useState<{ startSec: number; endSec: number } | null>(null);
+  const [analysisState, setAnalysisState] = useState<AnalysisState>({ kind: 'idle' });
 
-  // Generate mock analysis based on actual duration
-  const analysis = useMemo(() => {
+  // Mock fallback while loading / on error / for local-file sessions —
+  // gives the user something to drag against rather than a blank panel.
+  const mockAnalysis = useMemo<CommentAnalysisGraphType>(() => {
     return generateMockAnalysis(durationSec ?? 0);
   }, [durationSec]);
+
+  // Kick off the real comment analysis once we have URL + duration.
+  // Re-runs if either changes (e.g. user goes back to load a different
+  // video). Skipped for local-file sessions (sourceUrl == null).
+  useEffect(() => {
+    if (!filePath || durationSec == null || durationSec <= 0) return;
+
+    if (!sourceUrl) {
+      setAnalysisState({ kind: 'no-source' });
+      return;
+    }
+
+    let cancelled = false;
+    const cleanupProgress = window.api.commentAnalysis.onProgress((p) => {
+      if (cancelled) return;
+      setAnalysisState({ kind: 'loading', phase: p.phase });
+    });
+
+    setAnalysisState({ kind: 'loading', phase: 'chat' });
+
+    window.api.commentAnalysis
+      .start({ videoFilePath: filePath, sourceUrl, durationSec })
+      .then((analysis) => {
+        if (cancelled) return;
+        setAnalysisState({ kind: 'ready', analysis });
+      })
+      .catch((err: unknown) => {
+        if (cancelled) return;
+        const msg = err instanceof Error ? err.message : String(err);
+        console.warn('[clip-select] comment analysis failed:', msg);
+        setAnalysisState({ kind: 'error', message: msg });
+      });
+
+    return () => {
+      cancelled = true;
+      cleanupProgress();
+      // Tell main to abort whatever's still running. Failures are
+      // harmless if it's already done.
+      void window.api.commentAnalysis.cancel().catch(() => {});
+    };
+  }, [filePath, sourceUrl, durationSec]);
+
+  const graphAnalysis = useMemo<CommentAnalysisGraphType>(() => {
+    if (analysisState.kind === 'ready') {
+      // The IPC `CommentAnalysis` is a superset of the renderer-side
+      // `CommentAnalysis`(adds hasViewerStats / chatMessageCount /
+      // generatedAt). The graph component only uses the core fields.
+      return analysisState.analysis;
+    }
+    return mockAnalysis;
+  }, [analysisState, mockAnalysis]);
 
   const handleBack = useCallback(() => {
     clearFile();
@@ -34,16 +105,6 @@ export default function ClipSelectView() {
 
   const handleClearRange = useCallback(() => {
     setLocalRange(null);
-  }, []);
-
-  const handleSeek = useCallback((sec: number) => {
-    // We need a way to tell VideoPlayer to seek. 
-    // VideoPlayer listens to currentTime if it changes, but usually we use a ref.
-    // In App.tsx we have handleSeek which uses videoRef.current?.seekTo(sec).
-    // Here we can use the same pattern if we had a ref, or just trigger a seekNonce bump
-    // and have VideoPlayer react? No, VideoPlayer doesn't react to seekNonce.
-    // Actually, App.tsx's handleSeek is passed to Timeline.
-    // I'll use a local ref for VideoPlayer here.
   }, []);
 
   const videoRef = React.useRef<any>(null); // VideoPlayerHandle
@@ -81,9 +142,9 @@ export default function ClipSelectView() {
               クリア
             </button>
           )}
-          <button 
-            type="button" 
-            className={styles.editButton} 
+          <button
+            type="button"
+            className={styles.editButton}
             onClick={handleEdit}
             disabled={!localRange}
           >
@@ -96,29 +157,47 @@ export default function ClipSelectView() {
       <main className={styles.content}>
         <div className={styles.videoWrapper}>
           <div className={styles.videoContainer}>
-            <VideoPlayer 
+            <VideoPlayer
               ref={videoRef}
               filePath={filePath}
-              // No SubtitleOverlay here as requested
             />
           </div>
         </div>
 
         <div className={styles.graphWrapper}>
           <div className={styles.graphContainer}>
-            <CommentAnalysisGraph 
-              analysis={analysis}
+            <CommentAnalysisGraph
+              analysis={graphAnalysis}
               onSeek={handleSeekInternal}
               selectionRange={localRange}
               onSelectionChange={setLocalRange}
             />
             <div className={styles.graphLabel}>
-              {localRange ? (
+              {analysisState.kind === 'loading' && (
+                <span className={styles.hintText}>{PHASE_LABEL[analysisState.phase]}(モックデータ表示中)</span>
+              )}
+              {analysisState.kind === 'error' && (
+                <span className={styles.hintText}>分析失敗: {analysisState.message}(モックデータ表示中)</span>
+              )}
+              {analysisState.kind === 'no-source' && (
+                <span className={styles.hintText}>
+                  ローカル動画のためコメント分析はスキップ(モックデータ表示中)
+                </span>
+              )}
+              {analysisState.kind === 'ready' && !localRange && (
+                <span className={styles.hintText}>
+                  分析完了: {analysisState.analysis.chatMessageCount} 件のコメント
+                  {analysisState.analysis.hasViewerStats ? ' + 視聴者数' : '(視聴者数なし)'}
+                  。グラフをドラッグして範囲を選択
+                </span>
+              )}
+              {(analysisState.kind === 'ready' || analysisState.kind === 'no-source' || analysisState.kind === 'error') && localRange && (
                 <span className={styles.rangeText}>
-                  選択範囲: {formatTime(localRange.startSec)} - {formatTime(localRange.endSec)} 
+                  選択範囲: {formatTime(localRange.startSec)} - {formatTime(localRange.endSec)}
                   ({(localRange.endSec - localRange.startSec).toFixed(1)}s)
                 </span>
-              ) : (
+              )}
+              {analysisState.kind === 'idle' && !localRange && (
                 <span className={styles.hintText}>グラフをドラッグして編集したい範囲を選択してください</span>
               )}
             </div>

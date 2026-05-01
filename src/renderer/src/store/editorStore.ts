@@ -33,6 +33,10 @@ type EditorState = {
   clipRange: ClipRange;
   filePath: string | null;
   fileName: string | null;
+  // Source URL the video was downloaded from (yt-dlp). Null for local
+  // files dropped into DropZone — comment analysis is disabled in that
+  // case because it has nothing to scrape.
+  sourceUrl: string | null;
   durationSec: number | null;
   // Captured from `<video>.videoWidth/Height` on `loadedmetadata`. Needed
   // by export so the burned-in subtitle script can use the actual video
@@ -83,6 +87,7 @@ type EditorState = {
 
   // file lifecycle
   setFile: (absPath: string) => void;
+  setSourceUrl: (url: string | null) => void;
   clearFile: () => void;
   setDuration: (sec: number) => void;
   setVideoDimensions: (w: number, h: number) => void;
@@ -185,6 +190,7 @@ export const useEditorStore = create<EditorState>((set, get) => ({
   clipRange: null,
   filePath: null,
   fileName: null,
+  sourceUrl: null,
   durationSec: null,
   videoWidth: null,
   videoHeight: null,
@@ -228,6 +234,11 @@ export const useEditorStore = create<EditorState>((set, get) => ({
       phase: 'clip-select',
       filePath: absPath,
       fileName: basename(absPath),
+      // Always reset sourceUrl on fresh file load. The URL DL flow
+      // re-promotes it via `setSourceUrl(url)` AFTER `setFile()`, so
+      // local-file drops correctly leave it null and prior session
+      // URLs don't leak into subsequent local-file sessions.
+      sourceUrl: null,
       durationSec: null,
       videoWidth: null,
       videoHeight: null,
@@ -250,11 +261,14 @@ export const useEditorStore = create<EditorState>((set, get) => ({
       clipRange: null,
     }),
 
+  setSourceUrl: (url) => set({ sourceUrl: url }),
+
   clearFile: () =>
     set({
       phase: 'load',
       filePath: null,
       fileName: null,
+      sourceUrl: null,
       durationSec: null,
       videoWidth: null,
       videoHeight: null,

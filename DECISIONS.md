@@ -15,6 +15,29 @@
 
 ---
 
+## 2026-05-02 11:30 - コメント分析: 実データ取得 + スコア計算ロジック実装
+
+- 誰が: Claude Code
+- 何を: モック→実データへの置換。3 要素統合スコア(コメント密度 + 視聴者増加 + キーワード)を実 yt-dlp チャットリプレイ + playboard.co スクレイピング + ハードコード辞書から計算してグラフに供給
+  - **`src/main/commentAnalysis/chatReplay.ts`(新規)**: yt-dlp で `--write-subs --sub-langs live_chat`(YT)/ `rechat`(Twitch)+ `--skip-download`。出力 JSONL/JSON をパースして統一中間表現 `ChatMessage` に。`userData/comment-analysis/<videoId>-chat.json` キャッシュ(infinite TTL — チャットは immutable)
+  - **`src/main/commentAnalysis/viewerStats.ts`(新規)**: playboard `/en/video/<videoId>` を fetch、`__NEXT_DATA__` / `__NUXT__` / 任意の `<script type="application/json">` の順でハイドレーション JSON を抽出。中身を再帰探索して「`{time, count}` 形状の配列で時系列が単調増加」のパターンを掴む(playboard の path が将来変わってもヒューリスティック検出で残骸吸収)。失敗時は `source: 'unavailable'` で graceful degradation
+  - **`src/common/commentAnalysis/keywords.ts`(新規)**: ハードコード辞書(草/wwww/やばい/神/8888/初見 等 30 語)、長語優先で正規表現プリコンパイル
+  - **`src/main/commentAnalysis/scoring.ts`(新規)**: 5 秒バケット集計、3 要素正規化(commentDensity / keywordHits は max スケーリング、viewerGrowth は前バケット差分の正の値のみ)、視聴者データ有無で重み切替(あり: 0.5/0.3/0.2、なし: 0.7/0/0.3)
+  - **`src/main/commentAnalysis/index.ts`(新規)**: orchestrator。chat→viewers→scoring を順次実行、各 phase で onProgress 発火
+  - IPC 統合: `commentAnalysis.{start, cancel, onProgress}` を `IpcApi` に追加、main/preload で wire
+  - `editorStore` に `sourceUrl: string | null` + `setSourceUrl` 追加。URL DL 完了時に `setFile()` 後に `setSourceUrl(url)` で promote(setFile が sourceUrl を null 化するので順序必須)
+  - `ClipSelectView` 結線: マウント時に `commentAnalysis.start({videoFilePath, sourceUrl, durationSec})` を呼んで分析、loading/ready/error/no-source の 4 状態を切替表示。失敗時はモックデータでフォールバック + ヒント文表示
+- 調査メモ: playboard.co は本サンドボックス IP からは 453(地域 block / Cloudflare)で実機検証できず、ハイドレーション形状はヒューリスティック検出に賭けた。ユーザ環境(日本)で動かないケースはログから path をピンポイント修正する想定
+- 開放されている設計判断:
+  - キーワード辞書のユーザ編集 UI 化
+  - スコア重みの UI 調整スライダー
+  - 自動候補抽出ボタン(上位 N 区間)
+  - 区間複数選択
+  - プログレッシブ DL との結合(spike report 参照)
+  - ProjectFile への commentAnalysis 永続化
+- 影響: `src/common/types.ts`(ChatMessage / ViewerSample / ViewerStats / CommentAnalysis / IpcApi 拡張)、`src/common/commentAnalysis/keywords.ts`(新規)、`src/main/commentAnalysis/*`(4 ファイル新規)、`src/main/index.ts`(IPC 2 件追加)、`src/preload/index.ts`(commentAnalysis namespace expose)、`src/renderer/src/store/editorStore.ts`(sourceUrl + setSourceUrl)、`src/renderer/src/App.tsx`(URL DL 完了後 sourceUrl promote)、`src/renderer/src/components/ClipSelectView.tsx`(モック→実分析、4 状態 UI)
+- コミット: (未定)
+
 ## 2026-05-02 09:00 - プログレッシブ DL + 並行文字起こしの技術検証(spike)
 
 - 誰が: Claude Code

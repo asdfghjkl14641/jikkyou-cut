@@ -197,6 +197,10 @@ export default function App() {
         const result = await window.api.urlDownload.start(args);
         setDownloadProgressOpen(false);
         setFile(result.filePath);
+        // Stash the original URL so ClipSelectView can run comment
+        // analysis on it. setFile() clears sourceUrl on fresh load —
+        // the call order matters here.
+        useEditorStore.getState().setSourceUrl(url);
       } catch (err) {
         setDownloadProgressOpen(false);
         const msg = err instanceof Error ? err.message : String(err);

@@ -1,5 +1,6 @@
 import { contextBridge, ipcRenderer, webUtils } from 'electron';
 import type {
+  CommentAnalysisProgress,
   ExportProgress,
   FontDownloadProgress,
   IpcApi,
@@ -98,6 +99,21 @@ const api: IpcApi = {
       ipcRenderer.on('urlDownload:progress', listener);
       return () => {
         ipcRenderer.removeListener('urlDownload:progress', listener);
+      };
+    },
+  },
+
+  commentAnalysis: {
+    start: (args) => ipcRenderer.invoke('commentAnalysis:start', args),
+    cancel: () => ipcRenderer.invoke('commentAnalysis:cancel'),
+    onProgress: (cb) => {
+      const listener = (
+        _e: Electron.IpcRendererEvent,
+        p: CommentAnalysisProgress,
+      ) => cb(p);
+      ipcRenderer.on('commentAnalysis:progress', listener);
+      return () => {
+        ipcRenderer.removeListener('commentAnalysis:progress', listener);
       };
     },
   },
