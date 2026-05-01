@@ -13,6 +13,13 @@ const projectPathFor = (videoFilePath: string): string => {
 
 // Defensive read — bad/old schemas yield null rather than throwing, so the
 // caller falls back to "no saved project" rather than blocking the app.
+//
+// Migration:
+//  - `showSubtitle` was added in Phase A of the subtitle feature. Pre-Phase-A
+//    jcut.json files lack the field; we default it to `true` so existing
+//    projects opt in to subtitle burn-in by default.
+//  - `speaker` may be absent in pre-Gladia jcut.json files; pass through
+//    when present, otherwise leave undefined.
 function normaliseCue(raw: unknown): TranscriptCue | null {
   if (raw == null || typeof raw !== 'object') return null;
   const o = raw as Record<string, unknown>;
@@ -20,6 +27,7 @@ function normaliseCue(raw: unknown): TranscriptCue | null {
   const endSec = typeof o['endSec'] === 'number' ? (o['endSec'] as number) : null;
   const text = typeof o['text'] === 'string' ? (o['text'] as string) : null;
   if (startSec == null || endSec == null || text == null) return null;
+  const speaker = typeof o['speaker'] === 'string' ? (o['speaker'] as string) : undefined;
   return {
     id: typeof o['id'] === 'string' && (o['id'] as string).length > 0
       ? (o['id'] as string)
@@ -29,6 +37,9 @@ function normaliseCue(raw: unknown): TranscriptCue | null {
     endSec,
     text,
     deleted: typeof o['deleted'] === 'boolean' ? (o['deleted'] as boolean) : false,
+    showSubtitle:
+      typeof o['showSubtitle'] === 'boolean' ? (o['showSubtitle'] as boolean) : true,
+    ...(speaker != null && { speaker }),
   };
 }
 

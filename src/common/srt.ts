@@ -41,6 +41,7 @@ export function parseSrt(content: string): TranscriptCue[] {
       endSec: toSec(m[5]!, m[6]!, m[7]!, m[8]!),
       text,
       deleted: false,
+      showSubtitle: true,
     });
   }
   return cues;

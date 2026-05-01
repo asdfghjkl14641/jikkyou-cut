@@ -274,6 +274,7 @@ function utterancesToCues(utterances: GladiaUtterance[]): TranscriptCue[] {
       endSec: typeof u.end === 'number' ? u.end : 0,
       text,
       deleted: false,
+      showSubtitle: true,
       ...(speaker != null && { speaker }),
     });
   });

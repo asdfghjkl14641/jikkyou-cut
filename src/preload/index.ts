@@ -1,6 +1,7 @@
 import { contextBridge, ipcRenderer, webUtils } from 'electron';
 import type {
   ExportProgress,
+  FontDownloadProgress,
   IpcApi,
   TranscriptionProgress,
 } from '../common/types';
@@ -59,6 +60,29 @@ const api: IpcApi = {
     };
   },
   revealInFolder: (p) => ipcRenderer.invoke('shell:revealInFolder', p),
+
+  fonts: {
+    listAvailable: () => ipcRenderer.invoke('fonts:listAvailable'),
+    listInstalled: () => ipcRenderer.invoke('fonts:listInstalled'),
+    download: (families) => ipcRenderer.invoke('fonts:download', families),
+    remove: (family) => ipcRenderer.invoke('fonts:remove', family),
+  },
+
+  subtitleSettings: {
+    load: () => ipcRenderer.invoke('subtitleSettings:load'),
+    save: (settings) => ipcRenderer.invoke('subtitleSettings:save', settings),
+  },
+
+  onFontDownloadProgress: (cb) => {
+    const listener = (
+      _e: Electron.IpcRendererEvent,
+      p: FontDownloadProgress,
+    ) => cb(p);
+    ipcRenderer.on('fonts:downloadProgress', listener);
+    return () => {
+      ipcRenderer.removeListener('fonts:downloadProgress', listener);
+    };
+  },
 };
 
 contextBridge.exposeInMainWorld('api', api);

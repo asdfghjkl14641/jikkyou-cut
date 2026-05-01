@@ -9,9 +9,12 @@ import * as secureStorage from './secureStorage';
 import * as gladia from './gladia';
 import * as project from './project';
 import * as exportModule from './export';
+import * as fonts from './fonts';
+import * as subtitleSettings from './subtitleSettings';
 import type { AppConfig } from '../common/config';
 import type {
   ExportStartArgs,
+  SubtitleSettings,
   TranscriptCue,
   TranscriptionStartArgs,
 } from '../common/types';
@@ -117,6 +120,32 @@ function registerIpcHandlers() {
   ipcMain.handle('shell:revealInFolder', (_e, p: string) => {
     shell.showItemInFolder(p);
   });
+
+  // fonts (subtitle font management — Phase A)
+  ipcMain.handle('fonts:listAvailable', () => fonts.listAvailableFonts());
+  ipcMain.handle('fonts:listInstalled', () => fonts.listInstalledFonts());
+  ipcMain.handle('fonts:download', (_e, families: string[]) =>
+    fonts.downloadFonts(families, (family, status, error) => {
+      mainWindow?.webContents.send('fonts:downloadProgress', {
+        family,
+        status,
+        ...(error != null && { error }),
+      });
+    }),
+  );
+  ipcMain.handle('fonts:remove', (_e, family: string) =>
+    fonts.removeFont(family),
+  );
+
+  // subtitle settings
+  ipcMain.handle('subtitleSettings:load', () =>
+    subtitleSettings.loadSubtitleSettings(),
+  );
+  ipcMain.handle(
+    'subtitleSettings:save',
+    (_e, settings: SubtitleSettings) =>
+      subtitleSettings.saveSubtitleSettings(settings),
+  );
 }
 
 app.whenReady().then(() => {

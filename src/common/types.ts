@@ -9,6 +9,10 @@ export type TranscriptCue = {
   // Edit state — `deleted: true` means the cue (and its underlying video
   // region) is marked for removal. Persisted with the project file.
   deleted: boolean;
+  // Whether this cue's text should be burned into the output video as a
+  // subtitle. Defaults to `true` for new cues and for projects loaded from
+  // pre-subtitle jcut.json files (back-compat). Persisted.
+  showSubtitle: boolean;
   // Diarization label from the ASR (e.g. "speaker_0"). Undefined when the
   // engine produced no speaker info or only one speaker. Persisted.
   speaker?: string;
@@ -68,6 +72,66 @@ export type ExportResult = {
   generatedAt: number;
 };
 
+// ---- Subtitle types --------------------------------------------------------
+
+export type SubtitlePosition = 'bottom' | 'top' | 'middle';
+
+export type SubtitleShadow = {
+  enabled: boolean;
+  color: string; // HEX (e.g. "#000000")
+  offsetPx: number; // 1..10
+};
+
+export type SubtitleStyle = {
+  id: string; // nanoid
+  name: string; // user-visible label
+  fontFamily: string; // e.g. "Noto Sans JP" — must match an installed font family
+  fontSize: number; // px (default 48)
+  textColor: string; // HEX
+  outlineColor: string; // HEX
+  outlineWidth: number; // px (1..10)
+  shadow: SubtitleShadow;
+  position: SubtitlePosition;
+  isBuiltin: boolean; // true → user cannot delete or fully overwrite
+};
+
+export type SubtitleSettings = {
+  enabled: boolean; // master ON/OFF for the subtitle feature
+  activeStyleId: string; // currently selected style
+  styles: SubtitleStyle[]; // builtin presets + user-authored styles
+};
+
+// ---- Font management -------------------------------------------------------
+
+export type FontSource = 'builtin' | 'google-fonts' | 'user';
+
+export type InstalledFont = {
+  family: string; // CSS family name
+  filePath: string; // absolute path to the .ttf/.otf
+  fileName: string; // bare filename
+  source: FontSource;
+};
+
+export type AvailableFont = {
+  family: string;
+  category: string; // e.g. "japanese", "japanese-display"
+  url: string; // canonical Google Fonts specimen URL (for documentation)
+  installed: boolean;
+};
+
+export type FontDownloadStatus = 'starting' | 'done' | 'failed';
+
+export type FontDownloadProgress = {
+  family: string;
+  status: FontDownloadStatus;
+  error?: string;
+};
+
+export type DownloadResult = {
+  succeeded: string[]; // family names that wrote a file
+  failed: { family: string; error: string }[];
+};
+
 export type IpcApi = {
   // file dialogs
   openFileDialog: () => Promise<string | null>;
@@ -106,4 +170,23 @@ export type IpcApi = {
   cancelExport: () => Promise<void>;
   onExportProgress: (cb: (p: ExportProgress) => void) => () => void;
   revealInFolder: (path: string) => Promise<void>;
+
+  // fonts (Phase A: subtitle font management)
+  fonts: {
+    listAvailable: () => Promise<AvailableFont[]>;
+    listInstalled: () => Promise<InstalledFont[]>;
+    download: (families: string[]) => Promise<DownloadResult>;
+    remove: (family: string) => Promise<void>;
+  };
+
+  // subtitle settings (style presets + master switch)
+  subtitleSettings: {
+    load: () => Promise<SubtitleSettings>;
+    save: (settings: SubtitleSettings) => Promise<void>;
+  };
+
+  // Per-family progress while a `fonts.download` is in flight.
+  onFontDownloadProgress: (
+    cb: (p: FontDownloadProgress) => void,
+  ) => () => void;
 };

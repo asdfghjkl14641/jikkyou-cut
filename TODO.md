@@ -6,7 +6,11 @@
 
 ## 🚧 進行中
 
-(現在進行中のタスクなし)
+### 字幕機能 Phase A(3 分担、基盤側完了)
+
+- ✅ **本タスク(Claude Code)**: 型定義 + フォント管理 + 設定永続化 (本コミット)
+- ⏭ **次(Antigravity)**: 字幕設定ダイアログ UI(プリセット選択 / カスタムスタイル作成 / 行ごとの字幕 ON/OFF / フォント DL 画面)
+- ⏭ **次(Claude Code 後日)**: FFmpeg 字幕焼き込み (`drawtext` フィルタ or libass)、書き出しフローへの統合、出力プレビュー
 
 ---
 
@@ -41,6 +45,7 @@
 
 ## ✅ 完了済み(直近)
 
+- **2026-05-01** 字幕機能 Phase A 基盤 — `SubtitleStyle` / `SubtitleSettings` / `InstalledFont` / `AvailableFont` 等の型、`src/main/fonts.ts`(Google Fonts 厳選 12 個カタログ + DL + 一覧 + 削除)、`src/main/subtitleSettings.ts`(`userData/subtitle-settings.json` の load/save + 組み込みプリセット 5 種)、IPC ハンドラ + preload exposure を実装。`TranscriptCue.showSubtitle: boolean` 追加 + 旧 jcut.json 後方互換マイグレーション
 - **2026-04-30** 再生中ハイライト(▶+赤バー)もギャップ対応に統一 — `findCueIndexForScroll` を `findCueIndexForCurrent` にリネームし、ハイライト判定セレクタからも同じ関数を呼ぶように変更。スクロールとハイライトが同一の「現在キュー」観念で動作 → ギャップ中・冒頭・末尾でも常にどこかに ▶ が出る
 - **2026-04-30** シーク時のキュー一覧自動スクロール(現状不安定 → 解決) — `findCueIndexForCurrent` で **キュー間ギャップ位置** にシークしても直前のキューにスクロール、冒頭・末尾の無音位置でも先頭/末尾キューへフォールバック。再生中追従は撤廃して seek 起点の片方向プッシュ(`seekNonce`)に再設計
 - **2026-04-29** 文字起こしエンジンを Gemini → Gladia に全面置換 — `@google/genai` 削除、`gladia.ts` 新設、話者分離 + custom_vocabulary 対応、`TranscriptCue.speaker` 追加
