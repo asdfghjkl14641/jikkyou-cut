@@ -32,6 +32,14 @@
 - 影響: `src/common/config.ts`, `src/common/types.ts`, `src/main/config.ts`, `src/main/gladia.ts`, `src/main/index.ts`, `src/renderer/src/store/editorStore.ts`, `src/renderer/src/App.tsx`, `src/renderer/src/hooks/useTranscription.ts`, `src/renderer/src/components/TranscribeButton.tsx/module.css`
 - コミット: `5b408d1`
 
+## 2026-05-01 18:08 - コラボトグルのデザイン刷新(iOS風スイッチ + 「マルチ」リネーム)
+
+- 誰が: Antigravity
+- 何を: `TranscribeButton` コンポーネント内のチェックボックスを iOS 風トグルスイッチへと変更し、ラベル「コラボ」を「マルチ」に変更。
+- 理由: 既存のダークテーマ・洗練された UI デザインと統一させるため。
+- 影響: `TranscribeButton.tsx` + `TranscribeButton.module.css` のみ
+- コミット: (未定)
+
 ## 2026-05-01 19:30 - 動画プレビュー上の字幕オーバーレイ表示を追加
 
 - 誰が: Antigravity

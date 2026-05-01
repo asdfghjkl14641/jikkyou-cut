@@ -49,6 +49,7 @@
 
 ## ✅ 完了済み(直近)
 
+- **2026-05-01** コラボトグルのデザイン刷新 — 「コラボ」チェックボックスを iOS風のトグルスイッチに変更し、ラベルを「マルチ」にリネーム。UIデザインの一貫性を向上。
 - **2026-05-01** 話者分離有効化トグル(コラボモード)実装 — **Phase B-1**。`AppConfig.collaborationMode` を追加し、文字起こしボタンの左隣に「コラボ」チェックボックスを配置。ON で Gladia diarization=true、OFF で diarization=false に切り替え。デフォルトは false(ソロ)。永続化込み、文字起こし実行中は disabled。ソロモードでは話者バッジ・SRT の `[話者N]` プレフィックスが自動的に出ない
 - **2026-05-01** 動画プレビュー上の字幕オーバーレイ — `SubtitleOverlay.tsx` を新設し、`VideoPlayer.tsx` 上に配置。プレビュー再生中もリアルタイムに字幕の見た目を確認できるようになった。ローカルフォントの `FontFace` 登録処理も `App.tsx` と `FontManagerDialog.tsx` に追加。
 

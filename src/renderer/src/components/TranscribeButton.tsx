@@ -47,20 +47,23 @@ export default function TranscribeButton({ apiKeyConfigured }: Props) {
   return (
     <div className={styles.container}>
       <label
-        className={styles.collaborationToggle}
+        className={styles.toggleWrapper}
         title={
           collaborationMode
-            ? '複数人での実況・対談動画向け(話者別に識別)'
-            : '1人での実況向け(処理が軽量)'
+            ? '複数人での実況・対談動画(話者を識別)'
+            : '1人での実況(処理が軽量)'
         }
       >
-        <input
-          type="checkbox"
-          checked={collaborationMode}
-          onChange={(e) => setCollaborationMode(e.target.checked)}
-          disabled={isRunning}
-        />
-        <span className={styles.collaborationLabel}>コラボ</span>
+        <span className={styles.toggleLabel}>マルチ</span>
+        <span className={styles.toggleSwitch}>
+          <input
+            type="checkbox"
+            checked={collaborationMode}
+            onChange={(e) => setCollaborationMode(e.target.checked)}
+            disabled={isRunning}
+          />
+          <span className={styles.slider}></span>
+        </span>
       </label>
 
       {!isRunning && (
