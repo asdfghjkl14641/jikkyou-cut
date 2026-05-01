@@ -15,6 +15,14 @@
 
 ---
 
+## 2026-05-01 19:05 - 字幕プレビュー列のサイズを 15px に再調整(原因究明込み)
+
+- 誰が: Claude Code
+- 何を: `EditableTranscriptList.module.css` の `.subtitlePreview` を `font-size: 15px !important` + `line-height: 1.4` に変更。`EditableTranscriptList.tsx` の `previewStyle` 内の ratio 計算分母を 20 → 15 に更新し、outline/shadow も 15px 基準でスケール
+- 理由(原因究明): 前回の「20px 固定」は **正しく適用されていた** が、中央列(`.cue` → `.text`)が継承する `--font-size-md` が **13px** だったため、20px の右列は ~1.54× 大きく見えていた。ユーザの「効いてない」感覚はサイズの絶対値ではなく **比率** の問題だった。inline style 側に `fontSize` は元々入っていない(`previewStyle` は fontFamily/color/paintOrder/WebkitTextStroke/textShadow のみ)ので JSX 撤去は不要。CSS 単体で 15px に下げる + `!important` で将来のうっかり inline 上書きをブロック
+- 影響: `EditableTranscriptList.module.css`(.subtitlePreview のフォントサイズと line-height + コメントで原因記録)、`EditableTranscriptList.tsx`(ratio 計算の分母を 15 に)
+- コミット: (未定)
+
 ## 2026-05-01 17:15 - 緊急修正: キュー一覧のプレビュー列が巨大化する不具合の修正
 
 - 誰が: Antigravity

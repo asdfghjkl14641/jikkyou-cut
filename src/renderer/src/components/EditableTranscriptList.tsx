@@ -45,12 +45,15 @@ export default function EditableTranscriptList({ onSeek }: Props) {
     return subtitleSettings.styles.find(s => s.id === subtitleSettings.activeStyleId) ?? null;
   }, [subtitleSettings]);
 
+  // Scale outline/shadow proportionally to the preview's actual rendered
+  // size. The CSS pin below is 15px, so we divide the source style's
+  // designed-for-export font size into 15. (Don't set fontSize here — the
+  // CSS class owns it; an inline override would defeat the `!important`
+  // pin.)
+  const PREVIEW_FONT_SIZE_PX = 15;
   const previewStyle = useMemo(() => {
     if (!activeStyle) return undefined;
-    
-    // Scale for a fixed 20px size.
-    // If the original size is e.g. 80px, ratio is 0.25 (1/4)
-    const ratio = 20 / (activeStyle.fontSize || 80);
+    const ratio = PREVIEW_FONT_SIZE_PX / (activeStyle.fontSize || 80);
     const outlineWidth = activeStyle.outlineWidth * ratio;
     const shadowOffset = activeStyle.shadow.offsetPx * ratio;
 

@@ -197,8 +197,14 @@
 .subtitlePreview {
   white-space: pre-wrap;
   word-break: break-word;
-  line-height: 1.5;
-  font-size: 20px;
+  line-height: 1.4;
+  /* `!important` is intentional. The 20px earlier attempt didn't "fail" — it
+     applied — but `.cue` inherits `--font-size-md` (= 13px) for the middle
+     column, so 20px on the right was visually ~1.5× bigger. Pin to 15px so
+     the right column reads slightly smaller than the middle 13px and the
+     visual density of the two columns lines up. The `!important` guards
+     against any stray inline `fontSize` from preview-style overrides. */
+  font-size: 15px !important;
 }
 
 .fallbackPreview {
