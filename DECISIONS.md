@@ -15,6 +15,14 @@
 
 ---
 
+## 2026-05-01 21:00 - 字幕機能 Phase 2 後の細部修正(バッジ簡略化、字幕スタイル適用、ヘッダ編集可能化)
+
+- 誰が: Antigravity
+- 何を: リニア話者バッジを `[1]` 形式に簡略化、SpeakerColumnView キューテキストに字幕スタイル適用、カラムヘッダのインライン名前編集
+- 理由: 編集効率向上、字幕の視覚確認向上、コラボ動画でのキャラ付け簡素化
+- 影響: EditableTranscriptList, SpeakerColumnView, SpeakerDropdown
+- コミット: (未定)
+
 ## 2026-05-01 20:30 - 字幕機能 Phase 2: キュー単位の字幕スタイル上書き
 
 - 誰が: Antigravity

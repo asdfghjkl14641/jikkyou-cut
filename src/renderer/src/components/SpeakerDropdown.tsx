@@ -99,12 +99,21 @@ export default function SpeakerDropdown({ cueId, currentSpeaker, renderBadge }: 
     setIsOpen(false);
   };
 
+  const getSpeakerShortName = (speakerId: string | undefined): string => {
+    if (!speakerId) return '—';
+    const m = speakerId.match(/\d+$/);
+    if (m) {
+      return String(parseInt(m[0], 10) + 1); // speaker_0 -> 1
+    }
+    return speakerId; // fallback
+  };
+
   // Default badge renderer
   const defaultRenderBadge = () => {
     let badgeText = '[—]';
     if (currentSpeaker) {
-      const name = getSpeakerDisplayName(currentSpeaker);
-      badgeText = `[${name}]`;
+      const shortName = getSpeakerShortName(currentSpeaker);
+      badgeText = `[${shortName}]`;
     }
     
     return (

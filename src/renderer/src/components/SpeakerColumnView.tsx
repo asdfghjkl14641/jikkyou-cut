@@ -1,6 +1,8 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { useEditorStore } from '../store/editorStore';
 import { findCueIndexForCurrent } from '../../../common/segments';
+import { resolveSubtitleStyle } from '../../../common/subtitleResolution';
+import { defaultSpeakerName } from '../../../common/speakers';
 import { Play, User, Wand2 } from 'lucide-react';
 import SpeakerDropdown from './SpeakerDropdown';
 import styles from './SpeakerColumnView.module.css';
@@ -22,8 +24,14 @@ export default function SpeakerColumnView({ onSeek }: Props) {
   const currentSec = useEditorStore((s) => s.currentSec);
   const focusedIndex = useEditorStore((s) => s.focusedIndex);
   const seekNonce = useEditorStore((s) => s.seekNonce);
+  const subtitleSettings = useEditorStore((s) => s.subtitleSettings);
   
   const selectByIndex = useEditorStore((s) => s.selectByIndex);
+  
+  const activePreset = useMemo(() => {
+    if (!subtitleSettings) return null;
+    return subtitleSettings.presets.find(p => p.id === subtitleSettings.activePresetId) ?? null;
+  }, [subtitleSettings]);
 
   const currentCueIndex = useEditorStore((s) =>
     findCueIndexForCurrent(s.currentSec, s.cues),
@@ -140,12 +148,12 @@ export default function SpeakerColumnView({ onSeek }: Props) {
         style={{ '--column-count': speakers.length } as React.CSSProperties}
       >
         {speakers.map((speaker, colIdx) => (
-          <div key={speaker} className={styles.columnHeader}>
-            <User size={16} />
-            <span className={styles.badge}>[{colIdx + 1}]</span>
-            <span className={styles.speakerName}>{speaker}</span>
-            <span className={styles.count}>({cuesBySpeaker.get(speaker)?.length || 0})</span>
-          </div>
+          <ColumnHeader
+            key={speaker}
+            speakerId={speaker}
+            speakerIndex={colIdx}
+            count={cuesBySpeaker.get(speaker)?.length || 0}
+          />
         ))}
       </div>
 
@@ -209,13 +217,34 @@ export default function SpeakerColumnView({ onSeek }: Props) {
                     </span>
                   )}
                 </div>
-                <textarea
-                  className={styles.textInput}
-                  value={cue.text}
-                  onChange={(e) => handleTextChange(cue.id, e.target.value)}
-                  onFocus={() => handleFocus(globalIndex, cue.startSec)}
-                  rows={Math.max(1, cue.text.split('\n').length)}
-                />
+                {(() => {
+                  const subtitleStyle = subtitleSettings && subtitleSettings.enabled && activePreset ? resolveSubtitleStyle(cue, activePreset) : null;
+                  let textAreaStyle: React.CSSProperties = {};
+                  
+                  if (subtitleStyle && !isFocused) {
+                    textAreaStyle = {
+                      fontFamily: `"${subtitleStyle.fontFamily}", sans-serif`,
+                      color: subtitleStyle.textColor,
+                      WebkitTextStroke: `${subtitleStyle.outlineWidth}px ${subtitleStyle.outlineColor}`,
+                      paintOrder: 'stroke fill',
+                    };
+                    if (subtitleStyle.shadow.enabled) {
+                      const s = subtitleStyle.shadow;
+                      textAreaStyle.filter = `drop-shadow(0px ${s.offsetPx}px 0px ${s.color})`;
+                    }
+                  }
+
+                  return (
+                    <textarea
+                      className={styles.textInput}
+                      value={cue.text}
+                      onChange={(e) => handleTextChange(cue.id, e.target.value)}
+                      onFocus={() => handleFocus(globalIndex, cue.startSec)}
+                      rows={Math.max(1, cue.text.split('\n').length)}
+                      style={textAreaStyle}
+                    />
+                  );
+                })()}
               </div>
             </div>
           );
@@ -326,6 +355,86 @@ function CueContextMenu({ x, y, cueId, onClose }: { x: number, y: number, cueId:
           </div>
         )}
       </div>
+    </div>
+  );
+}
+
+function ColumnHeader({ speakerId, speakerIndex, count }: { speakerId: string, speakerIndex: number, count: number }) {
+  const subtitleSettings = useEditorStore((s) => s.subtitleSettings);
+  const updateSubtitleSettings = useEditorStore((s) => s.updateSubtitleSettings);
+  
+  const [isEditing, setIsEditing] = useState(false);
+  
+  const activePreset = subtitleSettings?.presets.find(p => p.id === subtitleSettings.activePresetId);
+  const speakerStyle = activePreset?.speakerStyles.find(s => s.speakerId === speakerId);
+  const defaultName = defaultSpeakerName(speakerId);
+  const displayName = speakerStyle?.speakerName || defaultName;
+  const [editValue, setEditValue] = useState(displayName);
+  const isDefaultSpeaker = speakerId === 'default';
+
+  const handleSave = () => {
+    setIsEditing(false);
+    if (isDefaultSpeaker || !subtitleSettings || !activePreset) return;
+    
+    const finalName = editValue.trim() || defaultName;
+    
+    const newStyles = [...activePreset.speakerStyles];
+    const existingIndex = newStyles.findIndex(s => s.speakerId === speakerId);
+    
+    if (existingIndex >= 0) {
+      newStyles[existingIndex] = { ...newStyles[existingIndex]!, speakerName: finalName };
+    } else {
+      const defaultStyle = newStyles.find(s => s.speakerId === 'default') ?? newStyles[0]!;
+      newStyles.push({ ...defaultStyle, speakerId, speakerName: finalName });
+    }
+    
+    const newPresets = subtitleSettings.presets.map(p => 
+      p.id === activePreset.id ? { ...p, speakerStyles: newStyles, updatedAt: Date.now() } : p
+    );
+    
+    const newSettings = { ...subtitleSettings, presets: newPresets };
+    updateSubtitleSettings(newSettings);
+    
+    window.api.subtitleSettings.save(newSettings).catch(console.error);
+  };
+
+  const handleKeyDown = (e: React.KeyboardEvent) => {
+    if (e.key === 'Enter') {
+      handleSave();
+    } else if (e.key === 'Escape') {
+      setIsEditing(false);
+      setEditValue(displayName);
+    }
+  };
+
+  return (
+    <div className={styles.columnHeader}>
+      <User size={16} />
+      <span className={styles.badge}>[{speakerIndex + 1}]</span>
+      {isEditing && !isDefaultSpeaker ? (
+        <input
+          autoFocus
+          className={styles.headerInput}
+          value={editValue}
+          onChange={(e) => setEditValue(e.target.value)}
+          onBlur={handleSave}
+          onKeyDown={handleKeyDown}
+        />
+      ) : (
+        <span 
+          className={`${styles.speakerName} ${!isDefaultSpeaker ? styles.editableSpeakerName : ''}`}
+          onClick={() => {
+            if (!isDefaultSpeaker) {
+              setEditValue(displayName);
+              setIsEditing(true);
+            }
+          }}
+          title={!isDefaultSpeaker ? "クリックして名前を編集" : undefined}
+        >
+          {displayName}
+        </span>
+      )}
+      <span className={styles.count}>({count})</span>
     </div>
   );
 }
