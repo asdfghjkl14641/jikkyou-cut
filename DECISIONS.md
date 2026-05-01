@@ -15,6 +15,23 @@
 
 ---
 
+## 2026-05-01 20:10 - 話者分離有効化トグル(コラボモード)実装(Phase B-1)
+
+- 誰が: Claude Code
+- 何を: 文字起こし時の Gladia diarization パラメータをハードコード `true` から動的化し、`コラボ` トグル UI を追加
+  - `src/common/config.ts`: `AppConfig.collaborationMode: boolean` 追加(デフォルト `false` = ソロ)
+  - `src/main/config.ts`: load/save の双方向で field を読み書き。旧 config(field 無し)は `false` にフォールバック
+  - `src/common/types.ts`: `TranscriptionStartArgs` に `collaborationMode` 必須フィールドを追加
+  - `src/main/gladia.ts`: `submitJob` / `transcribe` 引数に `collaborationMode` を追加し、`/v2/pre-recorded` リクエストの `diarization` に流す。ログにも反映
+  - `src/main/index.ts`: IPC ハンドラで renderer 引数を優先しつつ、欠落時は永続化 config にフォールバック(古い renderer 構築物を吸収)
+  - `src/renderer/src/store/editorStore.ts`: `collaborationMode` ステート + `setCollaborationMode` 追加。setter は in-memory 更新と同時に `window.api.saveSettings` で永続化(fire-and-forget、失敗時は warn のみ)
+  - `src/renderer/src/App.tsx`: `useSettings` の view が arrival した時に `useEditorStore.setState({ collaborationMode })` で初期化(setter 経由だと round-trip save が走るので setState を直接使用)
+  - `src/renderer/src/hooks/useTranscription.ts`: store 値を `startTranscription` IPC に渡す
+  - `src/renderer/src/components/TranscribeButton.tsx/module.css`: 文字起こしボタンの左隣に `<input type="checkbox">` ベースの「コラボ」トグル追加。ON 時はアクセントカラーの淡い背景 + 枠、`title` でツールチップ「複数人/単独」を切替表示。`isRunning` 中は disabled
+- 理由: ソロ実況・コラボ実況のユースケースを切り替え可能にする。ソロ時は API 側の diarization 処理を省略でき、結果の話者バッジ・SRT プレフィックスも自動的に消える(`utterancesToCues` の `speaker` undefined → `buildSrt` の `includeSpeakers` ゲートが false)。**Phase B-1**(話者分離フローの土台)としてのリリース
+- 影響: `src/common/config.ts`, `src/common/types.ts`, `src/main/config.ts`, `src/main/gladia.ts`, `src/main/index.ts`, `src/renderer/src/store/editorStore.ts`, `src/renderer/src/App.tsx`, `src/renderer/src/hooks/useTranscription.ts`, `src/renderer/src/components/TranscribeButton.tsx/module.css`
+- コミット: (未定)
+
 ## 2026-05-01 19:30 - 動画プレビュー上の字幕オーバーレイ表示を追加
 
 - 誰が: Antigravity

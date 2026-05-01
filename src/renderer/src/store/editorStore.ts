@@ -115,6 +115,13 @@ type EditorState = {
   loadSubtitleSettings: () => Promise<void>;
   updateSubtitleSettings: (settings: SubtitleSettings) => void;
   toggleCueSubtitle: (cueId: string) => void;
+
+  // Collaboration mode (Gladia diarization toggle). Mirrors the persisted
+  // `AppConfig.collaborationMode` — App.tsx hydrates on mount, the setter
+  // writes both the in-memory state and the disk config so the choice
+  // survives restart.
+  collaborationMode: boolean;
+  setCollaborationMode: (mode: boolean) => void;
 };
 
 const basename = (absPath: string): string => {
@@ -177,6 +184,8 @@ export const useEditorStore = create<EditorState>((set, get) => ({
   seekNonce: 0,
 
   subtitleSettings: null,
+
+  collaborationMode: false,
 
   setFile: (absPath) =>
     set({
@@ -512,5 +521,17 @@ export const useEditorStore = create<EditorState>((set, get) => ({
       past: nextPast,
       future: [],
     });
+  },
+
+  setCollaborationMode: (mode) => {
+    set({ collaborationMode: mode });
+    // Fire-and-forget persistence. The user just clicked the toggle, so
+    // the in-memory state should always reflect the latest click even if
+    // the disk write fails — log and move on rather than rolling back.
+    window.api
+      .saveSettings({ collaborationMode: mode })
+      .catch((err) => {
+        console.warn('[settings] failed to persist collaborationMode:', err);
+      });
   },
 }));

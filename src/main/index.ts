@@ -86,6 +86,14 @@ function registerIpcHandlers() {
       durationSec: args.durationSec,
       apiKey,
       context: config.transcriptionContext,
+      // The renderer is the source of truth for the toggle, but we accept
+      // legacy callers too — fall back to the persisted config so an old
+      // renderer build (without the field) still gets the user's saved
+      // preference instead of an unintended `false`.
+      collaborationMode:
+        typeof args.collaborationMode === 'boolean'
+          ? args.collaborationMode
+          : config.collaborationMode,
       onProgress: (p) => {
         mainWindow?.webContents.send('transcription:progress', p);
       },

@@ -27,6 +27,8 @@ export default function TranscribeButton({ apiKeyConfigured }: Props) {
   const progress = useEditorStore((s) => s.transcriptionProgress);
   const error = useEditorStore((s) => s.transcriptionError);
   const durationSec = useEditorStore((s) => s.durationSec);
+  const collaborationMode = useEditorStore((s) => s.collaborationMode);
+  const setCollaborationMode = useEditorStore((s) => s.setCollaborationMode);
   const { start, cancel } = useTranscription();
 
   const isRunning = status === 'running';
@@ -44,6 +46,23 @@ export default function TranscribeButton({ apiKeyConfigured }: Props) {
 
   return (
     <div className={styles.container}>
+      <label
+        className={styles.collaborationToggle}
+        title={
+          collaborationMode
+            ? '複数人での実況・対談動画向け(話者別に識別)'
+            : '1人での実況向け(処理が軽量)'
+        }
+      >
+        <input
+          type="checkbox"
+          checked={collaborationMode}
+          onChange={(e) => setCollaborationMode(e.target.checked)}
+          disabled={isRunning}
+        />
+        <span className={styles.collaborationLabel}>コラボ</span>
+      </label>
+
       {!isRunning && (
         <button
           type="button"

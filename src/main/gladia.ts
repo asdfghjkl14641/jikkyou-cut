@@ -156,19 +156,20 @@ async function submitJob(
   audioUrl: string,
   apiKey: string,
   ctx: TranscriptionContext,
+  collaborationMode: boolean,
   signal: AbortSignal,
 ): Promise<{ id: string; resultUrl: string }> {
   const vocab = buildCustomVocabulary(ctx);
   const body: Record<string, unknown> = {
     audio_url: audioUrl,
     language: 'ja',
-    diarization: true,
+    diarization: collaborationMode,
   };
   if (vocab.length > 0) {
     body['custom_vocabulary'] = vocab;
   }
   console.log(
-    `[gladia-submit] vocab=${vocab.length} terms, diarization=true, language=ja`,
+    `[gladia-submit] vocab=${vocab.length} terms, diarization=${collaborationMode}, language=ja`,
   );
 
   const res = await fetch(`${GLADIA_BASE}/pre-recorded`, {
@@ -324,12 +325,14 @@ export async function transcribe({
   durationSec,
   apiKey,
   context,
+  collaborationMode,
   onProgress,
 }: {
   videoFilePath: string;
   durationSec: number;
   apiKey: string;
   context: TranscriptionContext;
+  collaborationMode: boolean;
   onProgress: (p: TranscriptionProgress) => void;
 }): Promise<TranscriptionResult> {
   if (activeJob) throw new Error('別の文字起こしが実行中です');
@@ -360,7 +363,13 @@ export async function transcribe({
     onProgress({ phase: 'uploading', ratio: 1 });
 
     // Phase 3: submit job + poll until done.
-    const { id, resultUrl } = await submitJob(audioUrl, apiKey, context, ac.signal);
+    const { id, resultUrl } = await submitJob(
+      audioUrl,
+      apiKey,
+      context,
+      collaborationMode,
+      ac.signal,
+    );
     job.jobId = id;
     job.resultUrl = resultUrl;
 

@@ -40,7 +40,7 @@ export default function App() {
 
   useEffect(() => {
     void loadSubtitleSettings();
-    
+
     // アプリ起動時にダウンロード済みフォントを @font-face として CSS に登録
     async function registerInstalledFonts() {
       try {
@@ -57,6 +57,15 @@ export default function App() {
     }
     void registerInstalledFonts();
   }, [loadSubtitleSettings]);
+
+  // Hydrate the in-memory collaborationMode from disk. We use a low-level
+  // setState rather than the public setter so this initial sync doesn't
+  // trigger another saveSettings round-trip. `view` arrives async from
+  // useSettings — guarded so we only fire once per non-null value.
+  useEffect(() => {
+    if (!view) return;
+    useEditorStore.setState({ collaborationMode: view.config.collaborationMode });
+  }, [view]);
 
   const videoRef = useRef<VideoPlayerHandle>(null);
 

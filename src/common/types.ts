@@ -38,6 +38,11 @@ export type TranscriptionProgress = {
 export type TranscriptionStartArgs = {
   videoFilePath: string;
   durationSec: number;
+  // When true, request Gladia diarization (speaker separation). The
+  // renderer reads this from the persisted `AppConfig.collaborationMode`
+  // (mirrored into the editor store). Solo recordings should pass `false`
+  // so the API skips the heavier diarization pass.
+  collaborationMode: boolean;
 };
 
 export type ApiKeyValidationResult = {

@@ -6,6 +6,7 @@ export function useTranscription() {
   const filePath = useEditorStore((s) => s.filePath);
   const durationSec = useEditorStore((s) => s.durationSec);
   const status = useEditorStore((s) => s.transcriptionStatus);
+  const collaborationMode = useEditorStore((s) => s.collaborationMode);
 
   const startState = useEditorStore((s) => s.startTranscription);
   const setProgress = useEditorStore((s) => s.setTranscriptionProgress);
@@ -25,6 +26,7 @@ export function useTranscription() {
       const result = await window.api.startTranscription({
         videoFilePath: filePath,
         durationSec,
+        collaborationMode,
       });
       succeed(result);
     } catch (err) {
@@ -35,7 +37,7 @@ export function useTranscription() {
         fail(e.message ?? '不明なエラーが発生しました');
       }
     }
-  }, [filePath, durationSec, startState, succeed, fail, cancelState]);
+  }, [filePath, durationSec, collaborationMode, startState, succeed, fail, cancelState]);
 
   const cancel = useCallback(async () => {
     if (status !== 'running') return;

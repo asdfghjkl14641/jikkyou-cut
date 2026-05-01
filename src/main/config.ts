@@ -32,6 +32,12 @@ export async function loadConfig(): Promise<AppConfig> {
     const parsed = JSON.parse(raw) as Record<string, unknown>;
     return {
       transcriptionContext: normaliseContext(parsed['transcriptionContext']),
+      // Pre-collaboration-toggle configs lack the field — fall back to the
+      // safer `false` (solo) so existing installs default to the cheaper
+      // request shape rather than silently flipping their behaviour.
+      collaborationMode: typeof parsed['collaborationMode'] === 'boolean'
+        ? (parsed['collaborationMode'] as boolean)
+        : DEFAULT_CONFIG.collaborationMode,
     };
   } catch {
     return DEFAULT_CONFIG;
@@ -47,6 +53,10 @@ export async function saveConfig(
       ...current.transcriptionContext,
       ...(partial.transcriptionContext ?? {}),
     },
+    collaborationMode:
+      partial.collaborationMode != null
+        ? partial.collaborationMode
+        : current.collaborationMode,
   };
   const p = getConfigPath();
   await fs.mkdir(path.dirname(p), { recursive: true });
