@@ -197,19 +197,8 @@
 .subtitlePreview {
   white-space: pre-wrap;
   word-break: break-word;
-  line-height: 1.2;
-  font-size: var(--preview-font-size);
-  -webkit-text-stroke: var(--preview-stroke);
-  text-shadow: var(--preview-shadow);
-  transition: all 200ms ease-out;
-  transform-origin: left center;
-}
-
-.cue:hover .subtitlePreview,
-.cueFocused .subtitlePreview {
-  font-size: var(--preview-hover-font-size);
-  -webkit-text-stroke: var(--preview-hover-stroke);
-  text-shadow: var(--preview-hover-shadow);
+  line-height: 1.5;
+  font-size: 20px;
 }
 
 .fallbackPreview {
