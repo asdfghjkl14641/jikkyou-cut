@@ -251,11 +251,7 @@ export default function SpeakerColumnView({ onSeek }: Props) {
         })}
       </div>
       
-      <div className={styles.hintBar}>
-        <span><kbd>↑</kbd>/<kbd>↓</kbd> 選択</span>
-        <span><kbd>Space</kbd> 再生</span>
-        <span><kbd>Ctrl</kbd>+<kbd>Z</kbd> Undo</span>
-      </div>
+
 
       {contextMenu && (
         <CueContextMenu

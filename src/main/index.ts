@@ -163,6 +163,11 @@ function registerIpcHandlers() {
     (_e, settings: SubtitleSettings) =>
       subtitleSettings.saveSubtitleSettings(settings),
   );
+  ipcMain.on('window:setTitle', (_e, title: string) => {
+    if (mainWindow) {
+      mainWindow.setTitle(title ? `jikkyou-cut - ${title}` : 'jikkyou-cut');
+    }
+  });
 }
 
 app.whenReady().then(() => {

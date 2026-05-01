@@ -253,4 +253,6 @@ export type IpcApi = {
   onFontDownloadProgress: (
     cb: (p: FontDownloadProgress) => void,
   ) => () => void;
+
+  setWindowTitle: (title: string) => void;
 };

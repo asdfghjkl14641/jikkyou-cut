@@ -136,6 +136,10 @@ export default function App() {
     () => window.api.onMenuOpenOperations?.(() => setOperationsOpen(true)),
     [],
   );
+  
+  useEffect(() => {
+    window.api.setWindowTitle(fileName || '');
+  }, [fileName]);
 
   const handleContextChange = useCallback(
     (next: TranscriptionContext) => {
@@ -154,13 +158,7 @@ export default function App() {
   return (
     <main className={styles.app}>
       <header className={styles.header}>
-        <div className={styles.brand}>
-          <div className={styles.logoIcon}>
-            <Scissors strokeWidth={1.5} size={18} />
-          </div>
-          <h1 className={styles.title}>jikkyou-cut</h1>
-        </div>
-        <div className={styles.headerRight}>
+        <div className={styles.headerLeft}>
           {view && (
             <TranscriptionContextForm
               initial={view.config.transcriptionContext}
@@ -168,17 +166,17 @@ export default function App() {
             />
           )}
           <TranscribeButton apiKeyConfigured={apiKeyConfigured} />
+        </div>
+        <div className={styles.headerRight}>
 
-          <div className={styles.headerDivider} />
 
           {fileName && (
             <div className={styles.fileInfo}>
-              <span className={styles.fileName}>{fileName}</span>
               <button
                 type="button"
                 className={styles.iconButton}
                 onClick={clearFile}
-                title="閉じる"
+                title="動画を閉じる"
               >
                 <X strokeWidth={1.5} size={18} />
               </button>

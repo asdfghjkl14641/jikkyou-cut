@@ -20,16 +20,7 @@
   cursor: not-allowed;
 }
 
-.toggleLabel {
-  font-size: var(--font-size-xs);
-  color: var(--text-secondary);
-  font-weight: var(--font-weight-medium, 500);
-  transition: color var(--transition-fast);
-}
 
-.toggleWrapper:hover:not(:has(input:disabled)) .toggleLabel {
-  color: var(--text-primary);
-}
 
 .toggleSwitch {
   position: relative;

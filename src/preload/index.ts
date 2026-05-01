@@ -83,6 +83,7 @@ const api: IpcApi = {
       ipcRenderer.removeListener('fonts:downloadProgress', listener);
     };
   },
+  setWindowTitle: (title) => ipcRenderer.send('window:setTitle', title),
 };
 
 contextBridge.exposeInMainWorld('api', api);

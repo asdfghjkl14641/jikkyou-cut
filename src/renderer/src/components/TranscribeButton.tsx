@@ -74,7 +74,7 @@ export default function TranscribeButton({ apiKeyConfigured }: Props) {
             : '1人での実況(処理が軽量)'
         }
       >
-        <span className={styles.toggleLabel}>マルチ</span>
+
         <span className={styles.toggleSwitch}>
           <input
             type="checkbox"

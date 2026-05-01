@@ -274,14 +274,7 @@ export default function EditableTranscriptList({ onSeek }: Props) {
         })}
           </div>
 
-          <div className={styles.hintBar}>
-            <span><kbd>↑</kbd>/<kbd>↓</kbd> 選択</span>
-            <span><kbd>Shift</kbd>+<kbd>↑</kbd>/<kbd>↓</kbd> 範囲</span>
-            <span><kbd>Ctrl</kbd>+<kbd>A</kbd> 全選択</span>
-            <span><kbd>D</kbd> 削除/復活</span>
-            <span><kbd>Space</kbd> 再生</span>
-            <span><kbd>Ctrl</kbd>+<kbd>Z</kbd> Undo</span>
-          </div>
+
           
           {contextMenu && (
             <CueContextMenu
