@@ -44,7 +44,7 @@
   - `--progress-template "download:JCUT_PROGRESS %(progress._percent_str)s %(progress._speed_str)s %(progress._eta_str)s"` 追加(※ 単独ではまだ進捗出ない、後続で `--progress` 必要だった)
   - 副作用: 4K AV1 / 1440p VP9 等は意図的に切り捨て(自分用ツール段階の互換性優先)、最大 1080p AVC1 にキャップ
 
-### 4. URL DL 進捗 0.0% 固着の真因特定 → `--progress` 追加で完治(`<NEW_HASH>`)
+### 4. URL DL 進捗 0.0% 固着の真因特定 → `--progress` 追加で完治(`f754527`)
 - バグ C: URL 貼って規約同意 → 進捗ダイアログは出るが 0.0% から動かない(`2b3ffe6` 後も継続)
 - 真因(実機ログで特定): yt-dlp は `--print` 指定時に **暗黙 quiet モード** に入り、`--progress-template` で書式は変わるが **出力自体は抑制** されていた。生 stdout には title と filepath の 2 行しか出ていなかった
 - 修正: spawn 引数に `'--progress'`(quiet でも進捗強制表示するフラグ)を 1 行追加
@@ -101,14 +101,14 @@
 ## 1. 現在のリポジトリ状態(更新時刻 2026-05-02 07:15)
 
 ```
-HEAD = <NEW_HASH> fix(url-download): 進捗 0.0% 固着の真因特定 + --progress 追加で完治
-origin/main = <NEW_HASH>(同期済み)
+HEAD = f754527 fix(url-download): 進捗 0.0% 固着の真因特定 + --progress 追加で完治
+origin/main = f754527(同期済み)
 working tree clean
 ```
 
 git log -10 --oneline(凍結時点):
 ```
-<NEW_HASH> fix(url-download): yt-dlp 進捗 0.0% 固着の真因特定 + --progress 追加(--print 暗黙 quiet モード問題)
+f754527 fix(url-download): yt-dlp 進捗 0.0% 固着の真因特定 + --progress 追加(--print 暗黙 quiet モード問題)
 b3a400e docs: 2b3ffe6 のコミットハッシュを NEXT_SESSION_HANDOFF.md と DECISIONS.md に backfill
 2b3ffe6 fix(url-download): 進捗 0.0% 固着 + DL 後再生不可の修正(フォーマット限定 + 進捗テンプレート明示化)
 ca0a81b docs: 寝る前作業 — NEXT_SESSION_HANDOFF.md でセッション末状態を凍結
@@ -133,7 +133,7 @@ c2bc6df feat(dropzone): integrate URL download into DropZone and remove header i
 | 話者プリセット + キュー単位スタイル上書き(Phase B-3) | `c69fcfb` / `e4b6795` | 動作 |
 | 話者カラム表示モード | `f0997b1` | 動作 |
 | カラム間 DnD で話者変更 | `5b9682f` / `1001620` | 動作 |
-| URL DL(yt-dlp 統合)| `c995d3b` / `c2bc6df` / `1678746` / `2b3ffe6` / `<NEW_HASH>` | **実 DL 検証済み**(MP4-AVC1-AAC 強制 + `--progress` で進捗 stdout 流出 OK) |
+| URL DL(yt-dlp 統合)| `c995d3b` / `c2bc6df` / `1678746` / `2b3ffe6` / `f754527` | **実 DL 検証済み**(MP4-AVC1-AAC 強制 + `--progress` で進捗 stdout 流出 OK) |
 | コメント分析グラフ(モックデータ)| `919e6c0` / `1678746` で簡素化 | **実機確認済み** — yt-dlp チャット取得は未実装 |
 | 3 フェーズ構造(load / clip-select / edit)| `1678746` | **実機確認済み** |
 | ドキュメント整理(IDEAS.md + COMMENT_ANALYSIS_DESIGN.md)| `076240f` | 完了 |
