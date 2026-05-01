@@ -39,6 +39,36 @@ export default function EditableTranscriptList({ onSeek }: Props) {
   const extendSelectionTo = useEditorStore((s) => s.extendSelectionTo);
   const toggleCueSubtitle = useEditorStore((s) => s.toggleCueSubtitle);
 
+  const subtitleSettings = useEditorStore((s) => s.subtitleSettings);
+  const activeStyle = useMemo(() => {
+    if (!subtitleSettings) return null;
+    return subtitleSettings.styles.find(s => s.id === subtitleSettings.activeStyleId) ?? null;
+  }, [subtitleSettings]);
+
+  const previewStyle = useMemo(() => {
+    if (!activeStyle) return undefined;
+    
+    // Scale down to max 32px
+    const scale = 0.5;
+    const fontSize = Math.min(activeStyle.fontSize * scale, 32);
+    const outlineWidth = activeStyle.outlineWidth * scale;
+    const shadowOffset = activeStyle.shadow.offsetPx * scale;
+    
+    const style: React.CSSProperties = {
+      fontFamily: `"${activeStyle.fontFamily}", sans-serif`,
+      fontSize: `${fontSize}px`,
+      color: activeStyle.textColor,
+      WebkitTextStroke: outlineWidth > 0 ? `${outlineWidth}px ${activeStyle.outlineColor}` : 'none',
+      paintOrder: 'stroke fill',
+    };
+    
+    if (activeStyle.shadow.enabled) {
+      style.textShadow = `${shadowOffset}px ${shadowOffset}px 0 ${activeStyle.shadow.color}`;
+    }
+    
+    return style;
+  }, [activeStyle]);
+
   // Stable map from raw speaker label ("speaker_0") to a 1-indexed display
   // number. Only render the badge when at least 2 distinct speakers were
   // detected — single-speaker recordings shouldn't add UI noise.
@@ -152,40 +182,59 @@ export default function EditableTranscriptList({ onSeek }: Props) {
               role="button"
               tabIndex={-1}
             >
-              <div className={styles.timecode}>
-                {isPlaying && (
-                  <span className={styles.playingIcon} aria-label="再生中">
-                    <Play size={10} fill="currentColor" />
-                  </span>
-                )}
-                {showSpeakerBadges && cue.speaker != null && (
-                  <span
-                    className={styles.speakerBadge}
-                    aria-label={`話者${speakerNumberOf.get(cue.speaker)}`}
-                  >
-                    [{speakerNumberOf.get(cue.speaker)}]
-                  </span>
-                )}
-                <span>{formatTimecode(cue.startSec)}</span>
-              </div>
-              <div className={styles.text}>{cue.text}</div>
-              
-              {!cue.deleted && (
-                <div className={styles.subtitleToggle}>
-                  <button
-                    type="button"
-                    className={`${styles.iconButton} ${cue.showSubtitle ? styles.active : ''}`}
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      toggleCueSubtitle(cue.id);
-                    }}
-                    title={cue.showSubtitle ? "字幕をオフにする" : "字幕をオンにする"}
-                    style={{ opacity: cue.showSubtitle ? 1 : 0.3 }}
-                  >
-                    <Subtitles size={16} />
-                  </button>
+              <div className={styles.cueLeft}>
+                <div className={styles.timecode}>
+                  {isPlaying && (
+                    <span className={styles.playingIcon} aria-label="再生中">
+                      <Play size={10} fill="currentColor" />
+                    </span>
+                  )}
+                  {showSpeakerBadges && cue.speaker != null && (
+                    <span
+                      className={styles.speakerBadge}
+                      aria-label={`話者${speakerNumberOf.get(cue.speaker)}`}
+                    >
+                      [{speakerNumberOf.get(cue.speaker)}]
+                    </span>
+                  )}
+                  <span>{formatTimecode(cue.startSec)}</span>
                 </div>
-              )}
+                <div className={styles.text}>{cue.text}</div>
+                
+                {!cue.deleted && (
+                  <div className={styles.subtitleToggle}>
+                    <button
+                      type="button"
+                      className={`${styles.iconButton} ${cue.showSubtitle ? styles.active : ''}`}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        toggleCueSubtitle(cue.id);
+                      }}
+                      title={cue.showSubtitle ? "字幕をオフにする" : "字幕をオンにする"}
+                      style={{ opacity: cue.showSubtitle ? 1 : 0.3 }}
+                    >
+                      <Subtitles size={16} />
+                    </button>
+                  </div>
+                )}
+              </div>
+
+              <div className={styles.cueRight}>
+                {!activeStyle ? (
+                  <span className={styles.fallbackPreview}>{cue.text}</span>
+                ) : (
+                  <span
+                    className={styles.subtitlePreview}
+                    style={{
+                      ...previewStyle,
+                      opacity: (!cue.showSubtitle || cue.deleted) ? 0.3 : 1,
+                      textDecoration: cue.deleted ? 'line-through' : 'none',
+                    }}
+                  >
+                    {cue.text}
+                  </span>
+                )}
+              </div>
             </div>
           );
         })}

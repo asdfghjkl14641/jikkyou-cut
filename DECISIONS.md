@@ -33,6 +33,14 @@
 - 影響: `src/common/subtitle.ts` (新規)、`src/common/types.ts`、`src/main/export.ts`、`src/main/index.ts`、`src/renderer/src/store/editorStore.ts`、`src/renderer/src/components/VideoPlayer.tsx`、`src/renderer/src/hooks/useExport.ts`
 - コミット: `9bb4012`
 
+## 2026-05-01 16:07 - キュー一覧を2カラム構成(編集列+字幕プレビュー列)に拡張
+
+- 誰が: Antigravity
+- 何を: EditableTranscriptList を Grid で2カラムに分割し、右列に字幕スタイルの動的プレビューを追加
+- 理由: 編集中に最終的な字幕の見た目を常時確認できるようにするため（動画を毎回再生する手間を排除）。
+- 影響: `EditableTranscriptList.tsx`, `EditableTranscriptList.module.css` のみ
+- コミット: (未定)
+
 ## 2026-05-01 15:30 - 字幕設定ダイアログ UI・フォント管理 UI 実装
 
 - 誰が: Antigravity
