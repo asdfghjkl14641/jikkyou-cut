@@ -48,25 +48,29 @@ export default function EditableTranscriptList({ onSeek }: Props) {
   const previewStyle = useMemo(() => {
     if (!activeStyle) return undefined;
     
-    // Scale down to max 32px
-    const scale = 0.5;
-    const fontSize = Math.min(activeStyle.fontSize * scale, 32);
-    const outlineWidth = activeStyle.outlineWidth * scale;
-    const shadowOffset = activeStyle.shadow.offsetPx * scale;
+    const baseSize = 20;
+    const hoverSize = Math.min(activeStyle.fontSize, 48); // limit to 48px max
     
-    const style: React.CSSProperties = {
+    const baseRatio = baseSize / activeStyle.fontSize;
+    const hoverRatio = hoverSize / activeStyle.fontSize;
+    
+    const baseOutline = activeStyle.outlineWidth * baseRatio;
+    const hoverOutline = activeStyle.outlineWidth * hoverRatio;
+    
+    const baseShadow = activeStyle.shadow.offsetPx * baseRatio;
+    const hoverShadow = activeStyle.shadow.offsetPx * hoverRatio;
+
+    return {
       fontFamily: `"${activeStyle.fontFamily}", sans-serif`,
-      fontSize: `${fontSize}px`,
       color: activeStyle.textColor,
-      WebkitTextStroke: outlineWidth > 0 ? `${outlineWidth}px ${activeStyle.outlineColor}` : 'none',
       paintOrder: 'stroke fill',
-    };
-    
-    if (activeStyle.shadow.enabled) {
-      style.textShadow = `${shadowOffset}px ${shadowOffset}px 0 ${activeStyle.shadow.color}`;
-    }
-    
-    return style;
+      '--preview-font-size': `${baseSize}px`,
+      '--preview-hover-font-size': `${hoverSize}px`,
+      '--preview-stroke': activeStyle.outlineWidth > 0 ? `${baseOutline}px ${activeStyle.outlineColor}` : 'none',
+      '--preview-hover-stroke': activeStyle.outlineWidth > 0 ? `${hoverOutline}px ${activeStyle.outlineColor}` : 'none',
+      '--preview-shadow': activeStyle.shadow.enabled ? `${baseShadow}px ${baseShadow}px 0 ${activeStyle.shadow.color}` : 'none',
+      '--preview-hover-shadow': activeStyle.shadow.enabled ? `${hoverShadow}px ${hoverShadow}px 0 ${activeStyle.shadow.color}` : 'none',
+    } as React.CSSProperties;
   }, [activeStyle]);
 
   // Stable map from raw speaker label ("speaker_0") to a 1-indexed display

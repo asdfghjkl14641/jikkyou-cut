@@ -175,7 +175,7 @@
 }
 
 .videoArea {
-  flex: 1.5; /* Video gets slightly more width than transcript if desired, or 1 for equal */
+  flex: 4; /* Video gets a smaller ratio than transcript */
   min-width: 0;
   display: flex;
   background: #000;
@@ -184,9 +184,8 @@
 }
 
 .transcriptArea {
-  flex: 1;
-  min-width: 320px;
-  max-width: 480px;
+  flex: 6; /* Transcript area gets more space for the 2-column layout */
+  min-width: 400px;
   display: flex;
   flex-direction: column;
   background: var(--bg-surface);
