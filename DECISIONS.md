@@ -15,6 +15,24 @@
 
 ---
 
+## 2026-05-02 09:00 - プログレッシブ DL + 並行文字起こしの技術検証(spike)
+
+- 誰が: Claude Code
+- 何を: ユーザ要望「DL 完了を待たずに YouTube ライクに編集 + シーク」を実現するための土台調査。本実装はせず、4 論点を実機 + 公式ドキュメントで検証して `docs/PROGRESSIVE_DL_SPIKE_REPORT.md` に結果まとめ
+- 検証論点 + 主要結論:
+  - **論点 1(yt-dlp シーク追従 DL)**: `--download-sections "*X-Y"` で範囲別 DL → ffmpeg `-c copy` で連結成功(19s 動画で連結後 19.02s)。HLS 経路は YouTube VOD では使えず(全 PROTO=https の DASH のみ)。`--force-keyframes-at-cuts` は再エンコード必須なので外す方針(GOP 境界の数フレームズレを許容)
+  - **論点 2(`<video>` buffered)**: 既存 mediaProtocol は growing-file に追従できず ❌ / `MediaSource + ffmpeg fragmented MP4 (`-movflags frag_keyframe+empty_moov+default_base_moof`) feed` ✅ を **推奨**。ffmpeg で fMP4 化が動くことを実機確認 / mediaProtocol 改造の long-poll 案は browser timeout で脆弱
+  - **論点 3(Gladia 並行文字起こし)**: `/v2/pre-recorded` は完全 audio 前提 ❌ / `/v2/live` は WebSocket ベース、PCM 8-48kHz、partial+final transcripts incremental ✅ を **推奨**(MVP は pre-recorded のままでも可)
+  - **論点 4(プロセス管理)**: 既存 `cancelDownload` は単一プロセス前提で不足。`ProgressiveDLManager` 雛形を設計(primary/secondary DL + audio pump + Gladia WebSocket、Map<id, ChildProcess> で track、cancel/seek/full-DL モード切替)
+- 致命的リスク: YouTube 1080p AVC1 は **video+audio 別ストリーム + マージ前提** で merge 前は再生可能ファイルが存在しない → fMP4 リアルタイム変換パイプ必須
+- 実装フェーズ提案:
+  - **Phase A**(1 週間、UX 80%): 360p 単一 muxed format `18` で先行 preview DL + mediaProtocol を growing-aware に
+  - **Phase B**(2 週間、UX 100%): MediaSource + ffmpeg fragmented MP4 pipe で 1080p AVC1 リアルタイム再生
+  - **Phase C**(3-5 日): Gladia `/v2/live` WebSocket で並行文字起こし
+- ユーザ判断待ちの選択肢: Phase A で段階的か / B で一気に / Gladia は live か pre-recorded chunk か / Twitch VOD 対応のタイミング / 「全部 DL」モード切替時の partial 破棄か継続か
+- 影響: `docs/PROGRESSIVE_DL_SPIKE_REPORT.md`(新規)、`src/main/spikes/progressive-dl-spike.ts`(新規、本番未組み込み)
+- コミット: (未定)
+
 ## 2026-05-02 07:15 - URL DL 進捗 0.0% 固着の本当の原因を実機ログで特定 → `--progress` 追加で解決
 
 - 誰が: Claude Code
