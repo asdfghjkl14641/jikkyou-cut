@@ -18,7 +18,8 @@ import ExportPreview from './components/ExportPreview';
 import ExportProgressDialog from './components/ExportProgressDialog';
 import TranscriptionContextForm from './components/TranscriptionContextForm';
 import type { TranscriptionContext } from '../../common/config';
-import { X, Settings, Scissors } from 'lucide-react';
+import { X, Settings, Scissors, Subtitles } from 'lucide-react';
+import SubtitleSettingsDialog from './components/SubtitleSettingsDialog';
 import styles from './App.module.css';
 
 export default function App() {
@@ -33,6 +34,13 @@ export default function App() {
   const { view, save, validateApiKey, setApiKey, clearApiKey } = useSettings();
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [operationsOpen, setOperationsOpen] = useState(false);
+  const [subtitleSettingsOpen, setSubtitleSettingsOpen] = useState(false);
+
+  const loadSubtitleSettings = useEditorStore((s) => s.loadSubtitleSettings);
+
+  useEffect(() => {
+    void loadSubtitleSettings();
+  }, [loadSubtitleSettings]);
 
   const videoRef = useRef<VideoPlayerHandle>(null);
 
@@ -150,6 +158,14 @@ export default function App() {
           <button
             type="button"
             className={`${styles.iconButton} ${styles.settingsButton}`}
+            onClick={() => setSubtitleSettingsOpen(true)}
+            title="字幕設定"
+          >
+            <Subtitles strokeWidth={1.5} size={18} />
+          </button>
+          <button
+            type="button"
+            className={`${styles.iconButton} ${styles.settingsButton}`}
             onClick={() => setSettingsOpen(true)}
             title="設定"
           >
@@ -213,6 +229,12 @@ export default function App() {
         isOpen={operationsOpen}
         onClose={() => setOperationsOpen(false)}
       />
+      {subtitleSettingsOpen && (
+        <SubtitleSettingsDialog
+          open={subtitleSettingsOpen}
+          onClose={() => setSubtitleSettingsOpen(false)}
+        />
+      )}
 
       <ExportProgressDialog />
     </main>

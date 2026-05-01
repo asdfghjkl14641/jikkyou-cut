@@ -5,6 +5,7 @@ import type {
   TranscriptCue,
   TranscriptionProgress,
   TranscriptionResult,
+  SubtitleSettings,
 } from '../../../common/types';
 
 type TranscriptionStatus =
@@ -100,6 +101,12 @@ type EditorState = {
 
   setPreviewMode: (on: boolean) => void;
   bumpSeekNonce: () => void;
+
+  // subtitles
+  subtitleSettings: SubtitleSettings | null;
+  loadSubtitleSettings: () => Promise<void>;
+  updateSubtitleSettings: (settings: SubtitleSettings) => void;
+  toggleCueSubtitle: (cueId: string) => void;
 };
 
 const basename = (absPath: string): string => {
@@ -158,6 +165,8 @@ export const useEditorStore = create<EditorState>((set, get) => ({
   previewMode: true,
 
   seekNonce: 0,
+
+  subtitleSettings: null,
 
   setFile: (absPath) =>
     set({
@@ -456,4 +465,32 @@ export const useEditorStore = create<EditorState>((set, get) => ({
   setPreviewMode: (on) => set({ previewMode: on }),
 
   bumpSeekNonce: () => set((s) => ({ seekNonce: s.seekNonce + 1 })),
+
+  loadSubtitleSettings: async () => {
+    try {
+      const settings = await window.api.subtitleSettings.load();
+      set({ subtitleSettings: settings });
+    } catch (err) {
+      console.warn('[subtitleSettings] load failed:', err);
+    }
+  },
+
+  updateSubtitleSettings: (settings) => {
+    set({ subtitleSettings: settings });
+  },
+
+  toggleCueSubtitle: (cueId) => {
+    const { cues, past } = get();
+    const snapshot = cloneCues(cues);
+    const nextCues = cues.map((c) =>
+      c.id === cueId ? { ...c, showSubtitle: !c.showSubtitle } : c,
+    );
+    const nextPast = [...past, snapshot];
+    if (nextPast.length > HISTORY_LIMIT) nextPast.shift();
+    set({
+      cues: nextCues,
+      past: nextPast,
+      future: [],
+    });
+  },
 }));

@@ -1,0 +1,221 @@
+.dialog {
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-lg);
+  padding: 0;
+  width: min(600px, 90vw);
+  max-height: 80vh;
+  background: rgba(30, 33, 41, 0.95);
+  backdrop-filter: blur(24px);
+  -webkit-backdrop-filter: blur(24px);
+  color: var(--text-primary);
+  box-shadow: 0 24px 60px rgba(0, 0, 0, 0.6), inset 0 1px 0 rgba(255, 255, 255, 0.1);
+  font-family: inherit;
+  display: flex;
+  flex-direction: column;
+}
+
+.dialog::backdrop {
+  background: rgba(0, 0, 0, 0.7);
+  backdrop-filter: blur(8px);
+}
+
+.header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: var(--space-4) var(--space-5);
+  border-bottom: 1px solid var(--border-subtle);
+  background: rgba(255, 255, 255, 0.02);
+  flex-shrink: 0;
+}
+
+.title {
+  margin: 0;
+  font-size: var(--font-size-md);
+  font-weight: var(--font-weight-semibold);
+  letter-spacing: 0.02em;
+}
+
+.closeButton {
+  appearance: none;
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  color: var(--text-secondary);
+  line-height: 1;
+  padding: var(--space-1);
+  border-radius: var(--radius-sm);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: all var(--transition-fast);
+}
+
+.closeButton:hover:not(:disabled) {
+  background: var(--bg-surface-hover);
+  color: var(--text-primary);
+}
+
+.body {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.fontList {
+  list-style: none;
+  padding: var(--space-3) 0;
+  margin: 0;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+}
+
+.fontItem {
+  display: flex;
+  align-items: center;
+  padding: var(--space-3) var(--space-5);
+  gap: var(--space-4);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+  cursor: pointer;
+  transition: background var(--transition-fast);
+}
+
+.fontItem:hover {
+  background: rgba(255, 255, 255, 0.02);
+}
+
+.fontItem.disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
+.checkboxWrapper {
+  flex-shrink: 0;
+}
+
+.checkbox {
+  accent-color: var(--accent-primary);
+  width: 18px;
+  height: 18px;
+  cursor: pointer;
+}
+
+.fontInfo {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+
+.fontHeader {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.fontFamily {
+  font-size: var(--font-size-md);
+  font-weight: var(--font-weight-medium);
+  color: var(--text-primary);
+}
+
+.installedBadge {
+  font-size: var(--font-size-xs);
+  color: var(--accent-success);
+  background: rgba(16, 185, 129, 0.1);
+  padding: 2px 6px;
+  border-radius: 10px;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.fontSample {
+  font-size: 20px;
+  color: var(--text-secondary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.downloadStatus {
+  font-size: var(--font-size-xs);
+  color: var(--accent-primary);
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.downloadStatus.error {
+  color: var(--accent-danger);
+}
+
+.footer {
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--space-3);
+  padding: var(--space-4) var(--space-5);
+  border-top: 1px solid var(--border-subtle);
+  background: rgba(0, 0, 0, 0.2);
+  flex-shrink: 0;
+}
+
+.cancelButton {
+  appearance: none;
+  background: transparent;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  color: var(--text-secondary);
+  padding: 8px 16px;
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-medium);
+  font-family: inherit;
+  cursor: pointer;
+  transition: all var(--transition-fast);
+}
+
+.cancelButton:hover:not(:disabled) {
+  background: var(--bg-surface-hover);
+  color: var(--text-primary);
+}
+
+.downloadButton {
+  appearance: none;
+  background: var(--accent-primary);
+  color: #fff;
+  border: 1px solid transparent;
+  border-radius: var(--radius-md);
+  padding: 8px 24px;
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-medium);
+  font-family: inherit;
+  cursor: pointer;
+  transition: all var(--transition-fast);
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.downloadButton:hover:not(:disabled) {
+  background: var(--accent-primary-hover);
+  box-shadow: 0 4px 12px rgba(59, 130, 246, 0.3);
+}
+
+.downloadButton:disabled,
+.cancelButton:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.loadingSpinner {
+  animation: spin 1s linear infinite;
+}
+
+@keyframes spin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}

@@ -25,7 +25,7 @@
 
 .cue {
   display: grid;
-  grid-template-columns: 64px 1fr;
+  grid-template-columns: 64px 1fr 32px;
   gap: var(--space-2);
   padding: 8px var(--space-4) 8px 12px;
   border-bottom: 1px solid var(--border-subtle);
@@ -124,6 +124,35 @@
   color: var(--text-primary);
   white-space: pre-wrap;
   word-break: break-word;
+}
+
+.subtitleToggle {
+  display: flex;
+  align-items: flex-start;
+  justify-content: flex-end;
+}
+
+.iconButton {
+  appearance: none;
+  background: transparent;
+  border: none;
+  color: var(--text-muted);
+  cursor: pointer;
+  padding: 4px;
+  border-radius: var(--radius-sm);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: all var(--transition-fast);
+}
+
+.iconButton:hover {
+  background: rgba(255, 255, 255, 0.1);
+  color: var(--text-primary);
+}
+
+.iconButton.active {
+  color: var(--accent-primary);
 }
 
 .hintBar {

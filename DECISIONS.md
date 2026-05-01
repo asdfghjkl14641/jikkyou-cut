@@ -15,6 +15,19 @@
 
 ---
 
+## 2026-05-01 15:30 - 字幕設定ダイアログ UI・フォント管理 UI 実装
+
+- 誰が: Antigravity
+- 何を: 字幕機能 Phase A の UI レイヤを実装
+  - ヘッダに `SubtitleSettingsDialog` を開くボタンを追加。
+  - スタイルプリセット(作成/切替/削除)の管理機能、動的プレビュー(`@font-face` 動的注入)を備えた字幕設定モーダルを実装。
+  - `FontManagerDialog` を実装。`availableFonts` からダウンロード状態を監視・更新。
+  - キュー一覧 (`EditableTranscriptList`) の各行に字幕 ON/OFF トグルボタン (`Subtitles` アイコン) を追加。
+  - Zustand (`editorStore.ts`) に `subtitleSettings` とその操作・永続化保存アクションを追加。
+- 理由: Claude Code が実装した型・フォント管理バックエンドに被さる形で、ユーザーが実際に字幕設定やフォントの取得を行えるようにするため。
+- 影響: `editorStore.ts`, `App.tsx`, `EditableTranscriptList.tsx/css`, `SubtitleSettingsDialog.tsx/css` (新規), `FontManagerDialog.tsx/css` (新規)
+- コミット: (未定)
+
 ## 2026-05-01 14:53 - 字幕機能 Phase A 基盤(型定義 + フォント管理 + 設定永続化)
 
 - 誰が: Claude Code

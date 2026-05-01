@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, type MouseEvent } from 'react';
 import { useEditorStore } from '../store/editorStore';
 import { findCueIndexForCurrent } from '../../../common/segments';
-import { Play } from 'lucide-react';
+import { Play, Subtitles } from 'lucide-react';
 import styles from './EditableTranscriptList.module.css';
 
 type Props = {
@@ -37,6 +37,7 @@ export default function EditableTranscriptList({ onSeek }: Props) {
 
   const selectByIndex = useEditorStore((s) => s.selectByIndex);
   const extendSelectionTo = useEditorStore((s) => s.extendSelectionTo);
+  const toggleCueSubtitle = useEditorStore((s) => s.toggleCueSubtitle);
 
   // Stable map from raw speaker label ("speaker_0") to a 1-indexed display
   // number. Only render the badge when at least 2 distinct speakers were
@@ -168,6 +169,23 @@ export default function EditableTranscriptList({ onSeek }: Props) {
                 <span>{formatTimecode(cue.startSec)}</span>
               </div>
               <div className={styles.text}>{cue.text}</div>
+              
+              {!cue.deleted && (
+                <div className={styles.subtitleToggle}>
+                  <button
+                    type="button"
+                    className={`${styles.iconButton} ${cue.showSubtitle ? styles.active : ''}`}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      toggleCueSubtitle(cue.id);
+                    }}
+                    title={cue.showSubtitle ? "字幕をオフにする" : "字幕をオンにする"}
+                    style={{ opacity: cue.showSubtitle ? 1 : 0.3 }}
+                  >
+                    <Subtitles size={16} />
+                  </button>
+                </div>
+              )}
             </div>
           );
         })}
