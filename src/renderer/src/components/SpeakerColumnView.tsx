@@ -265,24 +265,30 @@ export default function SpeakerColumnView({ onSeek }: Props) {
             >
               <div
                 className={`${styles.cueCard} ${isDragging ? styles.dragging : ''}`}
+                draggable
+                title="ドラッグして話者を変更"
+                onDragStart={(e) => {
+                  // Drags initiated from inside the textarea should fall
+                  // back to the textarea's native text-selection drag —
+                  // never start a card-level cue drag from there. Using
+                  // tagName check on e.target which is the deepest node
+                  // under the cursor at drag time.
+                  if ((e.target as HTMLElement).tagName === 'TEXTAREA') {
+                    e.preventDefault();
+                    return;
+                  }
+                  e.dataTransfer.setData('text/cue-id', cue.id);
+                  e.dataTransfer.effectAllowed = 'move';
+                  setDraggedCueId(cue.id);
+                }}
+                onDragEnd={handleDragEnd}
                 onClick={() => handleFocus(globalIndex, cue.startSec)}
               >
                 <div className={styles.timecode}>
                   <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                    <span
-                      className={styles.dragHandle}
-                      title="ドラッグして話者を変更"
-                      draggable
-                      onDragStart={(e) => {
-                        e.dataTransfer.setData('text/cue-id', cue.id);
-                        e.dataTransfer.effectAllowed = 'move';
-                        setDraggedCueId(cue.id);
-                      }}
-                      onDragEnd={handleDragEnd}
-                      // Stop click on the handle from focusing the card +
-                      // seeking — the user grabbed it to drag, not select.
-                      onClick={(e) => e.stopPropagation()}
-                    >
+                    {/* Visual affordance only — the entire card is the
+                        drag source now, the grip icon is just a hint. */}
+                    <span className={styles.dragHandle} aria-hidden="true">
                       <GripVertical size={12} />
                     </span>
                     {isPlaying && (
@@ -346,6 +352,16 @@ export default function SpeakerColumnView({ onSeek }: Props) {
                       onFocus={() => handleFocus(globalIndex, cue.startSec)}
                       rows={Math.max(1, cue.text.split('\n').length)}
                       style={textAreaStyle}
+                      // Belt-and-braces against the card-level drag: the
+                      // tagName check on the card's onDragStart should
+                      // already catch this, but if a particular browser
+                      // dispatches dragstart on the textarea itself, we
+                      // cancel here too.
+                      onDragStart={(e) => e.preventDefault()}
+                      // Don't let mousedown bubble — keeps the card-level
+                      // drag from being initiated by a mousedown that the
+                      // user intends as the start of text selection.
+                      onMouseDown={(e) => e.stopPropagation()}
                     />
                   );
                 })()}

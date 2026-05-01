@@ -15,6 +15,20 @@
 
 ---
 
+## 2026-05-01 21:50 - DnD 操作性改善(カード全体を drag source 化)
+
+- 誰が: Claude Code
+- 何を: 直前の DnD 実装で報告された「掴めない・反応が悪い」を解消するため、Plan B + C を適用(Plan A は B の効果で実質不要に)
+  - **Plan B**: `draggable=true` を `GripVertical` ハンドル → `cueCard` div 全体へ移動。textarea 以外の場所(タイムコード周辺・話者バッジ余白・カード端など)どこを掴んでもドラッグ開始する
+  - `cueCard.onDragStart` 内で `(e.target as HTMLElement).tagName === 'TEXTAREA'` なら `preventDefault()` → textarea のテキスト選択ドラッグはネイティブに任せる
+  - textarea 側にも belt-and-braces で `onDragStart={preventDefault}` + `onMouseDown={stopPropagation}` を追加。一部ブラウザが textarea 自身に dragstart を流すケースと、mousedown bubble で card 側挙動が混入するケースの両方に保険
+  - **Plan C**: `.cueCard` に `user-select: none` で text-selection drag を抑制 → mousedown→drag 開始がスムーズに。`.textInput` 側で `user-select: text` + `cursor: text` を再宣言してテキスト選択は維持
+  - **Plan A は不要化**: 旧実装はアイコン中心の小さい hit area が問題だったが、カード全体を drag source にしたので hit area 拡大の必要がなくなった。`GripVertical` は `pointer-events: none` の純視覚ヒントに格下げ(カード hover で color 強調)
+  - cursor は `cueCard` で `grab`、`:active` で `grabbing`、textarea で `text` 上書き
+- 理由: HTML5 ネイティブ DnD 自体は変更せず、UX のボトルネック(掴む対象が小さい・テキスト選択と競合)だけ解消する最小コストの修正。ハンドルを一度実装したものをカード化に再構成しただけで実質追加コードは少ない
+- 影響: `SpeakerColumnView.tsx`, `SpeakerColumnView.module.css`
+- コミット: (未定)
+
 ## 2026-05-01 21:30 - 話者カラム表示でドラッグ&ドロップ話者変更
 
 - 誰が: Claude Code

@@ -119,8 +119,19 @@
   border-left: 3px solid transparent;
   border-radius: var(--radius-md);
   padding: var(--space-2);
-  cursor: text;
+  /* The whole card is the drag source — `cursor: grab` confirms it visually
+     anywhere outside the textarea. Native textarea cursor (text) wins
+     inside the textarea since browser defaults beat inherited cursor. */
+  cursor: grab;
+  /* Suppresses ghost text-selection that browsers otherwise initiate on
+     mousedown-and-drag over text content inside the card. The textarea
+     re-enables text selection for itself below. */
+  user-select: none;
   transition: all var(--transition-fast);
+}
+
+.cueCard:active {
+  cursor: grabbing;
 }
 
 .cueCard:hover {
@@ -210,34 +221,32 @@
   resize: none;
   outline: none;
   overflow: hidden;
+  /* Textarea opts back into text selection + I-beam cursor that the card
+     suppressed. Without this the user can't drag-select text inside the
+     cue. */
+  cursor: text;
+  user-select: text;
 }
 
 /* ---- Drag-and-drop speaker reassignment ----------------------------- */
 
-/* Six-dot grip in the cue card header. Subtle by default; brightens on
-   hover so the user discovers it without it shouting in the layout. */
+/* Six-dot grip in the cue card header — purely a visual affordance.
+   The whole card is now the drag source, so the icon is a discovery
+   hint rather than an actual hit target. Brightens on card hover so the
+   user notices "yep, this thing moves." Pointer-events disabled so the
+   icon doesn't intercept mousedowns that should belong to the card-level
+   drag detection. */
 .dragHandle {
   display: inline-flex;
   align-items: center;
   justify-content: center;
   color: var(--text-muted);
-  cursor: grab;
-  padding: 2px;
-  border-radius: var(--radius-sm);
-  transition: color var(--transition-fast), background-color var(--transition-fast);
-  /* Suppresses the platform "ghost text selection" that fires when the
-     user mousedown-drags out of an inline element. The grip should only
-     ever start an HTML5 drag. */
-  user-select: none;
+  pointer-events: none;
+  transition: color var(--transition-fast);
 }
 
-.dragHandle:hover {
+.cueCard:hover .dragHandle {
   color: var(--text-primary);
-  background: var(--bg-surface-hover);
-}
-
-.dragHandle:active {
-  cursor: grabbing;
 }
 
 /* Source card while a drag is in flight. Half-opacity matches the spec;
