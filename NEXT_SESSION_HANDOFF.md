@@ -55,7 +55,7 @@
 - `IDEAS.md`(17 項目の長期構想)+ `docs/COMMENT_ANALYSIS_DESIGN.md`(次フェーズ MVP 設計)新規
 - `HANDOFF.md` 全面書き直し、`TODO.md` セクション再編
 
-### 6. プログレッシブ DL + 並行文字起こしの技術検証(spike)(`<NEW_HASH>`)
+### 6. プログレッシブ DL + 並行文字起こしの技術検証(spike)(`b73faa0`)
 - ユーザ要望「2-4 時間の長尺配信 DL を待たず YouTube ライクに再生 + シーク」を実現するための土台調査
 - 4 論点を実機 + 公式ドキュメントで検証、`docs/PROGRESSIVE_DL_SPIKE_REPORT.md` にまとめた
 - 結論ハイライト:
@@ -117,14 +117,14 @@
 ## 1. 現在のリポジトリ状態(更新時刻 2026-05-02 09:00)
 
 ```
-HEAD = <NEW_HASH> docs: プログレッシブ DL + 並行文字起こしの技術検証(spike)
-origin/main = <NEW_HASH>(同期済み)
+HEAD = b73faa0 docs: プログレッシブ DL + 並行文字起こしの技術検証(spike)
+origin/main = b73faa0(同期済み)
 working tree clean
 ```
 
 git log -10 --oneline(凍結時点):
 ```
-<NEW_HASH> docs: プログレッシブ DL + 並行文字起こしの技術検証(spike)
+b73faa0 docs: プログレッシブ DL + 並行文字起こしの技術検証(spike)
 6f6878e docs: f754527 のコミットハッシュを backfill
 f754527 fix(url-download): yt-dlp 進捗 0.0% 固着の真因特定 + --progress 追加(--print 暗黙 quiet モード問題)
 b3a400e docs: 2b3ffe6 のコミットハッシュを NEXT_SESSION_HANDOFF.md と DECISIONS.md に backfill
@@ -153,7 +153,7 @@ a0a809e style(dropzone): remove 'or' text and divider
 | コメント分析グラフ(モックデータ)| `919e6c0` / `1678746` で簡素化 | **実機確認済み** — yt-dlp チャット取得は未実装 |
 | 3 フェーズ構造(load / clip-select / edit)| `1678746` | **実機確認済み** |
 | ドキュメント整理(IDEAS.md + COMMENT_ANALYSIS_DESIGN.md)| `076240f` | 完了 |
-| プログレッシブ DL spike(検証のみ、本実装未着手)| `<NEW_HASH>` | spike レポート完成 — `docs/PROGRESSIVE_DL_SPIKE_REPORT.md` 参照 |
+| プログレッシブ DL spike(検証のみ、本実装未着手)| `b73faa0` | spike レポート完成 — `docs/PROGRESSIVE_DL_SPIKE_REPORT.md` 参照 |
 
 ## 3. 進行中タスク(本セッション末尾時点)
 
@@ -210,7 +210,7 @@ a0a809e style(dropzone): remove 'or' text and divider
 - 1080p AVC1 が無い動画は MP4 単一ストリーム → 何でも、の三段フォールバック
 - 進捗パースは `--progress-template` で固定フォーマット化、yt-dlp デフォルト出力には依存しない
 
-### 4.6 プログレッシブ DL の方針(`<NEW_HASH>` spike で方向性確定)
+### 4.6 プログレッシブ DL の方針(`b73faa0` spike で方向性確定)
 
 - **目標**: 2-4 時間の長尺配信を DL 完了を待たず YouTube ライクに再生 + シーク可能に
 - 検証結果(`docs/PROGRESSIVE_DL_SPIKE_REPORT.md` 参照):
