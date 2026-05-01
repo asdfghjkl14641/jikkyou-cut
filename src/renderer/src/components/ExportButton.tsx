@@ -8,12 +8,13 @@ import styles from './ExportButton.module.css';
 export default function ExportButton() {
   const filePath = useEditorStore((s) => s.filePath);
   const cues = useEditorStore((s) => s.cues);
+  const durationSec = useEditorStore((s) => s.durationSec);
   const exportStatus = useEditorStore((s) => s.exportStatus);
   const { start } = useExport();
 
   const keptRegionCount = useMemo(
-    () => deriveKeptRegions(cues).length,
-    [cues],
+    () => deriveKeptRegions(cues, durationSec).length,
+    [cues, durationSec],
   );
 
   const disabledReason: string | null = !filePath

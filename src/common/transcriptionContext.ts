@@ -1,46 +1,50 @@
 import type { TranscriptionContext } from './config';
 
-export function buildPrompt(ctx: TranscriptionContext): string {
-  const trimmed = {
-    gameTitle: ctx.gameTitle.trim(),
-    characters: ctx.characters.trim(),
-    catchphrases: ctx.catchphrases.trim(),
-    notes: ctx.notes.trim(),
-  };
-  const hasContext =
-    trimmed.gameTitle ||
-    trimmed.characters ||
-    trimmed.catchphrases ||
-    trimmed.notes;
+const MAX_VOCAB_TERMS = 100;
 
-  const base = `あなたは日本語音声の文字起こし専門家です。添付された音声を文字起こしし、SRT形式で出力してください。
+// Splits a free-text field into individual vocabulary terms. Accepts the
+// usual delimiters Japanese users mix in: newline, ASCII/full-width comma,
+// and full-width space. Plain ASCII space is intentionally NOT a delimiter
+// here — many Japanese terms (especially game titles / phrases) contain
+// half-width spaces.
+const splitMulti = (s: string): string[] =>
+  s.split(/[\n,、,　]+/u).map((t) => t.trim()).filter((t) => t.length > 0);
 
-## 文字起こしのルール
-- 日本語で出力
-- SRT形式(連番、タイムコード "HH:MM:SS,mmm --> HH:MM:SS,mmm"、テキスト、空行)で出力
-- タイムコードは音声の実際の発話時間に合わせる
-- フィラー語(えーっと、あー、んー)は基本省略してよい
-- 読みやすい文単位でセグメント分割(1セグメント5〜10秒目安)`;
+// `notes` is split only on newlines so longer phrases (full sentences /
+// notes that contain commas) survive as a single hint to the ASR.
+const splitNewlinesOnly = (s: string): string[] =>
+  s.split(/\n+/).map((t) => t.trim()).filter((t) => t.length > 0);
 
-  let contextSection = '';
-  if (hasContext) {
-    const lines: string[] = [];
-    if (trimmed.gameTitle) {
-      lines.push(`このオーディオは「${trimmed.gameTitle}」のゲーム実況です。`);
+/**
+ * Builds the `custom_vocabulary` array sent to Gladia from the user's
+ * context form. Pure function — given identical input, produces an
+ * identical, deterministic list (de-duplicated, capped at 100 terms).
+ */
+export function buildCustomVocabulary(ctx: TranscriptionContext): string[] {
+  const terms: string[] = [];
+
+  const game = ctx.gameTitle.trim();
+  if (game) terms.push(game);
+
+  for (const t of splitMulti(ctx.characters)) terms.push(t);
+  for (const t of splitMulti(ctx.catchphrases)) terms.push(t);
+  for (const t of splitNewlinesOnly(ctx.notes)) terms.push(t);
+
+  // De-duplicate while preserving first-seen order.
+  const seen = new Set<string>();
+  const unique: string[] = [];
+  for (const t of terms) {
+    if (!seen.has(t)) {
+      seen.add(t);
+      unique.push(t);
     }
-    if (trimmed.characters) {
-      lines.push(`登場するキャラクター・固有名詞: ${trimmed.characters}`);
-    }
-    if (trimmed.catchphrases) {
-      lines.push(`配信者の口癖: ${trimmed.catchphrases}`);
-    }
-    if (trimmed.notes) {
-      lines.push(`その他の補足: ${trimmed.notes}`);
-    }
-    contextSection = `\n\n## コンテキスト情報\n${lines.join('\n')}\n\nこれらの固有名詞・口癖は文字起こし時に正しく反映してください。`;
   }
 
-  const tail = `\n\n## 出力形式\nSRT形式のみを出力。前置きやコメント、説明文は一切不要。`;
-
-  return base + contextSection + tail;
+  if (unique.length > MAX_VOCAB_TERMS) {
+    console.warn(
+      `[gladia] custom_vocabulary exceeded ${MAX_VOCAB_TERMS} terms (${unique.length}); truncating`,
+    );
+    return unique.slice(0, MAX_VOCAB_TERMS);
+  }
+  return unique;
 }

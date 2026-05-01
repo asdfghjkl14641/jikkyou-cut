@@ -15,8 +15,14 @@ export type KeptRegion = {
  * Derives the regions of the source video that survive editing. Adjacent
  * kept cues are coalesced into a single region; a deleted cue (or the end of
  * the array) terminates a region.
+ * 
+ * If `durationSec` is provided, silence at the beginning (0 to first cue)
+ * and end (last cue to duration) are automatically included as kept regions.
  */
-export function deriveKeptRegions(cues: readonly TranscriptCue[]): KeptRegion[] {
+export function deriveKeptRegions(
+  cues: readonly TranscriptCue[],
+  durationSec?: number | null,
+): KeptRegion[] {
   const regions: KeptRegion[] = [];
   let current: KeptRegion | null = null;
 
@@ -40,6 +46,50 @@ export function deriveKeptRegions(cues: readonly TranscriptCue[]): KeptRegion[] 
     }
   }
   if (current) regions.push(current);
+
+  // Apply silence fixes if we have cues
+  if (cues.length > 0) {
+    const firstCue = cues[0];
+    // 1. Front silence (0 to first cue)
+    if (firstCue && firstCue.startSec > 0) {
+      const first = regions[0];
+      if (first && first.startSec === firstCue.startSec) {
+        // First kept region starts exactly at the first cue -> extend it to 0
+        first.startSec = 0;
+      } else {
+        // First cue was deleted, or no cues kept -> prepend a silence region
+        regions.unshift({
+          startSec: 0,
+          endSec: firstCue.startSec,
+          cueIds: [],
+        });
+      }
+    }
+
+    // 2. Trailing silence (last cue to duration)
+    const lastCue = cues[cues.length - 1];
+    if (durationSec != null && lastCue && durationSec > lastCue.endSec) {
+      const last = regions[regions.length - 1];
+      if (last && last.endSec === lastCue.endSec) {
+        // Last kept region ends exactly at the last cue -> extend it to duration
+        last.endSec = durationSec;
+      } else {
+        // Last cue was deleted, or no cues kept -> append a silence region
+        regions.push({
+          startSec: lastCue.endSec,
+          endSec: durationSec,
+          cueIds: [],
+        });
+      }
+    }
+  } else if (durationSec != null && durationSec > 0) {
+    // No cues at all -> keep the entire video
+    regions.push({
+      startSec: 0,
+      endSec: durationSec,
+      cueIds: [],
+    });
+  }
 
   return regions;
 }
@@ -95,4 +145,48 @@ export function decidePreviewSkip(
     return { kind: 'none' };
   }
   return { kind: 'skip', toSec: next.startSec };
+}
+
+/**
+ * Picks the cue index the transcript list should scroll to when the user
+ * seeks the video. Unlike playback-time highlight detection (▶ + red bar),
+ * this MUST always return *some* cue when cues exist — the user clicked
+ * somewhere expecting the list to follow.
+ *
+ *  1. If `currentSec` falls inside a cue, return that cue's index.
+ *  2. Else (gap between cues / beyond the last cue), return the index of
+ *     the most recent cue that ended at or before `currentSec`.
+ *  3. Else (`currentSec` is before the first cue, e.g. lead-in silence),
+ *     return 0 so the first cue scrolls into view.
+ *
+ * Returns `null` only when the cue list is empty.
+ *
+ * Pure function. Assumes cues are non-overlapping and sorted by `startSec`.
+ */
+export function findCueIndexForScroll(
+  currentSec: number,
+  cues: readonly TranscriptCue[],
+): number | null {
+  if (cues.length === 0) return null;
+
+  // 1. Currently inside a cue.
+  for (let i = 0; i < cues.length; i += 1) {
+    const c = cues[i];
+    if (!c) continue;
+    if (currentSec >= c.startSec && currentSec < c.endSec) {
+      return i;
+    }
+  }
+
+  // 2. In a gap (or past the last cue) — pick the nearest preceding cue.
+  for (let i = cues.length - 1; i >= 0; i -= 1) {
+    const c = cues[i];
+    if (!c) continue;
+    if (c.endSec <= currentSec) {
+      return i;
+    }
+  }
+
+  // 3. Before the first cue (lead-in silence).
+  return 0;
 }

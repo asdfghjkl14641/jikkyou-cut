@@ -25,7 +25,7 @@ export default function ExportPreview() {
 
   const summary = useMemo(() => {
     if (durationSec == null || durationSec <= 0 || cues.length === 0) return null;
-    const regions = deriveKeptRegions(cues);
+    const regions = deriveKeptRegions(cues, durationSec);
     const keptSec = regions.reduce(
       (acc, r) => acc + (r.endSec - r.startSec),
       0,

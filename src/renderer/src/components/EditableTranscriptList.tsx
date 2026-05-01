@@ -1,5 +1,6 @@
-import { useEffect, useRef, type MouseEvent } from 'react';
+import { useEffect, useMemo, useRef, type MouseEvent } from 'react';
 import { useEditorStore } from '../store/editorStore';
+import { findCueIndexForScroll } from '../../../common/segments';
 import { Play } from 'lucide-react';
 import styles from './EditableTranscriptList.module.css';
 
@@ -21,6 +22,7 @@ export default function EditableTranscriptList({ onSeek }: Props) {
   const cues = useEditorStore((s) => s.cues);
   const selectedIds = useEditorStore((s) => s.selectedIds);
   const focusedIndex = useEditorStore((s) => s.focusedIndex);
+  const seekNonce = useEditorStore((s) => s.seekNonce);
 
   // Derive currentCueIndex from currentSec via a memoising selector. Returns
   // the same number across rAF ticks unless the playhead crosses a cue
@@ -40,14 +42,63 @@ export default function EditableTranscriptList({ onSeek }: Props) {
   const selectByIndex = useEditorStore((s) => s.selectByIndex);
   const extendSelectionTo = useEditorStore((s) => s.extendSelectionTo);
 
-  const focusedRowRef = useRef<HTMLDivElement | null>(null);
+  // Stable map from raw speaker label ("speaker_0") to a 1-indexed display
+  // number. Only render the badge when at least 2 distinct speakers were
+  // detected — single-speaker recordings shouldn't add UI noise.
+  const speakerNumberOf = useMemo(() => {
+    const order = new Map<string, number>();
+    for (const c of cues) {
+      if (c.speaker != null && !order.has(c.speaker)) {
+        order.set(c.speaker, order.size + 1);
+      }
+    }
+    return order;
+  }, [cues]);
+  const showSpeakerBadges = speakerNumberOf.size > 1;
 
+  // Stable map of cue.id → row DOM node. Using a Map (rather than two
+  // mutually-exclusive single refs) avoids the inline-callback churn that
+  // made playingRowRef briefly null between renders.
+  const rowRefs = useRef<Map<string, HTMLDivElement>>(new Map());
+  const setRowRef = (id: string) => (node: HTMLDivElement | null) => {
+    if (node) rowRefs.current.set(id, node);
+    else rowRefs.current.delete(id);
+  };
+
+  // Scroll the focused row into view when keyboard navigation moves it.
+  // Reads cues from getState() so this effect doesn't refire on every cue
+  // edit — only on focus changes.
   useEffect(() => {
-    focusedRowRef.current?.scrollIntoView({
+    if (focusedIndex == null) return;
+    const c = useEditorStore.getState().cues[focusedIndex];
+    if (!c) return;
+    rowRefs.current.get(c.id)?.scrollIntoView({
       block: 'nearest',
       behavior: 'smooth',
     });
   }, [focusedIndex]);
+
+  // Scroll a relevant row into view ONLY on explicit seek events
+  // (bumpSeekNonce is called from VideoPlayer.handleSeeked). Ordinary
+  // playback drift does not trigger scrolling.
+  //
+  // Note: this picks the *scroll target*, NOT the playing-cue marker. When
+  // the seek lands in a between-cue gap (silence) we still want the list to
+  // follow — `findCueIndexForScroll` returns the nearest preceding cue in
+  // that case, while the ▶ + red-bar marker (driven separately by
+  // `currentCueIndex`) correctly stays off in gaps.
+  useEffect(() => {
+    if (seekNonce === 0) return; // Skip the mount-time fire
+    const state = useEditorStore.getState();
+    const idx = findCueIndexForScroll(state.currentSec, state.cues);
+    if (idx == null) return;
+    const cue = state.cues[idx];
+    if (!cue) return;
+    rowRefs.current.get(cue.id)?.scrollIntoView({
+      block: 'nearest',
+      behavior: 'smooth',
+    });
+  }, [seekNonce]);
 
   const handleRowClick = (
     e: MouseEvent<HTMLDivElement>,
@@ -102,7 +153,7 @@ export default function EditableTranscriptList({ onSeek }: Props) {
           return (
             <div
               key={cue.id}
-              ref={isFocused ? focusedRowRef : null}
+              ref={setRowRef(cue.id)}
               className={className}
               onClick={(e) => handleRowClick(e, index, cue.startSec)}
               role="button"
@@ -112,6 +163,14 @@ export default function EditableTranscriptList({ onSeek }: Props) {
                 {isPlaying && (
                   <span className={styles.playingIcon} aria-label="再生中">
                     <Play size={10} fill="currentColor" />
+                  </span>
+                )}
+                {showSpeakerBadges && cue.speaker != null && (
+                  <span
+                    className={styles.speakerBadge}
+                    aria-label={`話者${speakerNumberOf.get(cue.speaker)}`}
+                  >
+                    [{speakerNumberOf.get(cue.speaker)}]
                   </span>
                 )}
                 <span>{formatTimecode(cue.startSec)}</span>

@@ -11,7 +11,7 @@ type Props = {
   onClearApiKey: () => Promise<void>;
 };
 
-const API_KEY_DOC_URL = 'https://aistudio.google.com/app/apikey';
+const API_KEY_DOC_URL = 'https://app.gladia.io/';
 
 export default function SettingsDialog({
   open,
@@ -96,7 +96,7 @@ export default function SettingsDialog({
       <div className={styles.body}>
         <div className={styles.section}>
           <label className={styles.label} htmlFor="api-key">
-            Gemini APIキー
+            Gladia APIキー
           </label>
 
           {hasApiKey && (
@@ -121,14 +121,14 @@ export default function SettingsDialog({
               className={styles.input}
               value={keyInput}
               onChange={(e) => setKeyInput(e.target.value)}
-              placeholder={hasApiKey ? '新しいキーを入力して上書き...' : 'AIza...'}
+              placeholder={hasApiKey ? '新しいキーを入力して上書き...' : 'Gladia API key'}
               spellCheck={false}
               autoComplete="off"
               disabled={saving}
             />
           </div>
           <div className={styles.help}>
-            Google AI Studio で発行できます:{' '}
+            Gladia ダッシュボードで発行できます:{' '}
             <a href={API_KEY_DOC_URL} target="_blank" rel="noreferrer">
               {API_KEY_DOC_URL}
             </a>

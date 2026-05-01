@@ -26,7 +26,10 @@ export default function Timeline({ onSeek }: Props) {
 
   const trackRef = useRef<HTMLDivElement>(null);
 
-  const regions = useMemo(() => deriveKeptRegions(cues), [cues]);
+  const regions = useMemo(
+    () => deriveKeptRegions(cues, durationSec),
+    [cues, durationSec],
+  );
 
   if (durationSec == null || durationSec <= 0) {
     return (

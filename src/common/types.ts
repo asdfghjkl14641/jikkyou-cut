@@ -9,6 +9,9 @@ export type TranscriptCue = {
   // Edit state — `deleted: true` means the cue (and its underlying video
   // region) is marked for removal. Persisted with the project file.
   deleted: boolean;
+  // Diarization label from the ASR (e.g. "speaker_0"). Undefined when the
+  // engine produced no speaker info or only one speaker. Persisted.
+  speaker?: string;
 };
 
 export type TranscriptionResult = {

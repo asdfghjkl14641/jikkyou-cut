@@ -11,7 +11,7 @@ export default function ApiKeySetupBanner({ onOpenSettings }: Props) {
       <div className={styles.message}>
         <KeyRound size={16} className={styles.icon} />
         <span>
-          Gemini APIキーが設定されていません。文字起こしを行うにはAPIキーを設定してください。
+          Gladia APIキーが設定されていません。文字起こしを行うにはAPIキーを設定してください。
         </span>
       </div>
       <button type="button" className={styles.cta} onClick={onOpenSettings}>

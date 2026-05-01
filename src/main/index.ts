@@ -6,7 +6,7 @@ import { openVideoFileDialog } from './fileDialog';
 import { buildMenu } from './menu';
 import { loadConfig, saveConfig } from './config';
 import * as secureStorage from './secureStorage';
-import * as gemini from './gemini';
+import * as gladia from './gladia';
 import * as project from './project';
 import * as exportModule from './export';
 import type { AppConfig } from '../common/config';
@@ -70,7 +70,7 @@ function registerIpcHandlers() {
   });
   ipcMain.handle('apiKey:clear', () => secureStorage.deleteSecret());
   ipcMain.handle('apiKey:validate', (_e, key: string) =>
-    gemini.validateApiKey(key),
+    gladia.validateApiKey(key),
   );
 
   // transcription
@@ -78,7 +78,7 @@ function registerIpcHandlers() {
     const apiKey = await secureStorage.loadSecret();
     if (!apiKey) throw new Error('APIキーが設定されていません');
     const config = await loadConfig();
-    return gemini.transcribe({
+    return gladia.transcribe({
       videoFilePath: args.videoFilePath,
       durationSec: args.durationSec,
       apiKey,
@@ -88,7 +88,7 @@ function registerIpcHandlers() {
       },
     });
   });
-  ipcMain.handle('transcription:cancel', () => gemini.cancelTranscription());
+  ipcMain.handle('transcription:cancel', () => gladia.cancelTranscription());
 
   // project file
   ipcMain.handle('project:load', (_e, videoFilePath: string) =>

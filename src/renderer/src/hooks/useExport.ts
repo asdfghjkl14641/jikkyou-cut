@@ -6,6 +6,7 @@ import { EXPORT_CANCELLED } from '../../../common/types';
 export function useExport() {
   const filePath = useEditorStore((s) => s.filePath);
   const cues = useEditorStore((s) => s.cues);
+  const durationSec = useEditorStore((s) => s.durationSec);
   const status = useEditorStore((s) => s.exportStatus);
 
   const startState = useEditorStore((s) => s.startExportState);
@@ -21,7 +22,7 @@ export function useExport() {
 
   const start = useCallback(async () => {
     if (!filePath || cues.length === 0) return;
-    const regions = deriveKeptRegions(cues);
+    const regions = deriveKeptRegions(cues, durationSec);
     if (regions.length === 0) return;
 
     // Force-flush the project file before export so the user's last edits

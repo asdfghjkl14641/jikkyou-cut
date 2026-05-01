@@ -52,6 +52,12 @@ type EditorState = {
   // experiences the editor's projected output without rendering it.
   previewMode: boolean;
 
+  // Bumped on every video seek. Components that want to react specifically
+  // to "the user just seeked" (vs. ordinary playback drift) subscribe to
+  // this counter — useEffect on `seekNonce` fires reliably once per seek
+  // without the noise of currentSec changes during normal playback.
+  seekNonce: number;
+
   // file lifecycle
   setFile: (absPath: string) => void;
   clearFile: () => void;
@@ -93,6 +99,7 @@ type EditorState = {
   resetExportState: () => void;
 
   setPreviewMode: (on: boolean) => void;
+  bumpSeekNonce: () => void;
 };
 
 const basename = (absPath: string): string => {
@@ -149,6 +156,8 @@ export const useEditorStore = create<EditorState>((set, get) => ({
   exportError: null,
 
   previewMode: true,
+
+  seekNonce: 0,
 
   setFile: (absPath) =>
     set({
@@ -445,4 +454,6 @@ export const useEditorStore = create<EditorState>((set, get) => ({
     }),
 
   setPreviewMode: (on) => set({ previewMode: on }),
+
+  bumpSeekNonce: () => set((s) => ({ seekNonce: s.seekNonce + 1 })),
 }));

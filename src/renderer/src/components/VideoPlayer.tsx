@@ -47,9 +47,13 @@ const VideoPlayer = forwardRef<VideoPlayerHandle, Props>(function VideoPlayer(
   onCurrentTimeRef.current = onCurrentTime;
 
   const cues = useEditorStore((s) => s.cues);
+  const durationSec = useEditorStore((s) => s.durationSec);
   const previewMode = useEditorStore((s) => s.previewMode);
 
-  const regions = useMemo(() => deriveKeptRegions(cues), [cues]);
+  const regions = useMemo(
+    () => deriveKeptRegions(cues, durationSec),
+    [cues, durationSec],
+  );
   const regionsRef = useRef(regions);
   regionsRef.current = regions;
 
@@ -231,6 +235,9 @@ const VideoPlayer = forwardRef<VideoPlayerHandle, Props>(function VideoPlayer(
   const handleSeeked = () => {
     const v = videoRef.current;
     if (v) onCurrentTimeRef.current?.(v.currentTime);
+    // Notify store subscribers that an explicit seek just happened.
+    // EditableTranscriptList uses this to scroll the current cue into view.
+    useEditorStore.getState().bumpSeekNonce();
   };
 
   const handleLoadedMetadata = () => {
