@@ -4,6 +4,7 @@ import { findCueIndexForCurrent } from '../../../common/segments';
 import { Play, Subtitles } from 'lucide-react';
 import ViewModeTab from './ViewModeTab';
 import SpeakerColumnView from './SpeakerColumnView';
+import SpeakerDropdown from './SpeakerDropdown';
 import styles from './EditableTranscriptList.module.css';
 
 type Props = {
@@ -26,6 +27,7 @@ export default function EditableTranscriptList({ onSeek }: Props) {
   const focusedIndex = useEditorStore((s) => s.focusedIndex);
   const seekNonce = useEditorStore((s) => s.seekNonce);
   const viewMode = useEditorStore((s) => s.viewMode);
+  const collaborationMode = useEditorStore((s) => s.collaborationMode);
 
   // Derive currentCueIndex from currentSec via a memoising selector that
   // also falls back to the nearest preceding cue when `currentSec` lies in
@@ -86,7 +88,7 @@ export default function EditableTranscriptList({ onSeek }: Props) {
     }
     return order;
   }, [cues]);
-  const showSpeakerBadges = speakerNumberOf.size > 1;
+  const showSpeakerBadges = collaborationMode || speakerNumberOf.size > 1;
 
   // Stable map of cue.id → row DOM node. Using a Map (rather than two
   // mutually-exclusive single refs) avoids the inline-callback churn that
@@ -201,13 +203,11 @@ export default function EditableTranscriptList({ onSeek }: Props) {
                       <Play size={10} fill="currentColor" />
                     </span>
                   )}
-                  {showSpeakerBadges && cue.speaker != null && (
-                    <span
-                      className={styles.speakerBadge}
-                      aria-label={`話者${speakerNumberOf.get(cue.speaker)}`}
-                    >
-                      [{speakerNumberOf.get(cue.speaker)}]
-                    </span>
+                  {showSpeakerBadges && (
+                    <SpeakerDropdown
+                      cueId={cue.id}
+                      currentSpeaker={cue.speaker}
+                    />
                   )}
                   <span>{formatTimecode(cue.startSec)}</span>
                 </div>

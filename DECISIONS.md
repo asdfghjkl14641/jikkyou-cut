@@ -15,6 +15,14 @@
 
 ---
 
+## 2026-05-01 19:53 - 話者ID手動修正UI(Phase B-2)実装
+
+- 誰が: Antigravity
+- 何を: キューバッジクリックで話者IDをドロップダウンから変更可能にし、新規話者追加・話者なし対応、Undo/Redo対応を実装。
+- 理由: Gladia自動分離の限界をユーザの手動補正で補うため。
+- 影響: `editorStore.ts`, `EditableTranscriptList.tsx`, `SpeakerColumnView.tsx`, `SpeakerDropdown.tsx`(新規)
+- コミット: (未定)
+
 ## 2026-05-01 20:50 - 話者数指定 UI で Gladia 話者分離精度を向上
 
 - 誰が: Claude Code

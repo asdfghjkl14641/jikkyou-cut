@@ -2,6 +2,7 @@ import React, { useEffect, useMemo, useRef } from 'react';
 import { useEditorStore } from '../store/editorStore';
 import { findCueIndexForCurrent } from '../../../common/segments';
 import { Play, User } from 'lucide-react';
+import SpeakerDropdown from './SpeakerDropdown';
 import styles from './SpeakerColumnView.module.css';
 
 type Props = {
@@ -157,12 +158,18 @@ export default function SpeakerColumnView({ onSeek }: Props) {
             >
               <div className={styles.cueCard} onClick={() => handleFocus(globalIndex, cue.startSec)}>
                 <div className={styles.timecode}>
-                  {isPlaying && (
-                    <span className={styles.playingIcon} aria-label="再生中">
-                      <Play size={10} fill="currentColor" />
-                    </span>
-                  )}
-                  <span>{formatTimecode(cue.startSec)}</span>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                    {isPlaying && (
+                      <span className={styles.playingIcon} aria-label="再生中">
+                        <Play size={10} fill="currentColor" />
+                      </span>
+                    )}
+                    <span>{formatTimecode(cue.startSec)}</span>
+                  </div>
+                  <SpeakerDropdown
+                    cueId={cue.id}
+                    currentSpeaker={cue.speaker}
+                  />
                 </div>
                 <textarea
                   className={styles.textInput}

@@ -115,6 +115,7 @@ type EditorState = {
   loadSubtitleSettings: () => Promise<void>;
   updateSubtitleSettings: (settings: SubtitleSettings) => void;
   toggleCueSubtitle: (cueId: string) => void;
+  updateCueSpeaker: (cueId: string, newSpeakerId: string | undefined) => void;
 
   // Collaboration mode (Gladia diarization toggle). Mirrors the persisted
   // `AppConfig.collaborationMode` — App.tsx hydrates on mount, the setter
@@ -529,6 +530,21 @@ export const useEditorStore = create<EditorState>((set, get) => ({
     const snapshot = cloneCues(cues);
     const nextCues = cues.map((c) =>
       c.id === cueId ? { ...c, showSubtitle: !c.showSubtitle } : c,
+    );
+    const nextPast = [...past, snapshot];
+    if (nextPast.length > HISTORY_LIMIT) nextPast.shift();
+    set({
+      cues: nextCues,
+      past: nextPast,
+      future: [],
+    });
+  },
+
+  updateCueSpeaker: (cueId, newSpeakerId) => {
+    const { cues, past } = get();
+    const snapshot = cloneCues(cues);
+    const nextCues = cues.map((c) =>
+      c.id === cueId ? { ...c, speaker: newSpeakerId } : c,
     );
     const nextPast = [...past, snapshot];
     if (nextPast.length > HISTORY_LIMIT) nextPast.shift();
