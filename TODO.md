@@ -7,8 +7,6 @@
 ## 🚧 進行中
 
 - **コメント分析画面(MVP)** — 詳細は `docs/COMMENT_ANALYSIS_DESIGN.md` 参照
-  - [x] グラフ UI(モックデータ)
-  - [x] 3 フェーズ構造への組み込み + UI 簡素化
   - [ ] yt-dlp でのチャットリプレイ取得(Claude Code)
   - [ ] スコア計算ロジック(キーワード辞書 + 密度集計)
   - [ ] edit フェーズで clipRange を使った動画範囲絞り込み(Timeline/VideoPlayer 連携)
@@ -80,6 +78,10 @@
 
 ## ✅ 完了済み(直近)
 
+### 2026-05-02
+
+- URL DL バグ修正(進捗 0.0% 固着 + DL 後動画再生不可) — yt-dlp 引数に `-f bestvideo[ext=mp4][vcodec^=avc1]+bestaudio[ext=m4a]/best[ext=mp4]/best` + `--progress-template` を追加。Chromium 互換 mp4-avc1-aac 強制 + 進捗パースの安定化を一度に解決
+
 ### 2026-05-01(連続セッション、新しいものが下)
 
 - 字幕機能 Phase A 基盤(型定義 + フォント管理 + 設定永続化)
@@ -101,6 +103,8 @@
 - DnD 操作性改善(カード全体を drag source 化)
 - URL 動画ダウンロード機能(yt-dlp 統合、YouTube + Twitch 対応、利用規約同意フロー、画質選択)
 - DropZone に URL DL 機能を統合(動線一本化、ヘッダの DL アイコン削除)
+- 3 フェーズ構造への再編 (Load -> Clip Selection -> Edit)
+- コメント分析グラフ UI (モックデータ、ドラッグ選択、簡素化版)
 
 ### 2026-04-30 以前
 

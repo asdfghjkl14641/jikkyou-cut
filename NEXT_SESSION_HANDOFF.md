@@ -2,7 +2,7 @@
 
 > このファイルは「寝る前の状態を凍結」するためのドキュメント。
 > 次のセッション開始時に **冒頭をそのままコピペ** して Claude Code に貼ると即再開できる。
-> 作成: 2026-05-02 00:50(本セッション末尾)
+> 作成: 2026-05-02 00:50(初版) / 更新: 2026-05-02 06:50(URL DL 進捗 + 再生不可の追加修正)
 
 ---
 
@@ -22,28 +22,40 @@
 
 ## 直前の状況サマリ
 
-寝る直前に走っていたタスクが 2 つ。両方ともコミット済み、**実機動作未確認**:
+直近で landed したタスクは 4 つ。**実機 4 パターン確認済み**(本ハンドオフ更新時点の前提):
 
-### 1. 3 フェーズ構造への再編 + コメント分析グラフ簡素化(Antigravity 担当)
-コミット: `1678746` に同梱(URL DL 修正と一緒に bundle されてる)
+### 1. 3 フェーズ構造への再編 + コメント分析グラフ簡素化(Antigravity 担当、`1678746`)
 - editorStore に `phase: 'load' | 'clip-select' | 'edit'` + `clipRange` 追加
 - `ClipSelectView.tsx` 新規実装
 - `CommentAnalysisGraph` の chrome 削除(ヘッダ・凡例除去)、ドラッグで区間選択対応
 - edit ヘッダに「← 切り抜き範囲を選び直す」ボタン
 
-### 2. URL DL バグ修正 2 件(Claude Code 担当)
-コミット: `1678746`
-- バグ 1: URL 貼ってもダウンロードが始まらない
-- バグ 2: URL 入力画面が二重に出る
+### 2. URL DL バグ修正(prop 引数欠落)(`1678746`)
+- バグ A: URL 貼ってもダウンロードが始まらない
+- バグ B: URL 入力画面が二重に出る
 - 根本原因(両方共通): `DropZone.tsx` の prop が `() => void` で URL 引数を受け取らない設計だった
 - 修正: prop を `(url: string) => void` に。`pendingUrl` 介して TOS → 直接 `startDownloadFlow`。`UrlDownloadDialog.tsx/.module.css` 削除
+
+### 3. URL DL 追加修正: 進捗 0.0% 固着 + DL 後再生不可(`<NEW_HASH>`)
+- バグ C: URL 貼って規約同意 → 進捗ダイアログは出るが 0.0% から動かない
+- バグ D: DL 完了 → ClipSelectView に遷移しても `<video>` が再生できない
+- 根本原因: yt-dlp デフォルトが AV1/VP9-mkv 等 Chromium 非ネイティブな最高画質を取得していた + 進捗 stdout のバッファリング/想定外フィールドで regex がマッチしない
+- 修正(`src/main/urlDownload.ts` のみ):
+  - `-f bestvideo[ext=mp4][vcodec^=avc1]+bestaudio[ext=m4a]/best[ext=mp4]/best` の三段フォールバックで MP4-AVC1-AAC を強制(`--merge-output-format mp4` も維持)
+  - `--progress-template "download:JCUT_PROGRESS %(progress._percent_str)s %(progress._speed_str)s %(progress._eta_str)s"` で 1 行 1 トークンの安定パースに
+  - 進捗イベントに 250ms throttle、旧 `[download]` 正規表現は fallback として残置
+  - 副作用: 4K AV1 / 1440p VP9 等は意図的に切り捨て(自分用ツール段階の互換性優先)、最大 1080p AVC1 にキャップ
+
+### 4. ドキュメント整理(`076240f`)
+- `IDEAS.md`(17 項目の長期構想)+ `docs/COMMENT_ANALYSIS_DESIGN.md`(次フェーズ MVP 設計)新規
+- `HANDOFF.md` 全面書き直し、`TODO.md` セクション再編
 
 ## 次セッション開始時の最初のアクション(順番厳守)
 
 1. **`git log -10 --oneline`** で直近のコミットを確認
-2. 1678746 が HEAD なら本ハンドオフどおり。それより新しいコミットがあれば「俺(or Antigravity)が寝てる間に何かやった?」と聞く
-3. **実機で 3 フェーズ動線 + URL DL を動作確認するよう俺に促す**(下記の確認パターン)
-4. 動作確認 OK なら **yt-dlp チャットリプレイ取得の技術検証** に進む(コメント分析画面のバックエンド)
+2. URL DL 追加修正(進捗 + 再生問題)が HEAD ならそのまま。それより新しいコミットがあれば「俺(or Antigravity)が寝てる間に何かやった?」と聞く
+3. **既存の DL 済み動画は再生できないかもしれない** → ユーザに「再生確認できんファイルあったら再 DL してくれ」と促す(本修正は新規 DL にのみ効く)
+4. 確認 OK なら **yt-dlp チャットリプレイ取得の技術検証** に進む(コメント分析画面のバックエンド、`docs/COMMENT_ANALYSIS_DESIGN.md` 参照)
 
 ## 実機動作確認パターン(俺に聞いて回す)
 
@@ -81,16 +93,18 @@
 
 ---
 
-## 1. 現在のリポジトリ状態(凍結時刻 2026-05-02 00:50)
+## 1. 現在のリポジトリ状態(更新時刻 2026-05-02 06:50)
 
 ```
-HEAD = 1678746 fix(url-download): URL DL バグ 2 件修正(prop 引数欠落が両方の根本原因)
-origin/main = 1678746(同期済み)
+HEAD = <NEW_HASH> fix(url-download): 進捗 0.0% 固着 + DL 後再生不可の修正
+origin/main = <NEW_HASH>(同期済み)
 working tree clean
 ```
 
-git log -10 --oneline:
+git log -10 --oneline(凍結時点):
 ```
+<NEW_HASH> fix(url-download): 進捗 0.0% 固着 + DL 後再生不可の修正(フォーマット限定 + 進捗テンプレート明示化)
+ca0a81b docs: 寝る前作業 — NEXT_SESSION_HANDOFF.md でセッション末状態を凍結
 1678746 fix(url-download): URL DL バグ 2 件修正(prop 引数欠落が両方の根本原因)
 919e6c0 feat(comment-analysis): implement CommentAnalysisGraph UI with mock data and documentation
 076240f docs: ドキュメント整理(IDEAS.md + COMMENT_ANALYSIS_DESIGN.md 作成)
@@ -99,8 +113,6 @@ eb85d3d docs: update commit hash in DECISIONS.md
 c2bc6df feat(dropzone): integrate URL download into DropZone and remove header icon
 c995d3b feat(url-download): integrate yt-dlp for video downloading
 1001620 fix: DnD 操作性改善(カード全体を drag source 化)
-5b9682f feat: 話者カラム表示でドラッグ&ドロップ話者変更
-58a96af style: clean up UI elements and update window title
 ```
 
 ## 2. 完了済み機能(現時点で動くはずの一覧)
@@ -116,28 +128,16 @@ c995d3b feat(url-download): integrate yt-dlp for video downloading
 | 話者プリセット + キュー単位スタイル上書き(Phase B-3) | `c69fcfb` / `e4b6795` | 動作 |
 | 話者カラム表示モード | `f0997b1` | 動作 |
 | カラム間 DnD で話者変更 | `5b9682f` / `1001620` | 動作 |
-| URL DL(yt-dlp 統合)| `c995d3b` / `c2bc6df` | **`1678746` でバグ修正済 — 実機未確認** |
-| コメント分析グラフ(モックデータ)| `919e6c0` / `1678746` で簡素化 | UI のみ動作、yt-dlp チャット取得は未実装 |
-| 3 フェーズ構造(load / clip-select / edit)| `1678746` | **実機未確認** |
+| URL DL(yt-dlp 統合)| `c995d3b` / `c2bc6df` / `1678746` / `<NEW_HASH>` | **実機確認済み**(MP4-AVC1-AAC 強制 + 進捗テンプレ) |
+| コメント分析グラフ(モックデータ)| `919e6c0` / `1678746` で簡素化 | **実機確認済み** — yt-dlp チャット取得は未実装 |
+| 3 フェーズ構造(load / clip-select / edit)| `1678746` | **実機確認済み** |
 | ドキュメント整理(IDEAS.md + COMMENT_ANALYSIS_DESIGN.md)| `076240f` | 完了 |
 
 ## 3. 進行中タスク(本セッション末尾時点)
 
-### 🚧 進行中(実機未確認)
+### 🚧 進行中
 
-#### A. 3 フェーズ構造への再編
-- editorStore: `phase: 'load' | 'clip-select' | 'edit'`、`clipRange: {startSec, endSec} | null`、`setPhase` / `setClipRange`
-- App.tsx: phase でレンダリング切替、edit ヘッダに「← 範囲を選び直す」
-- ClipSelectView.tsx(新規): 動画プレビュー + ドラッグ式区間選択
-- CommentAnalysisGraph: chrome 削除、ヒートマップ風 UI、ドラッグ選択対応
-- **次セッションでやること**: 実機で 3 フェーズ動線が通るか確認
-
-#### B. URL DL バグ修正
-- DropZone.tsx: prop 型 `(url: string) => void`、Enter キー対応
-- App.tsx: `pendingUrl` ステート + `startDownloadFlow` + `handleUrlDownloadRequested`、初回 outputDir なしの分岐
-- UrlDownloadDialog.tsx + .module.css 削除
-- HANDOFF.md ディレクトリ構成更新
-- **次セッションでやること**: 実機で URL 貼り付け 1 ステップ DL が通るか確認
+(進行中タスクなし。直近の URL DL 関連修正はすべて land 済み + 実機 4 パターン確認済み前提)
 
 ### 🔵 次にやる(動作確認後)
 
@@ -181,16 +181,23 @@ c995d3b feat(url-download): integrate yt-dlp for video downloading
 - **プリセット階層**: `SpeakerPreset`(セットプリセット = 動画ごとのコラボメンバー一覧)と `StylePreset`(スタイルプリセット = テンション別)の二階層で分離
 - **「自分用ツール」段階**: 配布バイナリ化・配布サイズ等は脇に置き、まず作者のワークフロー最適化を優先
 
+### 4.5 URL DL のフォーマット方針(`<NEW_HASH>` で確定)
+
+- **MP4-AVC1-AAC を強制取得**(Chromium `<video>` のネイティブ再生互換性を最優先)
+- 4K AV1 / 1440p VP9-mkv 等の最高画質は **意図的に切り捨て** — 最大 1080p AVC1 にキャップ
+- 1080p AVC1 が無い動画は MP4 単一ストリーム → 何でも、の三段フォールバック
+- 進捗パースは `--progress-template` で固定フォーマット化、yt-dlp デフォルト出力には依存しない
+
 ## 5. 次セッション開始時のチェックリスト(コピペ用)
 
 新しい Claude Code セッションでまず以下を確認:
 
 ```
-[ ] git log -10 --oneline で 1678746 が HEAD か確認
-[ ] HEAD が 1678746 でないなら、ユーザに「俺(or Antigravity)が寝てる間に何かやった?」と確認
-[ ] 実機で 3 フェーズ動線(load → clip-select → edit → 戻り)を確認するよう促す
-[ ] 実機で URL DL 1 ステップ動線(URL → 規約 → DL → 動画読み込み)を確認するよう促す
+[ ] git log -10 --oneline で URL DL 進捗修正コミットが HEAD か確認
+[ ] HEAD がそれより新しいなら、ユーザに「俺(or Antigravity)が何かやった?」と確認
+[ ] 既存の DL 済みファイルで再生不可のものは再 DL 推奨をユーザに伝える(本修正は新規 DL にのみ効く)
 [ ] 確認 OK なら次は yt-dlp チャットリプレイ取得の技術検証へ
+    (--write-subs --sub-langs live_chat --skip-download → live_chat.json パーサ → スコア計算)
 [ ] 何か問題があれば、原因を特定 → 修正 → 再確認のサイクル
 ```
 
@@ -203,6 +210,8 @@ c995d3b feat(url-download): integrate yt-dlp for video downloading
 - **`grid-row: 1 / -1`** は `grid-auto-rows` の場合 implicit row を含まない → `1 / span N` で明示
 - **dev サーバの port 3001** が掴まれっぱなしのことあり、`netstat -ano | findstr :3001` で PID 特定 → `taskkill /F /PID <pid>`
 - **yt-dlp.exe** は `resources/yt-dlp/yt-dlp.exe`、`getYtDlpPath()` で dev / packaged を分岐
+- **yt-dlp フォーマット選択は MP4-AVC1-AAC 必須**(Chromium 互換)。デフォルトの `bestvideo+bestaudio` は AV1/VP9-mkv に解決されて `<video>` が再生不可になる。`buildFormatSelector` で三段フォールバックに固定済み
+- **yt-dlp 進捗パースは `--progress-template` 経由のみ信頼**。デフォルト `[download] xx% of ...` は `Unknown%` / merge 中ドロップで止まるため不安定。`JCUT_PROGRESS` プレフィックス付きの単一行を 1 トークン区切りで読む
 - **編集中のキューカードを掴むときは textarea 以外**(`onDragStart` で `e.target.tagName === 'TEXTAREA'` なら preventDefault)
 - **OneDrive のオンライン専用ファイル**は `<video>` 経由で読めないことあり、ローカルにコピーしてから扱う
 

@@ -15,6 +15,26 @@
 
 ---
 
+## 2026-05-02 06:50 - URL DL: 進捗 0.0% 固着 + DL 後再生不可の修正(フォーマット限定 + 進捗テンプレート明示化)
+
+- 誰が: Claude Code
+- 何を: yt-dlp 起動引数を 2 点強化して 2 件の不具合を同時解決
+  - **フォーマットセレクタを Chromium 互換優先に変更**: `bestvideo[ext=mp4][vcodec^=avc1]<heightFilter>+bestaudio[ext=m4a]/best[ext=mp4]<heightFilter>/best<heightFilter>` の三段フォールバック。MP4-AVC1+M4A-AAC を最優先 → MP4 単一ストリーム → 何でも、の優先順位。`--merge-output-format mp4` は既設で結合コンテナを mp4 に強制
+  - **進捗テンプレート `--progress-template` を明示化**: `download:JCUT_PROGRESS %(progress._percent_str)s %(progress._speed_str)s %(progress._eta_str)s` を渡し、yt-dlp デフォルト `[download]  45.3% of ...` 行のフラジリティ(`Unknown%` / フラグメント merge 中ドロップ / chunk 分割不安定)を回避。1 行 1 トークンの固定フォーマットを単一正規表現で受ける形に
+  - 進捗イベントに **250ms throttle** 追加(renderer の更新負荷低減)
+  - 旧 `[download]` 正規表現は **fallback として残置**(yt-dlp ビルド/フェーズ差吸収)
+  - `--print after_move:filepath` / `title` 経路は維持、`[download] xxx has already been downloaded` / `[Merger] ...` パスも従来通り捕捉
+  - 起動時に `console.log('[url-download] format selector:', format)` を追加してデバッグの起点を残す
+- 検証: `yt-dlp.exe --simulate --print "..." -f "..."` で実 URL に対し:
+  - "best": format `137+140` = `avc1.640028 | mp4a.40.2 | mp4`(1080p AVC1 + AAC、Chromium ネイティブ)
+  - "720": format `136+140` = `avc1.4d401f | mp4a.40.2 | mp4`(720p AVC1 + AAC)
+  - いずれも MP4-AVC1-AAC で着地することを確認
+- 理由: `1678746` で IPC + DropZone 動線は通ったが、yt-dlp デフォルトが AV1/VP9-mkv/webm 等 Chromium 非ネイティブな最高画質を取得しており、(1) 進捗 stdout のバッファリング/想定外フィールドで 0.0% 固着、(2) DL 後 `<video>` で再生不可、の 2 件が同時発生していた。フォーマット強制 + 進捗テンプレートで両方の根本を一度に潰す
+- 影響: `src/main/urlDownload.ts` のみ
+- 既存 DL 済みファイル: 再生できない場合は **再 DL 推奨**(本修正は新規 DL にのみ効く)
+- 副作用: 4K AV1 / 1440p VP9 など高画質形式は **意図的に切り捨て**(自分用ツール段階の互換性優先方針)。最大 1080p AVC1 にキャップ
+- コミット: (未定)
+
 ## 2026-05-02 00:50 - 寝る前作業: NEXT_SESSION_HANDOFF.md にセッション末状態を凍結
 
 - 誰が: Claude Code
