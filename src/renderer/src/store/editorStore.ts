@@ -23,6 +23,13 @@ type EditorState = {
   filePath: string | null;
   fileName: string | null;
   durationSec: number | null;
+  // Captured from `<video>.videoWidth/Height` on `loadedmetadata`. Needed
+  // by export so the burned-in subtitle script can use the actual video
+  // resolution as `PlayResX/PlayResY` — using a guessed 1920x1080 makes the
+  // text size mismatch when the video is e.g. 1280x720 (1.5x bigger than
+  // intended). null until metadata loads.
+  videoWidth: number | null;
+  videoHeight: number | null;
   // Live playback position. Updated ~60 Hz by VideoPlayer's rAF loop while
   // playing; updated once on seek/pause/load.
   currentSec: number;
@@ -63,6 +70,7 @@ type EditorState = {
   setFile: (absPath: string) => void;
   clearFile: () => void;
   setDuration: (sec: number) => void;
+  setVideoDimensions: (w: number, h: number) => void;
   setCurrentSec: (sec: number) => void;
 
   // transcription lifecycle
@@ -142,6 +150,8 @@ export const useEditorStore = create<EditorState>((set, get) => ({
   filePath: null,
   fileName: null,
   durationSec: null,
+  videoWidth: null,
+  videoHeight: null,
   currentSec: 0,
 
   transcription: null,
@@ -173,6 +183,8 @@ export const useEditorStore = create<EditorState>((set, get) => ({
       filePath: absPath,
       fileName: basename(absPath),
       durationSec: null,
+      videoWidth: null,
+      videoHeight: null,
       currentSec: 0,
       transcription: null,
       cues: [],
@@ -195,6 +207,8 @@ export const useEditorStore = create<EditorState>((set, get) => ({
       filePath: null,
       fileName: null,
       durationSec: null,
+      videoWidth: null,
+      videoHeight: null,
       currentSec: 0,
       transcription: null,
       cues: [],
@@ -213,6 +227,12 @@ export const useEditorStore = create<EditorState>((set, get) => ({
     }),
 
   setDuration: (sec) => set({ durationSec: sec }),
+
+  setVideoDimensions: (w, h) => {
+    if (Number.isFinite(w) && Number.isFinite(h) && w > 0 && h > 0) {
+      set({ videoWidth: Math.round(w), videoHeight: Math.round(h) });
+    }
+  },
 
   setCurrentSec: (sec) => {
     if (Number.isFinite(sec)) set({ currentSec: sec });

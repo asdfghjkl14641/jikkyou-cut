@@ -241,10 +241,15 @@ const VideoPlayer = forwardRef<VideoPlayerHandle, Props>(function VideoPlayer(
   };
 
   const handleLoadedMetadata = () => {
-    const d = videoRef.current?.duration;
+    const v = videoRef.current;
+    if (!v) return;
+    const d = v.duration;
     if (d != null && Number.isFinite(d) && d > 0) {
       onDuration?.(d);
     }
+    // Capture intrinsic dimensions for export-time subtitle PlayResX/Y.
+    // Skipped via the store guard if either is 0 (e.g. before metadata).
+    useEditorStore.getState().setVideoDimensions(v.videoWidth, v.videoHeight);
   };
 
   return (

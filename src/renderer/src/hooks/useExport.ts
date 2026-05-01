@@ -7,6 +7,8 @@ export function useExport() {
   const filePath = useEditorStore((s) => s.filePath);
   const cues = useEditorStore((s) => s.cues);
   const durationSec = useEditorStore((s) => s.durationSec);
+  const videoWidth = useEditorStore((s) => s.videoWidth);
+  const videoHeight = useEditorStore((s) => s.videoHeight);
   const status = useEditorStore((s) => s.exportStatus);
 
   const startState = useEditorStore((s) => s.startExportState);
@@ -35,12 +37,19 @@ export function useExport() {
 
     startState();
     try {
+      // Default to 1920x1080 if metadata never reported (defensive — the
+      // export will still run; subtitles will just be sized as if for FHD).
+      const w = videoWidth && videoWidth > 0 ? videoWidth : 1920;
+      const h = videoHeight && videoHeight > 0 ? videoHeight : 1080;
       const result = await window.api.startExport({
         videoFilePath: filePath,
         regions: regions.map((r) => ({
           startSec: r.startSec,
           endSec: r.endSec,
         })),
+        cues,
+        videoWidth: w,
+        videoHeight: h,
       });
       succeed(result);
     } catch (err) {
@@ -51,7 +60,7 @@ export function useExport() {
         fail(e.message ?? '不明なエラーが発生しました');
       }
     }
-  }, [filePath, cues, startState, succeed, fail, cancelState]);
+  }, [filePath, cues, videoWidth, videoHeight, durationSec, startState, succeed, fail, cancelState]);
 
   const cancel = useCallback(async () => {
     if (status !== 'running') return;

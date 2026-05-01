@@ -8,8 +8,14 @@ import {
   type ExportProgress,
   type ExportRegion,
   type ExportResult,
+  type SubtitleStyle,
+  type TranscriptCue,
 } from '../common/types';
+import { deriveKeptRegions } from '../common/segments';
+import { buildAss } from '../common/subtitle';
 import { parseProgressLine } from './progress';
+import { listInstalledFonts } from './fonts';
+import { loadSubtitleSettings } from './subtitleSettings';
 
 // Conservative threshold to switch from inline `-filter_complex` to
 // `-filter_complex_script <file>`. Windows command line cap is ~8191 chars
@@ -21,6 +27,7 @@ type ActiveJob = {
   finalPath: string;
   tmpPath: string;
   filterScriptPath?: string;
+  assPath?: string;
 };
 
 let activeJob: ActiveJob | null = null;
@@ -28,7 +35,19 @@ let activeJob: ActiveJob | null = null;
 const baseNameNoExt = (p: string): string =>
   path.basename(p, path.extname(p));
 
-function buildFilterComplex(regions: ExportRegion[]): string {
+// Escape a Windows absolute path for use as a filter argument value. The
+// filter-graph parser treats `\` as an escape, `:` as the option-pair
+// separator, and `'` as a string delimiter. Forward slashes are accepted by
+// FFmpeg on Windows for both file paths and directory args, so we
+// normalise to `/` and escape only `:`.
+//   `C:\Users\Sakan\foo.ass` -> `C\:/Users/Sakan/foo.ass`
+const escapeFilterPath = (p: string): string =>
+  p.replace(/\\/g, '/').replace(/:/g, '\\:');
+
+function buildFilterComplex(
+  regions: ExportRegion[],
+  subtitleFilter: string | null,
+): string {
   const parts: string[] = [];
   const concatInputs: string[] = [];
   regions.forEach((r, i) => {
@@ -40,6 +59,18 @@ function buildFilterComplex(regions: ExportRegion[]): string {
     );
     concatInputs.push(`[v${i}][a${i}]`);
   });
+  // Concat → labelled outputs. When subtitles are enabled we splice the
+  // `subtitles` filter onto the concatenated video stream before exposing
+  // it as `[outv]`.
+  if (subtitleFilter) {
+    return (
+      parts.join(';') +
+      ';' +
+      concatInputs.join('') +
+      `concat=n=${regions.length}:v=1:a=1[concatv][outa];` +
+      `[concatv]${subtitleFilter}[outv]`
+    );
+  }
   return (
     parts.join(';') +
     ';' +
@@ -86,14 +117,91 @@ function classifyError(stderr: string, originalMessage: string): Error {
   return new Error(`書き出しに失敗しました: ${detail}`);
 }
 
+// Decides whether subtitles should be burned for this run, and if so writes
+// the ASS file and returns the filter fragment + temp path. Returns null
+// when subtitles are disabled, no cue opts in, or the active style cannot
+// be resolved — those cases fall back silently to a sub-less export so the
+// concat path still works.
+async function prepareSubtitles(args: {
+  cues: TranscriptCue[];
+  durationSec: number;
+  videoWidth: number;
+  videoHeight: number;
+}): Promise<{ filter: string; assPath: string } | null> {
+  let settings;
+  try {
+    settings = await loadSubtitleSettings();
+  } catch (err) {
+    console.warn('[export] subtitle settings load failed, skipping:', err);
+    return null;
+  }
+  if (!settings.enabled) return null;
+
+  const style: SubtitleStyle | undefined = settings.styles.find(
+    (s) => s.id === settings.activeStyleId,
+  );
+  if (!style) {
+    console.warn(
+      '[export] active subtitle style not found, skipping subtitles',
+    );
+    return null;
+  }
+
+  const optedIn = args.cues.some(
+    (c) => !c.deleted && c.showSubtitle && c.text.trim().length > 0,
+  );
+  if (!optedIn) return null;
+
+  const installed = await listInstalledFonts().catch(() => []);
+  const hasFont = installed.some((f) => f.family === style.fontFamily);
+  if (!hasFont) {
+    console.warn(
+      `[export] font "${style.fontFamily}" not installed; skipping subtitles. Open the font manager and install it to enable burn-in.`,
+    );
+    return null;
+  }
+
+  const keptRegions = deriveKeptRegions(args.cues, args.durationSec);
+  const ass = buildAss({
+    cues: args.cues,
+    keptRegions,
+    style,
+    videoWidth: args.videoWidth,
+    videoHeight: args.videoHeight,
+  });
+  if (!/^Dialogue:/m.test(ass)) {
+    // No actual events made it through (e.g. all opted-in cues fell into
+    // deleted gaps). Skip rather than emit an empty ASS.
+    return null;
+  }
+
+  const assPath = path.join(
+    app.getPath('temp'),
+    `jcut-subs-${Date.now()}.ass`,
+  );
+  // UTF-8 with BOM (﻿) — libass on some Windows builds mis-detects
+  // encoding without it.
+  await fs.writeFile(assPath, '﻿' + ass, 'utf8');
+
+  // Same drive lives userData/fonts on every default Electron install
+  // (both under %LOCALAPPDATA% / %APPDATA%). Both paths are escaped so
+  // their drive-letter colons don't terminate the filter option list.
+  const fontsDir = path.join(app.getPath('userData'), 'fonts');
+  const filter = `subtitles=${escapeFilterPath(assPath)}:fontsdir=${escapeFilterPath(fontsDir)}`;
+  return { filter, assPath };
+}
+
 export async function startExport(args: {
   videoFilePath: string;
   regions: ExportRegion[];
+  cues: TranscriptCue[];
+  videoWidth: number;
+  videoHeight: number;
   onProgress: (p: ExportProgress) => void;
 }): Promise<ExportResult> {
   if (activeJob) throw new Error('別の書き出しが実行中です');
 
-  const { videoFilePath, regions, onProgress } = args;
+  const { videoFilePath, regions, cues, videoWidth, videoHeight, onProgress } = args;
   if (regions.length === 0) {
     throw new Error('書き出すべき区間がありません(全て削除されています)');
   }
@@ -112,7 +220,33 @@ export async function startExport(args: {
   );
   const totalKeptMicros = Math.max(1, Math.round(totalKeptSec * 1_000_000));
 
-  const filterGraph = buildFilterComplex(regions);
+  // Generate ASS now, even though FFmpeg won't read it for several seconds.
+  // If anything goes wrong we treat it as non-fatal and emit a warning —
+  // MVP policy is "the cut still ships" rather than blocking the export on
+  // a subtitle-only error.
+  let subtitleSetup: { filter: string; assPath: string } | null = null;
+  try {
+    subtitleSetup = await prepareSubtitles({
+      cues,
+      // Use the regions sum as a conservative duration for kept-region
+      // derivation — the renderer also includes durationSec via the
+      // region start/end inputs, but inside main we don't have it
+      // separately. Recomputing keptRegions here keeps the timecode
+      // mapping deterministic regardless of which component derived
+      // them.
+      durationSec: totalKeptSec + 0.001,
+      videoWidth,
+      videoHeight,
+    });
+  } catch (err) {
+    console.warn('[export] subtitle prepare failed, exporting without:', err);
+    subtitleSetup = null;
+  }
+
+  const filterGraph = buildFilterComplex(
+    regions,
+    subtitleSetup?.filter ?? null,
+  );
 
   let filterArgs: string[];
   let filterScriptPath: string | undefined;
@@ -152,11 +286,14 @@ export async function startExport(args: {
     filterGraph.length,
     'script:',
     filterScriptPath ? 'yes' : 'no',
+    'subtitles:',
+    subtitleSetup ? 'yes' : 'no',
   );
 
   const ac = new AbortController();
   const job: ActiveJob = { ac, finalPath, tmpPath };
   if (filterScriptPath) job.filterScriptPath = filterScriptPath;
+  if (subtitleSetup) job.assPath = subtitleSetup.assPath;
   activeJob = job;
 
   const proc = execa('ffmpeg', ffmpegArgs, {
@@ -191,11 +328,18 @@ export async function startExport(args: {
     if (stderrBuf.length > 64 * 1024) stderrBuf = stderrBuf.slice(-64 * 1024);
   });
 
-  const cleanupAfterFailure = async () => {
-    await fs.rm(tmpPath, { force: true });
+  const cleanupTransients = async () => {
     if (filterScriptPath) {
       await fs.rm(filterScriptPath, { force: true }).catch(() => {});
     }
+    if (subtitleSetup) {
+      await fs.rm(subtitleSetup.assPath, { force: true }).catch(() => {});
+    }
+  };
+
+  const cleanupAfterFailure = async () => {
+    await fs.rm(tmpPath, { force: true });
+    await cleanupTransients();
   };
 
   try {
@@ -216,10 +360,8 @@ export async function startExport(args: {
     activeJob = null;
   }
 
-  // Clean filter script (success path).
-  if (filterScriptPath) {
-    await fs.rm(filterScriptPath, { force: true }).catch(() => {});
-  }
+  // Clean transient files (success path).
+  await cleanupTransients();
 
   // Atomic-ish swap: tmp → final. Overwrite any prior export.
   await fs.rm(finalPath, { force: true });

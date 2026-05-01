@@ -111,6 +111,9 @@ function registerIpcHandlers() {
     exportModule.startExport({
       videoFilePath: args.videoFilePath,
       regions: args.regions,
+      cues: args.cues,
+      videoWidth: args.videoWidth,
+      videoHeight: args.videoHeight,
       onProgress: (p) => {
         mainWindow?.webContents.send('export:progress', p);
       },

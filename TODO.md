@@ -6,11 +6,7 @@
 
 ## 🚧 進行中
 
-### 字幕機能 Phase A(3 分担、基盤側完了)
-
-- ✅ **完了(Claude Code)**: 型定義 + フォント管理 + 設定永続化
-- ✅ **本タスク完了(Antigravity)**: 字幕設定ダイアログ UI(プリセット選択 / カスタムスタイル作成 / 行ごとの字幕 ON/OFF / フォント DL 画面)
-- ⏭ **次(Claude Code 後日)**: FFmpeg 字幕焼き込み (`drawtext` フィルタ or libass)、書き出しフローへの統合、出力プレビュー
+(進行中タスクなし。字幕機能 Phase A は 3 分担すべて完了)
 
 ---
 
@@ -45,6 +41,7 @@
 
 ## ✅ 完了済み(直近)
 
+- **2026-05-01** FFmpeg 字幕焼き込みを書き出しに統合 — `src/common/subtitle.ts`(`buildAss` / `convertTimecode` / `hexToAss` / `formatAssTime` 純関数)、`src/main/export.ts` の `prepareSubtitles()` でアクティブスタイル解決 + opt-in cue チェック + `temp/jcut-subs-*.ass` 生成 + `subtitles=path:fontsdir=path` フィルタを `[concatv]subtitles=...[outv]` でチェーン。Windows パスは `\` → `/`、`:` → `\\:` で escape。フォント未インストール時等は静かに字幕なしフォールバック。`videoWidth/Height` を `loadedmetadata` で store にキャプチャして ASS の `PlayResX/Y` に渡す。**Phase A はこれで完成**
 - **2026-05-01** 字幕設定 UI 実装 — `SubtitleSettingsDialog` と `FontManagerDialog` を作成。プリセット選択、カスタムスタイル作成、動的プレビュー、フォント DL 機能、キュー一覧の字幕 ON/OFF トグルを実装(Antigravity 担当)
 - **2026-05-01** 字幕機能 Phase A 基盤 — `SubtitleStyle` / `SubtitleSettings` / `InstalledFont` / `AvailableFont` 等の型、`src/main/fonts.ts`(Google Fonts 厳選 12 個カタログ + DL + 一覧 + 削除)、`src/main/subtitleSettings.ts`(`userData/subtitle-settings.json` の load/save + 組み込みプリセット 5 種)、IPC ハンドラ + preload exposure を実装。`TranscriptCue.showSubtitle: boolean` 追加 + 旧 jcut.json 後方互換マイグレーション
 - **2026-04-30** 再生中ハイライト(▶+赤バー)もギャップ対応に統一 — `findCueIndexForScroll` を `findCueIndexForCurrent` にリネームし、ハイライト判定セレクタからも同じ関数を呼ぶように変更。スクロールとハイライトが同一の「現在キュー」観念で動作 → ギャップ中・冒頭・末尾でも常にどこかに ▶ が出る

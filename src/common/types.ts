@@ -57,6 +57,17 @@ export type ExportRegion = {
 export type ExportStartArgs = {
   videoFilePath: string;
   regions: ExportRegion[];
+  // Full cue list with `deleted` / `showSubtitle` flags. Required by the
+  // main process to (re-)derive kept regions for subtitle timecode mapping
+  // and to know which cues to render. The renderer also passes derived
+  // `regions` in its own field above to keep the existing concat path
+  // wire-format stable.
+  cues: TranscriptCue[];
+  // Intrinsic dimensions (videoWidth/Height from `<video>`) — used as
+  // PlayResX/PlayResY in the generated ASS so libass scales subtitle text
+  // relative to the actual video, not a hard-coded reference frame.
+  videoWidth: number;
+  videoHeight: number;
 };
 
 export type ExportProgress = {
