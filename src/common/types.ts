@@ -196,9 +196,22 @@ export type DownloadResult = {
   failed: { family: string; error: string }[];
 };
 
+export type UrlDownloadProgress = {
+  percent: number;
+  speed: string;
+  eta: string;
+};
+
+export type UrlDownloadArgs = {
+  url: string;
+  quality: string;
+  outputDir: string;
+};
+
 export type IpcApi = {
   // file dialogs
   openFileDialog: () => Promise<string | null>;
+  openDirectoryDialog: () => Promise<string | null>;
   getPathForFile: (file: File) => string;
 
   // menu events
@@ -255,4 +268,10 @@ export type IpcApi = {
   ) => () => void;
 
   setWindowTitle: (title: string) => void;
+
+  urlDownload: {
+    start: (args: UrlDownloadArgs) => Promise<{ filePath: string; title: string }>;
+    cancel: () => Promise<void>;
+    onProgress: (cb: (p: UrlDownloadProgress) => void) => () => void;
+  };
 };

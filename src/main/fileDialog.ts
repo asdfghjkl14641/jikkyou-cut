@@ -12,3 +12,12 @@ export async function openVideoFileDialog(parent: BrowserWindow): Promise<string
   if (result.canceled || result.filePaths.length === 0) return null;
   return result.filePaths[0] ?? null;
 }
+
+export async function openDirectoryDialog(parent: BrowserWindow): Promise<string | null> {
+  const result = await dialog.showOpenDialog(parent, {
+    title: 'ダウンロード保存先フォルダを選択',
+    properties: ['openDirectory', 'createDirectory'],
+  });
+  if (result.canceled || result.filePaths.length === 0) return null;
+  return result.filePaths[0] ?? null;
+}

@@ -68,6 +68,13 @@
   color: var(--accent-primary-hover);
 }
 
+.headerDivider {
+  width: 1px;
+  height: 20px;
+  background: var(--border-subtle);
+  margin: 0 var(--space-2);
+}
+
 
 
 .body {

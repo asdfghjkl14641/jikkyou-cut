@@ -52,6 +52,7 @@
 
 ## ✅ 完了済み(直近)
 
+- **2026-05-01** URL動画ダウンロード機能(yt-dlp統合) — yt-dlpを同梱し、URLを貼るだけで動画をDLしてそのまま編集可能にする機能を実装。利用規約同意フロー、画質選択、進捗表示に対応。
 - **2026-05-01** DnD 操作性改善(掴みやすさ) — 直前の実装で「掴めない・反応が悪い」を解消。`draggable=true` をハンドルからカード全体に移動 → textarea 以外どこ掴んでもドラッグ開始。textarea 側は `onDragStart` で preventDefault してテキスト選択を保持。`.cueCard` に `user-select: none`、`.textInput` で `text` を再宣言。cursor: grab/grabbing をカード全体に。`GripVertical` は `pointer-events: none` の純視覚ヒントに変更
 - **2026-05-01** 話者カラム表示でドラッグ&ドロップ話者変更 — 各キューカードのタイムコードヘッダに `GripVertical` ハンドルを追加。ドラッグ→対象カラムにドロップで `speaker` フィールドを即時更新。CSS Grid のカラムは独立 DOM ではないため、`.speakerColumns` コンテナへの `dragover`/`drop` で受けてマウス clientX から hit-test して target 列を決定。ドラッグ中は source カードを半透明化、対象カラムをアクセントカラーの破線ハイライトでマーク。同カラムへのドロップは no-op、Undo/Redo にも乗る
 - **2026-05-01** UI整理(ヘッダ・操作一覧の不要要素削除) — ロゴ、マルチラベル、ヘッダファイル名表示、下部操作一覧を削除。ファイル名はウィンドウタイトルに表示するように変更。

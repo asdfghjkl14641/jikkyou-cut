@@ -2,7 +2,7 @@ import { app, BrowserWindow, ipcMain, shell, nativeTheme } from 'electron';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 import { registerMediaScheme, handleMediaProtocol } from './mediaProtocol';
-import { openVideoFileDialog } from './fileDialog';
+import { openVideoFileDialog, openDirectoryDialog } from './fileDialog';
 import { buildMenu } from './menu';
 import { loadConfig, saveConfig } from './config';
 import * as secureStorage from './secureStorage';
@@ -11,6 +11,7 @@ import * as project from './project';
 import * as exportModule from './export';
 import * as fonts from './fonts';
 import * as subtitleSettings from './subtitleSettings';
+import * as urlDownload from './urlDownload';
 import type { AppConfig } from '../common/config';
 import type {
   ExportStartArgs,
@@ -55,6 +56,10 @@ function registerIpcHandlers() {
   ipcMain.handle('dialog:openFile', async () => {
     if (!mainWindow) return null;
     return openVideoFileDialog(mainWindow);
+  });
+  ipcMain.handle('dialog:openDirectory', async () => {
+    if (!mainWindow) return null;
+    return openDirectoryDialog(mainWindow);
   });
 
   // settings (non-secret)
@@ -168,6 +173,17 @@ function registerIpcHandlers() {
       mainWindow.setTitle(title ? `jikkyou-cut - ${title}` : 'jikkyou-cut');
     }
   });
+
+  // URL download
+  ipcMain.handle('urlDownload:start', async (_e, args) => {
+    return urlDownload.downloadVideo({
+      ...args,
+      onProgress: (p) => {
+        mainWindow?.webContents.send('urlDownload:progress', p);
+      },
+    });
+  });
+  ipcMain.handle('urlDownload:cancel', () => urlDownload.cancelDownload());
 }
 
 app.whenReady().then(() => {

@@ -26,10 +26,17 @@ export type AppConfig = {
   //                       (treated as the "6+" bucket — no upper bound)
   // Only consulted when `collaborationMode` is true.
   expectedSpeakerCount: number | null;
+  // URL Download feature (yt-dlp)
+  urlDownloadAccepted: boolean;
+  defaultDownloadDir: string | null;
+  defaultDownloadQuality: string;
 };
 
 export const DEFAULT_CONFIG: AppConfig = {
   transcriptionContext: DEFAULT_CONTEXT,
   collaborationMode: false,
   expectedSpeakerCount: null,
+  urlDownloadAccepted: false,
+  defaultDownloadDir: null,
+  defaultDownloadQuality: 'best',
 };

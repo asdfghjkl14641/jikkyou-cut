@@ -4,6 +4,7 @@ import type {
   FontDownloadProgress,
   IpcApi,
   TranscriptionProgress,
+  UrlDownloadProgress,
 } from '../common/types';
 
 const onChannel = (channel: string) => (cb: () => void) => {
@@ -16,6 +17,7 @@ const onChannel = (channel: string) => (cb: () => void) => {
 
 const api: IpcApi = {
   openFileDialog: () => ipcRenderer.invoke('dialog:openFile'),
+  openDirectoryDialog: () => ipcRenderer.invoke('dialog:openDirectory'),
   getPathForFile: (file) => webUtils.getPathForFile(file),
   onMenuOpenFile: onChannel('menu:openFile'),
   onMenuOpenSettings: onChannel('menu:openSettings'),
@@ -84,6 +86,21 @@ const api: IpcApi = {
     };
   },
   setWindowTitle: (title) => ipcRenderer.send('window:setTitle', title),
+
+  urlDownload: {
+    start: (args) => ipcRenderer.invoke('urlDownload:start', args),
+    cancel: () => ipcRenderer.invoke('urlDownload:cancel'),
+    onProgress: (cb) => {
+      const listener = (
+        _e: Electron.IpcRendererEvent,
+        p: UrlDownloadProgress,
+      ) => cb(p);
+      ipcRenderer.on('urlDownload:progress', listener);
+      return () => {
+        ipcRenderer.removeListener('urlDownload:progress', listener);
+      };
+    },
+  },
 };
 
 contextBridge.exposeInMainWorld('api', api);

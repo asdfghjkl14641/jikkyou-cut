@@ -10,6 +10,17 @@
   "engines": {
     "node": ">=22"
   },
+  "build": {
+    "extraResources": [
+      {
+        "from": "resources/yt-dlp",
+        "to": "yt-dlp",
+        "filter": [
+          "**/*"
+        ]
+      }
+    ]
+  },
   "scripts": {
     "dev": "electron-vite dev -w",
     "build": "electron-vite build",

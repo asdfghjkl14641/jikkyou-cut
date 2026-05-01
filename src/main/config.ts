@@ -50,9 +50,19 @@ export async function loadConfig(): Promise<AppConfig> {
         ? (parsed['collaborationMode'] as boolean)
         : DEFAULT_CONFIG.collaborationMode,
       expectedSpeakerCount: normaliseSpeakerCount(parsed['expectedSpeakerCount']),
+      urlDownloadAccepted: !!parsed['urlDownloadAccepted'],
+      defaultDownloadDir: typeof parsed['defaultDownloadDir'] === 'string'
+        ? (parsed['defaultDownloadDir'] as string)
+        : path.join(app.getPath('userData'), 'Downloads', 'jikkyou-cut'),
+      defaultDownloadQuality: typeof parsed['defaultDownloadQuality'] === 'string'
+        ? (parsed['defaultDownloadQuality'] as string)
+        : 'best',
     };
   } catch {
-    return DEFAULT_CONFIG;
+    return {
+      ...DEFAULT_CONFIG,
+      defaultDownloadDir: path.join(app.getPath('userData'), 'Downloads', 'jikkyou-cut'),
+    };
   }
 }
 
@@ -76,6 +86,18 @@ export async function saveConfig(
       partial.expectedSpeakerCount !== undefined
         ? normaliseSpeakerCount(partial.expectedSpeakerCount)
         : current.expectedSpeakerCount,
+    urlDownloadAccepted:
+      partial.urlDownloadAccepted !== undefined
+        ? partial.urlDownloadAccepted
+        : current.urlDownloadAccepted,
+    defaultDownloadDir:
+      partial.defaultDownloadDir !== undefined
+        ? partial.defaultDownloadDir
+        : current.defaultDownloadDir,
+    defaultDownloadQuality:
+      partial.defaultDownloadQuality !== undefined
+        ? partial.defaultDownloadQuality
+        : current.defaultDownloadQuality,
   };
   const p = getConfigPath();
   await fs.mkdir(path.dirname(p), { recursive: true });

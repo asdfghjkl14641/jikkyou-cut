@@ -18,8 +18,12 @@ import ExportPreview from './components/ExportPreview';
 import ExportProgressDialog from './components/ExportProgressDialog';
 import TranscriptionContextForm from './components/TranscriptionContextForm';
 import type { TranscriptionContext } from '../../common/config';
-import { X, Settings, Scissors, Subtitles } from 'lucide-react';
+import { X, Settings, Scissors, Subtitles, Download } from 'lucide-react';
 import SubtitleSettingsDialog from './components/SubtitleSettingsDialog';
+import UrlDownloadDialog from './components/UrlDownloadDialog';
+import UrlDownloadProgressDialog from './components/UrlDownloadProgressDialog';
+import TermsOfServiceModal from './components/TermsOfServiceModal';
+import type { UrlDownloadArgs, UrlDownloadProgress } from '../../common/types';
 import styles from './App.module.css';
 
 export default function App() {
@@ -35,6 +39,10 @@ export default function App() {
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [operationsOpen, setOperationsOpen] = useState(false);
   const [subtitleSettingsOpen, setSubtitleSettingsOpen] = useState(false);
+  const [urlDownloadOpen, setUrlDownloadOpen] = useState(false);
+  const [tosOpen, setTosOpen] = useState(false);
+  const [downloadProgressOpen, setDownloadProgressOpen] = useState(false);
+  const [downloadProgress, setDownloadProgress] = useState<UrlDownloadProgress | null>(null);
 
   const loadSubtitleSettings = useEditorStore((s) => s.loadSubtitleSettings);
 
@@ -152,6 +160,56 @@ export default function App() {
     videoRef.current?.seekTo(sec);
   }, []);
 
+  const handleUrlDownloadClick = useCallback(() => {
+    if (!view) return;
+    if (view.config.urlDownloadAccepted) {
+      setUrlDownloadOpen(true);
+    } else {
+      setTosOpen(true);
+    }
+  }, [view]);
+
+  const handleTosAccept = useCallback(async () => {
+    await save({ urlDownloadAccepted: true });
+    setTosOpen(false);
+    setUrlDownloadOpen(true);
+  }, [save]);
+
+  const handleStartDownload = useCallback(async (args: UrlDownloadArgs) => {
+    setUrlDownloadOpen(false);
+    setDownloadProgressOpen(true);
+    setDownloadProgress(null);
+
+    // Save settings
+    void save({
+      defaultDownloadDir: args.outputDir,
+      defaultDownloadQuality: args.quality,
+    });
+
+    const cleanup = window.api.urlDownload.onProgress((p) => {
+      setDownloadProgress(p);
+    });
+
+    try {
+      const result = await window.api.urlDownload.start(args);
+      setDownloadProgressOpen(false);
+      // Auto open
+      setFile(result.filePath);
+    } catch (err: any) {
+      setDownloadProgressOpen(false);
+      if (err.message !== 'TRANSCRIPTION_CANCELLED' && err.message !== 'EXPORT_CANCELLED') {
+        alert(`ダウンロードに失敗しました: ${err.message}`);
+      }
+    } finally {
+      cleanup();
+    }
+  }, [save, setFile]);
+
+  const handleCancelDownload = useCallback(() => {
+    window.api.urlDownload.cancel();
+    setDownloadProgressOpen(false);
+  }, []);
+
   const apiKeyConfigured = view?.hasApiKey ?? false;
   const showBanner = view != null && !apiKeyConfigured;
 
@@ -168,8 +226,15 @@ export default function App() {
           <TranscribeButton apiKeyConfigured={apiKeyConfigured} />
         </div>
         <div className={styles.headerRight}>
-
-
+          <button
+            type="button"
+            className={styles.iconButton}
+            onClick={handleUrlDownloadClick}
+            title="URLから動画をダウンロード"
+          >
+            <Download strokeWidth={1.5} size={18} />
+          </button>
+          <div className={styles.headerDivider} />
           {fileName && (
             <div className={styles.fileInfo}>
               <button
@@ -264,6 +329,28 @@ export default function App() {
       )}
 
       <ExportProgressDialog />
+
+      <TermsOfServiceModal
+        isOpen={tosOpen}
+        onAccept={handleTosAccept}
+        onClose={() => setTosOpen(false)}
+      />
+
+      {view && (
+        <UrlDownloadDialog
+          isOpen={urlDownloadOpen}
+          onClose={() => setUrlDownloadOpen(false)}
+          onDownload={handleStartDownload}
+          defaultDir={view.config.defaultDownloadDir}
+          defaultQuality={view.config.defaultDownloadQuality}
+        />
+      )}
+
+      <UrlDownloadProgressDialog
+        isOpen={downloadProgressOpen}
+        progress={downloadProgress}
+        onCancel={handleCancelDownload}
+      />
     </main>
   );
 }
