@@ -18,7 +18,7 @@ import ExportPreview from './components/ExportPreview';
 import ExportProgressDialog from './components/ExportProgressDialog';
 import TranscriptionContextForm from './components/TranscriptionContextForm';
 import type { TranscriptionContext } from '../../common/config';
-import { X, Settings, Scissors, Subtitles, Download } from 'lucide-react';
+import { X, Settings, Scissors, Subtitles } from 'lucide-react';
 import SubtitleSettingsDialog from './components/SubtitleSettingsDialog';
 import UrlDownloadDialog from './components/UrlDownloadDialog';
 import UrlDownloadProgressDialog from './components/UrlDownloadProgressDialog';
@@ -226,15 +226,6 @@ export default function App() {
           <TranscribeButton apiKeyConfigured={apiKeyConfigured} />
         </div>
         <div className={styles.headerRight}>
-          <button
-            type="button"
-            className={styles.iconButton}
-            onClick={handleUrlDownloadClick}
-            title="URLから動画をダウンロード"
-          >
-            <Download strokeWidth={1.5} size={18} />
-          </button>
-          <div className={styles.headerDivider} />
           {fileName && (
             <div className={styles.fileInfo}>
               <button
@@ -302,7 +293,10 @@ export default function App() {
           </>
         ) : (
           <div className={styles.bodyEmpty}>
-            <DropZone onFileSelected={setFile} />
+            <DropZone 
+              onFileSelected={setFile} 
+              onUrlDownloadRequested={handleUrlDownloadClick}
+            />
           </div>
         )}
       </section>

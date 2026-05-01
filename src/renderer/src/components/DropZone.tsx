@@ -4,10 +4,12 @@ import styles from './DropZone.module.css';
 
 type Props = {
   onFileSelected: (absPath: string) => void;
+  onUrlDownloadRequested: () => void;
 };
 
-export default function DropZone({ onFileSelected }: Props) {
+export default function DropZone({ onFileSelected, onUrlDownloadRequested }: Props) {
   const [dragOver, setDragOver] = useState(false);
+  const [url, setUrl] = useState('');
 
   const handleClick = useCallback(async () => {
     const absPath = await window.api.openFileDialog();
@@ -35,22 +37,55 @@ export default function DropZone({ onFileSelected }: Props) {
     [onFileSelected],
   );
 
+  const isValidUrl = (val: string) => {
+    return /youtube\.com\/watch\?v=|youtu\.be\/|youtube\.com\/live\/|twitch\.tv\/videos\/|twitch\.tv\/.+\/v\//.test(val);
+  };
+
   return (
-    <button
-      type="button"
-      className={`${styles.dropZone} ${dragOver ? styles.dragOver : ''}`}
-      onClick={handleClick}
-      onDragOver={handleDragOver}
-      onDragLeave={handleDragLeave}
-      onDrop={handleDrop}
-    >
-      <div className={styles.iconWrapper}>
-        <UploadCloud size={40} className={styles.icon} />
+    <div className={styles.container}>
+      <button
+        type="button"
+        className={`${styles.dropZone} ${dragOver ? styles.dragOver : ''}`}
+        onClick={handleClick}
+        onDragOver={handleDragOver}
+        onDragLeave={handleDragLeave}
+        onDrop={handleDrop}
+      >
+        <div className={styles.iconWrapper}>
+          <UploadCloud size={40} className={styles.icon} />
+        </div>
+        <div className={styles.textContainer}>
+          <div className={styles.primary}>動画ファイルをここにドロップ</div>
+          <div className={styles.secondary}>または クリックしてメニューから選択</div>
+        </div>
+      </button>
+
+      <div className={styles.divider}>
+        <div className={styles.dividerLine} />
+        <span className={styles.dividerText}>または</span>
+        <div className={styles.dividerLine} />
       </div>
-      <div className={styles.textContainer}>
-        <div className={styles.primary}>動画ファイルをここにドロップ</div>
-        <div className={styles.secondary}>または クリックしてメニューから選択</div>
+
+      <div className={styles.urlSection}>
+        <div className={styles.urlInputWrapper}>
+          <input
+            type="text"
+            className={styles.urlInput}
+            placeholder="YouTube または Twitch のURLを入力"
+            value={url}
+            onChange={(e) => setUrl(e.target.value)}
+          />
+          <button
+            type="button"
+            className={styles.downloadButton}
+            disabled={!isValidUrl(url)}
+            onClick={onUrlDownloadRequested}
+          >
+            ダウンロード
+          </button>
+        </div>
       </div>
-    </button>
+    </div>
   );
 }
+

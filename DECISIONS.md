@@ -15,6 +15,22 @@
 
 ---
 
+## 2026-05-01 22:30 - DropZone に URL DL 機能を統合(動線一本化)
+
+- 誰が: Antigravity
+- 何を: DropZone内にURL入力エリア追加、ヘッダのURL DLアイコン削除
+- 理由: 動画読み込み入口を1箇所に集約してUX向上
+- 影響: DropZone, App.tsx, DropZone.module.css
+- コミット: (未定)
+
+## 2026-05-01 22:20 - URL動画ダウンロード機能(yt-dlp統合)
+
+- 誰が: Antigravity
+- 何を: yt-dlp 同梱、URL DLダイアログ、進捗表示、設定永続化、利用規約同意フロー
+- 理由: 量産ワークフローでブラウザ→外部ツール→アプリ起動 の3ステップを1ステップに短縮
+- 影響: main/urlDownload.ts(新規), preload/index.ts, config.ts, types.ts, App周辺UI、resources/yt-dlp/
+- コミット: c995d3b
+
 ## 2026-05-01 21:50 - DnD 操作性改善(カード全体を drag source 化)
 
 - 誰が: Claude Code
