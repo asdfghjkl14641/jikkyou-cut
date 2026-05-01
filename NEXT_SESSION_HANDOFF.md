@@ -36,7 +36,7 @@
 - 根本原因(両方共通): `DropZone.tsx` の prop が `() => void` で URL 引数を受け取らない設計だった
 - 修正: prop を `(url: string) => void` に。`pendingUrl` 介して TOS → 直接 `startDownloadFlow`。`UrlDownloadDialog.tsx/.module.css` 削除
 
-### 3. URL DL 追加修正: 進捗 0.0% 固着 + DL 後再生不可(`<NEW_HASH>`)
+### 3. URL DL 追加修正: 進捗 0.0% 固着 + DL 後再生不可(`2b3ffe6`)
 - バグ C: URL 貼って規約同意 → 進捗ダイアログは出るが 0.0% から動かない
 - バグ D: DL 完了 → ClipSelectView に遷移しても `<video>` が再生できない
 - 根本原因: yt-dlp デフォルトが AV1/VP9-mkv 等 Chromium 非ネイティブな最高画質を取得していた + 進捗 stdout のバッファリング/想定外フィールドで regex がマッチしない
@@ -96,14 +96,14 @@
 ## 1. 現在のリポジトリ状態(更新時刻 2026-05-02 06:50)
 
 ```
-HEAD = <NEW_HASH> fix(url-download): 進捗 0.0% 固着 + DL 後再生不可の修正
-origin/main = <NEW_HASH>(同期済み)
+HEAD = 2b3ffe6 fix(url-download): 進捗 0.0% 固着 + DL 後再生不可の修正
+origin/main = 2b3ffe6(同期済み)
 working tree clean
 ```
 
 git log -10 --oneline(凍結時点):
 ```
-<NEW_HASH> fix(url-download): 進捗 0.0% 固着 + DL 後再生不可の修正(フォーマット限定 + 進捗テンプレート明示化)
+2b3ffe6 fix(url-download): 進捗 0.0% 固着 + DL 後再生不可の修正(フォーマット限定 + 進捗テンプレート明示化)
 ca0a81b docs: 寝る前作業 — NEXT_SESSION_HANDOFF.md でセッション末状態を凍結
 1678746 fix(url-download): URL DL バグ 2 件修正(prop 引数欠落が両方の根本原因)
 919e6c0 feat(comment-analysis): implement CommentAnalysisGraph UI with mock data and documentation
@@ -128,7 +128,7 @@ c995d3b feat(url-download): integrate yt-dlp for video downloading
 | 話者プリセット + キュー単位スタイル上書き(Phase B-3) | `c69fcfb` / `e4b6795` | 動作 |
 | 話者カラム表示モード | `f0997b1` | 動作 |
 | カラム間 DnD で話者変更 | `5b9682f` / `1001620` | 動作 |
-| URL DL(yt-dlp 統合)| `c995d3b` / `c2bc6df` / `1678746` / `<NEW_HASH>` | **実機確認済み**(MP4-AVC1-AAC 強制 + 進捗テンプレ) |
+| URL DL(yt-dlp 統合)| `c995d3b` / `c2bc6df` / `1678746` / `2b3ffe6` | **実機確認済み**(MP4-AVC1-AAC 強制 + 進捗テンプレ) |
 | コメント分析グラフ(モックデータ)| `919e6c0` / `1678746` で簡素化 | **実機確認済み** — yt-dlp チャット取得は未実装 |
 | 3 フェーズ構造(load / clip-select / edit)| `1678746` | **実機確認済み** |
 | ドキュメント整理(IDEAS.md + COMMENT_ANALYSIS_DESIGN.md)| `076240f` | 完了 |
@@ -181,7 +181,7 @@ c995d3b feat(url-download): integrate yt-dlp for video downloading
 - **プリセット階層**: `SpeakerPreset`(セットプリセット = 動画ごとのコラボメンバー一覧)と `StylePreset`(スタイルプリセット = テンション別)の二階層で分離
 - **「自分用ツール」段階**: 配布バイナリ化・配布サイズ等は脇に置き、まず作者のワークフロー最適化を優先
 
-### 4.5 URL DL のフォーマット方針(`<NEW_HASH>` で確定)
+### 4.5 URL DL のフォーマット方針(`2b3ffe6` で確定)
 
 - **MP4-AVC1-AAC を強制取得**(Chromium `<video>` のネイティブ再生互換性を最優先)
 - 4K AV1 / 1440p VP9-mkv 等の最高画質は **意図的に切り捨て** — 最大 1080p AVC1 にキャップ
