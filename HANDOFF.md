@@ -235,6 +235,8 @@ type EditorState = {
 - **yt-dlp**: `resources/yt-dlp/` にバイナリを同梱。`getYtDlpPath()` で dev / packaged を分岐。
 - **URL DL の選択フォーマット**: `<video>` 互換のため **H.264+AAC(MP4 コンテナ)を強制取得** する(`buildFormatSelector`)。三段フォールバック `bestvideo[ext=mp4][vcodec^=avc1]+bestaudio[ext=m4a]/best[ext=mp4]/best` で常に MP4 コンテナに落とし、`--merge-output-format mp4` で結合時のコンテナも固定。これにより 4K AV1 や 1440p VP9-mkv 等の最高画質は犠牲(最大 1080p AVC1 にキャップ)になっているが、**Chromium `<video>` のネイティブ再生互換性を優先** している。新しい URL DL に効くのみ — 旧形式で DL 済みのファイルが再生できない場合は再 DL が必要。
 - **URL DL の進捗パース**: yt-dlp デフォルト出力は `Unknown%` / merge 中ドロップで不安定なので、`--progress-template "download:JCUT_PROGRESS %(progress._percent_str)s %(progress._speed_str)s %(progress._eta_str)s"` で固定フォーマット化。renderer 側の進捗ダイアログに 250ms throttle で送る。
+- **yt-dlp の `--print` + `--progress` は必ずセット**: `--print` を渡すと yt-dlp は暗黙に quiet モードに入り、進捗を含む全デフォルト出力を抑制する。`--progress-template` だけでは「テンプレートを使う」設定にしかならず、出力自体は復活しない。`--progress` フラグ(`Show progress bar, even if in quiet mode`)を **必ずセットで指定** する。`src/main/urlDownload.ts` の spawn args にコメント警告残置。
+- **URL DL は video + audio の 2 パス DL**: `bestvideo[ext=mp4][vcodec^=avc1]+bestaudio[ext=m4a]` の指定で video ストリームと audio ストリームを別々に DL してから `--merge-output-format mp4` で結合する。renderer の進捗バーは 0→100, 0→100 と 2 度上がる動作になる(自分用ツール段階としては許容、merger フェーズ「結合中…」表示は将来検討)。
 - **Google Fonts**: Google Fonts API から TTF を動的に取得し `userData/fonts` に保存。
 - **プロジェクト保存**: 動画と同じ階層に `<basename>.jcut.json` として自動保存。
 - **Gladia API**: 文字起こしに使用。APIキーは `safeStorage` で保存。

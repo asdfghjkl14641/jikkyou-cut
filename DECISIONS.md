@@ -15,6 +15,22 @@
 
 ---
 
+## 2026-05-02 07:15 - URL DL 進捗 0.0% 固着の本当の原因を実機ログで特定 → `--progress` 追加で解決
+
+- 誰が: Claude Code
+- 何を: `2b3ffe6` で `--progress-template` を入れたが、実機では依然として進捗イベントが 1 件も飛ばないバグが残存。生 yt-dlp ログを採取して **真の根本原因を特定**
+- 採取した生ログ(`yt-dlp.exe -f "..." -o "..." --merge-output-format mp4 --newline --progress-template "..." --no-playlist --no-warnings --restrict-filenames --print "after_move:filepath" --print "title"`):
+  - stdout に **タイトルとファイルパスの 2 行のみ**、`JCUT_PROGRESS` 行は **1 行も無し**
+  - stderr も完全に空(EOL なし)
+  - DL 自体は成功(exit 0)
+- 原因: yt-dlp は `--print` 指定時に **暗黙的に quiet モード** に入り、進捗を含む全てのデフォルト出力を抑制する。`--progress-template` は「テンプレートを使う」設定であり「進捗を出力する」設定ではない。`--progress` フラグ(`Show progress bar, even if in quiet mode`)を明示的に追加する必要があった
+- 修正: `src/main/urlDownload.ts` の spawn 引数に `'--progress'` を 1 行追加。再採取で `JCUT_PROGRESS  0.2%  153.62KiB/s 00:02` の形式で 1 ファイル 20 行程度の進捗イベントが stdout に流れることを確認
+- 観察された 2 パス挙動: video ストリーム DL(0→100%)→ audio ストリーム DL(0→100%)→ 結合、の順。renderer の進捗バーは 100% まで上がってから 0% に戻り再度 100% まで進む(自分用ツール段階としては許容、merger フェーズの「結合中…」表示は将来検討)
+- 検証: `Me_at_the_zoo`(YT 最古の公開動画、19 秒)を実 DL → ffprobe で `h264 / aac` の MP4 を確認、Chromium 互換 OK
+- 反省: `2b3ffe6` 時に `--simulate` でフォーマット選択は確認したが、**実 DL の生ログ採取を省いていた** ため進捗抑制バグを見逃した。次回以降は最低 1 ケース実 DL ログを取る方針
+- 影響: `src/main/urlDownload.ts`(`'--progress'` 1 行 + コメント)
+- コミット: (未定)
+
 ## 2026-05-02 06:50 - URL DL: 進捗 0.0% 固着 + DL 後再生不可の修正(フォーマット限定 + 進捗テンプレート明示化)
 
 - 誰が: Claude Code

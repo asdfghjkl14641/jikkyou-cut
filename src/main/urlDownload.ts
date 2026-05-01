@@ -87,6 +87,13 @@ export async function downloadVideo(args: {
     '-o', outputTemplate,
     '--merge-output-format', 'mp4',
     '--newline',
+    // `--print` implicitly puts yt-dlp into quiet mode, which silences
+    // ALL progress output (verified empirically — without `--progress`
+    // not a single `JCUT_PROGRESS` line ever fires). Adding `--progress`
+    // explicitly forces progress emission to stdout. The combination
+    // `--print + --progress + --progress-template` is what makes the
+    // progress bar move at all. Don't remove any of these three.
+    '--progress',
     '--progress-template', PROGRESS_TEMPLATE,
     '--no-playlist',
     '--no-warnings',
