@@ -40,7 +40,7 @@ Electron + React + TypeScript 製。**現在は配布前の "自分用ツール"
 - 編集ループ「URL DL or ファイル読み込み → 文字起こし(話者分離 hint) → テキスト編集(話者修正・行削除・スタイル上書き) → 字幕オーバーレイで確認 → 書き出し(字幕焼き込み)」が動作
 
 ### 次フェーズ
-- **進行中**: コメント分析画面 (UI レイヤ完成、バックエンド待ち) — 詳細は `docs/COMMENT_ANALYSIS_DESIGN.md`
+- **進行中**: コメント分析画面 (UI 組み込み・3 フェーズ構造化完了、バックエンド待ち) — 詳細は `docs/COMMENT_ANALYSIS_DESIGN.md`
 - 長期構想は `IDEAS.md` 参照(AI動画ディレクター方向)
 
 ---
@@ -155,8 +155,7 @@ jikkyou-cut/
                 ├── Timeline.tsx
                 ├── TranscribeButton.tsx        # マルチトグル + 話者数 select + 起動ボタン
                 ├── TranscriptionContextForm.tsx
-                ├── UrlDownloadDialog.tsx       # 廃止予定 / 残置(DropZone に統合済)
-                ├── UrlDownloadProgressDialog.tsx
+                ├── UrlDownloadProgressDialog.tsx # 進捗 + キャンセル(URL DL)
                 ├── CommentAnalysisGraph.tsx    # コメント分析盛り上がりスコアグラフ(新規)
                 ├── CommentAnalysisGraph.mock.ts # 分析グラフ用モックデータ生成
                 ├── VideoPlayer.tsx             # <video> ラッパ + rAF + プレビュースキップ
@@ -210,6 +209,7 @@ jikkyou-cut/
 | `TermsOfServiceModal.tsx` | URL DL 機能の初回利用同意モーダル |
 | `OperationsDialog.tsx` | 操作一覧(キーボードショートカット等の参照画面) |
 | `CommentAnalysisGraph.tsx` | コメント分析結果をヒートマップ状のグラフで可視化(3要素統合スコア) |
+| `ClipSelectView.tsx` | フェーズ2: 切り抜き範囲選択画面。プレビュー + 盛り上がりグラフ |
 
 ---
 
@@ -221,6 +221,10 @@ jikkyou-cut/
 
 ```ts
 type EditorState = {
+  // フェーズ
+  phase: 'load' | 'clip-select' | 'edit';
+  clipRange: { startSec: number; endSec: number } | null;
+
   // ファイル
   filePath: string | null;
   fileName: string | null;
@@ -250,37 +254,22 @@ type EditorState = {
   subtitleSettings: SubtitleSettings | null;
 
   // 話者分離
-  collaborationMode: boolean;      // マルチトグル(diarization の ON/OFF)
-  expectedSpeakerCount: number | null;  // 話者数 hint(null=自動 / 2..5 / 6=6人以上)
+  collaboratiアプリは 3 つのフェーズで構成される：
 
-  // 表示モード
-  viewMode: 'linear' | 'speaker-column';
-};
-```
+### Phase 1: 動画読み込み (`load`)
+- コンポーネント: `DropZone`
+- 内容: ファイルのドラッグ＆ドロップまたは URL 入力。
 
-### 主要アクション(抜粋)
+### Phase 2: 切り抜き選択 (`clip-select`)
+- コンポーネント: `ClipSelectView`
+- 内容: 盛り上がりグラフ（ヒートマップ）をドラッグして、編集したい区間を 1 つ選択する。
+- 遷移: 「この区間を編集」ボタンで Phase 3 へ。
 
-- ファイル: `setFile` / `clearFile` / `setDuration` / `setVideoDimensions` / `setCurrentSec`
-- 文字起こし: `startTranscription` / `setTranscriptionProgress` / `succeedTranscription` / `failTranscription` / `cancelTranscription`
-- 復元: `restoreFromProject(project: ProjectFile)`
-- 選択: `selectByIndex` / `moveFocus` / `extendSelectionTo` / `extendSelectionBy` / `selectAll`
-- 編集: `toggleDeletedOnSelection` / `resetAllDeleted`(履歴生成)
-- 履歴: `undo` / `redo`
-- 書き出し: `startExportState` / `setExportProgress` / `succeedExport` / `failExport` / `cancelExportState` / `resetExportState`
-- プレビュー: `setPreviewMode` / `bumpSeekNonce`
-- 字幕: `loadSubtitleSettings` / `updateSubtitleSettings` / `toggleCueSubtitle` / `updateCueSpeaker` / `updateCueStyleOverride`
-- 話者分離: `setCollaborationMode` / `setExpectedSpeakerCount`(setter は `saveSettings` を fire-and-forget で叩いて永続化)
-- 表示モード: `setViewMode`
-
-### 編集履歴の仕組み
-
-`toggleDeletedOnSelection` / `resetAllDeleted` / `toggleCueSubtitle` / `updateCueSpeaker` / `updateCueStyleOverride` などの **cue mutation** だけが履歴を生成する。選択操作は履歴に積まない。
-
----
-
-## 5. IPC 構造
-
-`src/common/types.ts` の `IpcApi` 型が **renderer から呼べる API の唯一の真実源**。preload で `window.api` として expose、main で対応する `ipcMain.handle` がある。
+### Phase 3: 編集 (`edit`)
+- コンポーネント: 既存の編集画面一式（`VideoPlayer`, `EditableTranscriptList`, `Timeline` 等）
+- 内容: 文字起こし、テキストベース編集、書き出し。
+- 遷移: ヘッダの「← 範囲を選び直す」ボタンで Phase 2 へ戻る。
+��実源**。preload で `window.api` として expose、main で対応する `ipcMain.handle` がある。
 
 ### 名前空間別 API
 
@@ -399,7 +388,7 @@ urlDownload.{ start({url, quality, outputDir}), cancel, onProgress }
 
 ---
 
-## 7. UI レイアウト(現状)
+## 7. UI レイアウト (3フェーズ構成)
 
 ```
 ┌────────────────────────────────────────────────────────────────────┐

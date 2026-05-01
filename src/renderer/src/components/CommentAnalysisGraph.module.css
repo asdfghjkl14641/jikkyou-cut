@@ -1,55 +1,26 @@
 .container {
   display: flex;
   flex-direction: column;
-  background: var(--bg-surface);
-  border: 1px solid var(--border-subtle);
-  border-radius: var(--radius-lg);
-  padding: var(--space-4);
-  margin: var(--space-4);
-  gap: var(--space-3);
-  box-shadow: var(--shadow-md);
+  background: transparent;
+  padding: 0;
+  margin: var(--space-4) 0;
+  gap: 0;
+  box-shadow: none;
   user-select: none;
 }
 
+/* 簡素化のためヘッダ・凡例は削除、または display: none */
 .header {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-}
-
-.title {
-  margin: 0;
-  font-size: var(--font-size-sm);
-  font-weight: var(--font-weight-bold);
-  color: var(--text-primary);
-}
-
-.legend {
-  display: flex;
-  gap: var(--space-3);
-}
-
-.legendItem {
-  display: flex;
-  align-items: center;
-  gap: var(--space-1);
-  font-size: 10px;
-  color: var(--text-muted);
-}
-
-.dot {
-  width: 6px;
-  height: 6px;
-  border-radius: 50%;
+  display: none;
 }
 
 .graphArea {
   position: relative;
-  height: 140px;
+  height: 100px;
   background: var(--bg-base);
   border-radius: var(--radius-sm);
-  border: 1px solid rgba(255, 255, 255, 0.05);
-  cursor: pointer;
+  border: 1px solid var(--border-subtle);
+  cursor: crosshair;
   overflow: hidden;
 }
 
@@ -61,6 +32,7 @@
   bottom: 0;
   display: flex;
   align-items: flex-end;
+  pointer-events: none;
 }
 
 .bar {
@@ -72,6 +44,18 @@
 
 .graphArea:hover .bar {
   filter: brightness(1.1);
+}
+
+.selectionOverlay {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  background: var(--accent-primary);
+  opacity: 0.25;
+  border-left: 1px solid var(--accent-primary);
+  border-right: 1px solid var(--accent-primary);
+  pointer-events: none;
+  z-index: 2;
 }
 
 .cursor {
@@ -92,9 +76,9 @@
   top: 0;
   left: 50%;
   transform: translateX(-50%);
-  border-left: 6px solid transparent;
-  border-right: 6px solid transparent;
-  border-top: 6px solid var(--accent-danger);
+  border-left: 4px solid transparent;
+  border-right: 4px solid transparent;
+  border-top: 5px solid var(--accent-danger);
 }
 
 .tooltip {

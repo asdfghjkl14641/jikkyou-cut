@@ -15,6 +15,28 @@
 
 ---
 
+## 2026-05-02 00:30 - URL DL バグ 2 件修正(両方とも同じ根本原因)
+
+- 誰が: Claude Code
+- 何を: DropZone に統合された URL DL の「ダウンロードが始まらない」「URL 入力画面が二重に出る」を解消
+  - **根本原因(両バグ共通)**: `DropZone.tsx` の prop 型が `onUrlDownloadRequested: () => void`(URL 引数なし)で、入力欄に貼った URL がローカル state に閉じ込められたまま親に届いていなかった。`App.tsx` の `handleUrlDownloadClick` は URL を受け取らず、TOS 通過後に旧 `UrlDownloadDialog`(URL 入力欄つき)を開いていただけ → DropZone の URL は事実上捨てられ、ユーザは同じ URL を 2 回目のダイアログで入力し直す必要があった
+  - **修正**: `onUrlDownloadRequested: (url: string) => void` に変更し、DropZone 内で「ボタンクリック / Enter キー」で `submitUrl()` から URL を渡す。`App.tsx` 側で `pendingUrl` ステートを介して TOS 同意フローと連結 → 直接 `startDownloadFlow(url)` が走るルートに整理
+  - **不要化した legacy dialog の削除**: `UrlDownloadDialog.tsx` + `.module.css` を完全削除(`grep -r UrlDownloadDialog src/` で参照箇所が App.tsx だけだったことを確認)。menu.ts にも URL DL 動線はなく、機能リグレッションなし
+  - 初回 DL 時に `defaultDownloadDir` が null なら `openDirectoryDialog` で 1 回だけ尋ね、保存して以後省略。画質は `defaultDownloadQuality`(default 'best')をそのまま使用 — 中間ダイアログを介さない 1 ステップフロー
+  - エラー処理: yt-dlp ENOENT 等の起動失敗は `child_process.spawn` の `error` イベントから `reject` されて `App.tsx` の `alert(\`ダウンロードに失敗しました: ${msg}\`)` に届く既存ルートで surface 済み(サイレント失敗にはなっていなかった)。ユーザ体感の "サイレント失敗" は実は「URL を捨てて空ダイアログを開いていただけ」だった
+- 理由: 1 ステップ動線(URL 貼って → 規約 → 進捗 → DL 完了)を実装したつもりが、prop シグネチャの引数欠落で半端に旧 dialog 経路に逆戻りしていた。型レベルで URL が必須になるよう契約を直すのが正しい修正
+- 影響: `src/renderer/src/components/DropZone.tsx`(submitUrl + Enter キー対応)、`src/renderer/src/App.tsx`(`pendingUrl` ステート + `startDownloadFlow` + `handleUrlDownloadRequested` に再構成、legacy dialog の JSX 削除)、`src/renderer/src/components/UrlDownloadDialog.tsx` + `.module.css`(削除)、`HANDOFF.md`(ディレクトリ構成から `UrlDownloadDialog.tsx` 削除)
+- コミット: (未定)
+
+## 2026-05-01 23:35 - アプリを 3 フェーズ構造に再編 + コメント分析グラフ簡素化
+- 誰が: Antigravity
+- 何を: editorStore に phase ステート追加(load / clip-select / edit)、ClipSelectView 新規実装、CommentAnalysisGraph の chrome 削除でヒートマップ風 UI に、edit ヘッダに「切り抜き範囲を選び直す」ボタン追加
+- 理由: 「動画読み込み → 切り抜き範囲選択 → 編集」の動線を明示化。前回の最下部固定表示は仮実装で、本来の動線に組み込む段階
+- 影響: editorStore.ts (phase / clipRange 追加)、App.tsx (フェーズ分岐)、ClipSelectView.tsx (新規)、CommentAnalysisGraph.tsx (UI 簡素化 + ドラッグ選択対応)、CommentAnalysisGraph.mock.ts (durationSec 受け取り)
+- コミット: (未定)
+
+---
+
 ## 2026-05-01 23:25 - コメント分析画面 UI MVP 着手(モックデータ先行)
 - 誰が: Antigravity
 - 何を: CommentAnalysisGraph コンポーネント新設、3 要素統合スコアの可視化、モックデータで動作確認可能な状態に

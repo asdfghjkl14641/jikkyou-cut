@@ -18,19 +18,19 @@ import ExportPreview from './components/ExportPreview';
 import ExportProgressDialog from './components/ExportProgressDialog';
 import TranscriptionContextForm from './components/TranscriptionContextForm';
 import type { TranscriptionContext } from '../../common/config';
-import { X, Settings, Scissors, Subtitles } from 'lucide-react';
+import { X, Settings, Scissors, Subtitles, ChevronLeft } from 'lucide-react';
 import SubtitleSettingsDialog from './components/SubtitleSettingsDialog';
-import UrlDownloadDialog from './components/UrlDownloadDialog';
 import UrlDownloadProgressDialog from './components/UrlDownloadProgressDialog';
 import TermsOfServiceModal from './components/TermsOfServiceModal';
-import CommentAnalysisGraph from './components/CommentAnalysisGraph';
-import { generateMockAnalysis } from './components/CommentAnalysisGraph.mock';
+import ClipSelectView from './components/ClipSelectView';
 import type { UrlDownloadArgs, UrlDownloadProgress } from '../../common/types';
 import styles from './App.module.css';
 
 export default function App() {
   const filePath = useEditorStore((s) => s.filePath);
   const fileName = useEditorStore((s) => s.fileName);
+  const phase = useEditorStore((s) => s.phase);
+  const setPhase = useEditorStore((s) => s.setPhase);
   const setFile = useEditorStore((s) => s.setFile);
   const clearFile = useEditorStore((s) => s.clearFile);
   const setDuration = useEditorStore((s) => s.setDuration);
@@ -41,13 +41,14 @@ export default function App() {
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [operationsOpen, setOperationsOpen] = useState(false);
   const [subtitleSettingsOpen, setSubtitleSettingsOpen] = useState(false);
-  const [urlDownloadOpen, setUrlDownloadOpen] = useState(false);
   const [tosOpen, setTosOpen] = useState(false);
   const [downloadProgressOpen, setDownloadProgressOpen] = useState(false);
   const [downloadProgress, setDownloadProgress] = useState<UrlDownloadProgress | null>(null);
-
-  // TODO: コメント分析画面 MVP 動作確認用モックデータ
-  const mockAnalysis = useMemo(() => generateMockAnalysis(3600, 5), []);
+  // URL waiting on TOS acceptance. Captured the moment the user submits in
+  // DropZone; consumed once the TOS modal is accepted (or cleared on
+  // cancel). Without this, the URL the user typed gets lost between TOS
+  // accept and the actual download start.
+  const [pendingUrl, setPendingUrl] = useState<string | null>(null);
 
   const loadSubtitleSettings = useEditorStore((s) => s.loadSubtitleSettings);
 
@@ -165,50 +166,82 @@ export default function App() {
     videoRef.current?.seekTo(sec);
   }, []);
 
-  const handleUrlDownloadClick = useCallback(() => {
-    if (!view) return;
-    if (view.config.urlDownloadAccepted) {
-      setUrlDownloadOpen(true);
-    } else {
-      setTosOpen(true);
-    }
-  }, [view]);
+  // Drives the actual yt-dlp download. Resolves outputDir from settings;
+  // if the user hasn't picked one yet, prompts a directory picker on first
+  // run and persists the choice. Quality also comes from saved settings
+  // (default 'best'). Only called after TOS has been accepted.
+  const startDownloadFlow = useCallback(
+    async (url: string) => {
+      if (!view) return;
+
+      // Resolve output directory: persisted preference, or prompt once.
+      let outputDir = view.config.defaultDownloadDir;
+      if (!outputDir) {
+        const picked = await window.api.openDirectoryDialog();
+        if (!picked) return; // user cancelled the picker — abort silently
+        outputDir = picked;
+        await save({ defaultDownloadDir: picked });
+      }
+
+      const quality = view.config.defaultDownloadQuality || 'best';
+      const args: UrlDownloadArgs = { url, quality, outputDir };
+
+      setDownloadProgressOpen(true);
+      setDownloadProgress(null);
+
+      const cleanup = window.api.urlDownload.onProgress((p) => {
+        setDownloadProgress(p);
+      });
+
+      try {
+        const result = await window.api.urlDownload.start(args);
+        setDownloadProgressOpen(false);
+        setFile(result.filePath);
+      } catch (err) {
+        setDownloadProgressOpen(false);
+        const msg = err instanceof Error ? err.message : String(err);
+        // The two transcription/export sentinels are unrelated to URL DL,
+        // but keep the original guard in case execa's cancel signal
+        // happens to surface them through a different error path.
+        if (msg !== 'TRANSCRIPTION_CANCELLED' && msg !== 'EXPORT_CANCELLED') {
+          alert(`ダウンロードに失敗しました: ${msg}`);
+        }
+      } finally {
+        cleanup();
+      }
+    },
+    [view, save, setFile],
+  );
+
+  // Entry point from DropZone. If TOS hasn't been accepted yet, stash the
+  // URL and show the modal first; otherwise go straight to the download.
+  const handleUrlDownloadRequested = useCallback(
+    (url: string) => {
+      if (!view) return;
+      if (view.config.urlDownloadAccepted) {
+        void startDownloadFlow(url);
+      } else {
+        setPendingUrl(url);
+        setTosOpen(true);
+      }
+    },
+    [view, startDownloadFlow],
+  );
 
   const handleTosAccept = useCallback(async () => {
     await save({ urlDownloadAccepted: true });
     setTosOpen(false);
-    setUrlDownloadOpen(true);
-  }, [save]);
-
-  const handleStartDownload = useCallback(async (args: UrlDownloadArgs) => {
-    setUrlDownloadOpen(false);
-    setDownloadProgressOpen(true);
-    setDownloadProgress(null);
-
-    // Save settings
-    void save({
-      defaultDownloadDir: args.outputDir,
-      defaultDownloadQuality: args.quality,
-    });
-
-    const cleanup = window.api.urlDownload.onProgress((p) => {
-      setDownloadProgress(p);
-    });
-
-    try {
-      const result = await window.api.urlDownload.start(args);
-      setDownloadProgressOpen(false);
-      // Auto open
-      setFile(result.filePath);
-    } catch (err: any) {
-      setDownloadProgressOpen(false);
-      if (err.message !== 'TRANSCRIPTION_CANCELLED' && err.message !== 'EXPORT_CANCELLED') {
-        alert(`ダウンロードに失敗しました: ${err.message}`);
-      }
-    } finally {
-      cleanup();
+    if (pendingUrl) {
+      const url = pendingUrl;
+      setPendingUrl(null);
+      void startDownloadFlow(url);
     }
-  }, [save, setFile]);
+  }, [save, pendingUrl, startDownloadFlow]);
+
+  const handleTosClose = useCallback(() => {
+    setTosOpen(false);
+    setPendingUrl(null);
+  }, []);
 
   const handleCancelDownload = useCallback(() => {
     window.api.urlDownload.cancel();
@@ -220,47 +253,58 @@ export default function App() {
 
   return (
     <main className={styles.app}>
-      <header className={styles.header}>
-        <div className={styles.headerLeft}>
-          {view && (
-            <TranscriptionContextForm
-              initial={view.config.transcriptionContext}
-              onChange={handleContextChange}
-            />
-          )}
-          <TranscribeButton apiKeyConfigured={apiKeyConfigured} />
-        </div>
-        <div className={styles.headerRight}>
-          {fileName && (
-            <div className={styles.fileInfo}>
-              <button
-                type="button"
-                className={styles.iconButton}
-                onClick={clearFile}
-                title="動画を閉じる"
-              >
-                <X strokeWidth={1.5} size={18} />
-              </button>
-            </div>
-          )}
-          <button
-            type="button"
-            className={`${styles.iconButton} ${styles.settingsButton}`}
-            onClick={() => setSubtitleSettingsOpen(true)}
-            title="字幕設定"
-          >
-            <Subtitles strokeWidth={1.5} size={18} />
-          </button>
-          <button
-            type="button"
-            className={`${styles.iconButton} ${styles.settingsButton}`}
-            onClick={() => setSettingsOpen(true)}
-            title="設定"
-          >
-            <Settings strokeWidth={1.5} size={18} />
-          </button>
-        </div>
-      </header>
+      {phase === 'edit' && (
+        <header className={styles.header}>
+          <div className={styles.headerLeft}>
+            <button
+              type="button"
+              className={styles.backToClipSelect}
+              onClick={() => setPhase('clip-select')}
+              title="切り抜き範囲を選び直す"
+            >
+              <ChevronLeft strokeWidth={2} size={18} />
+              範囲を選び直す
+            </button>
+            {view && (
+              <TranscriptionContextForm
+                initial={view.config.transcriptionContext}
+                onChange={handleContextChange}
+              />
+            )}
+            <TranscribeButton apiKeyConfigured={apiKeyConfigured} />
+          </div>
+          <div className={styles.headerRight}>
+            {fileName && (
+              <div className={styles.fileInfo}>
+                <button
+                  type="button"
+                  className={styles.iconButton}
+                  onClick={clearFile}
+                  title="動画を閉じる"
+                >
+                  <X strokeWidth={1.5} size={18} />
+                </button>
+              </div>
+            )}
+            <button
+              type="button"
+              className={`${styles.iconButton} ${styles.settingsButton}`}
+              onClick={() => setSubtitleSettingsOpen(true)}
+              title="字幕設定"
+            >
+              <Subtitles strokeWidth={1.5} size={18} />
+            </button>
+            <button
+              type="button"
+              className={`${styles.iconButton} ${styles.settingsButton}`}
+              onClick={() => setSettingsOpen(true)}
+              title="設定"
+            >
+              <Settings strokeWidth={1.5} size={18} />
+            </button>
+          </div>
+        </header>
+      )}
 
       {showBanner && (
         <ApiKeySetupBanner onOpenSettings={() => setSettingsOpen(true)} />
@@ -276,7 +320,18 @@ export default function App() {
       )}
 
       <section className={styles.body}>
-        {filePath ? (
+        {phase === 'load' && (
+          <div className={styles.bodyEmpty}>
+            <DropZone
+              onFileSelected={setFile}
+              onUrlDownloadRequested={handleUrlDownloadRequested}
+            />
+          </div>
+        )}
+
+        {phase === 'clip-select' && <ClipSelectView />}
+
+        {phase === 'edit' && filePath && (
           <>
             <div className={styles.topHalf}>
               <div className={styles.videoArea}>
@@ -296,13 +351,6 @@ export default function App() {
               <Timeline onSeek={handleSeek} />
             </div>
           </>
-        ) : (
-          <div className={styles.bodyEmpty}>
-            <DropZone 
-              onFileSelected={setFile} 
-              onUrlDownloadRequested={handleUrlDownloadClick}
-            />
-          </div>
         )}
       </section>
 
@@ -332,34 +380,14 @@ export default function App() {
       <TermsOfServiceModal
         isOpen={tosOpen}
         onAccept={handleTosAccept}
-        onClose={() => setTosOpen(false)}
+        onClose={handleTosClose}
       />
-
-      {view && (
-        <UrlDownloadDialog
-          isOpen={urlDownloadOpen}
-          onClose={() => setUrlDownloadOpen(false)}
-          onDownload={handleStartDownload}
-          defaultDir={view.config.defaultDownloadDir}
-          defaultQuality={view.config.defaultDownloadQuality}
-        />
-      )}
 
       <UrlDownloadProgressDialog
         isOpen={downloadProgressOpen}
         progress={downloadProgress}
         onCancel={handleCancelDownload}
       />
-
-      {/* TODO: コメント分析画面 MVP 動作確認用一時組み込み */}
-      <div style={{ position: 'fixed', bottom: 0, left: 0, right: 0, zIndex: 100, pointerEvents: 'none' }}>
-        <div style={{ pointerEvents: 'auto', maxWidth: '800px', margin: '0 auto' }}>
-          <CommentAnalysisGraph 
-            analysis={mockAnalysis} 
-            onSeek={handleSeek}
-          />
-        </div>
-      </div>
     </main>
   );
 }

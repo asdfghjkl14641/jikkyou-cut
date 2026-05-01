@@ -21,7 +21,16 @@ type ExportStatus = 'idle' | 'running' | 'success' | 'error' | 'cancelled';
 
 const HISTORY_LIMIT = 100;
 
+type EditorPhase = 'load' | 'clip-select' | 'edit';
+
+type ClipRange = {
+  startSec: number;
+  endSec: number;
+} | null;
+
 type EditorState = {
+  phase: EditorPhase;
+  clipRange: ClipRange;
   filePath: string | null;
   fileName: string | null;
   durationSec: number | null;
@@ -36,7 +45,7 @@ type EditorState = {
   // playing; updated once on seek/pause/load.
   currentSec: number;
 
-  transcription: TranscriptionResult | null;
+  transcription: null | TranscriptionResult;
   cues: TranscriptCue[];
   selectedIds: Set<string>;
 
@@ -67,6 +76,10 @@ type EditorState = {
   // this counter — useEffect on `seekNonce` fires reliably once per seek
   // without the noise of currentSec changes during normal playback.
   seekNonce: number;
+
+  // phase lifecycle
+  setPhase: (phase: EditorPhase) => void;
+  setClipRange: (range: ClipRange) => void;
 
   // file lifecycle
   setFile: (absPath: string) => void;
@@ -168,6 +181,8 @@ const clampIndex = (i: number, len: number): number =>
   Math.max(0, Math.min(len - 1, i));
 
 export const useEditorStore = create<EditorState>((set, get) => ({
+  phase: 'load',
+  clipRange: null,
   filePath: null,
   fileName: null,
   durationSec: null,
@@ -205,8 +220,12 @@ export const useEditorStore = create<EditorState>((set, get) => ({
 
   viewMode: 'linear',
 
+  setPhase: (phase) => set({ phase }),
+  setClipRange: (range) => set({ clipRange: range }),
+
   setFile: (absPath) =>
     set({
+      phase: 'clip-select',
       filePath: absPath,
       fileName: basename(absPath),
       durationSec: null,
@@ -228,10 +247,12 @@ export const useEditorStore = create<EditorState>((set, get) => ({
       exportResult: null,
       exportError: null,
       viewMode: 'linear',
+      clipRange: null,
     }),
 
   clearFile: () =>
     set({
+      phase: 'load',
       filePath: null,
       fileName: null,
       durationSec: null,
@@ -253,7 +274,9 @@ export const useEditorStore = create<EditorState>((set, get) => ({
       exportResult: null,
       exportError: null,
       viewMode: 'linear',
+      clipRange: null,
     }),
+
 
   setDuration: (sec) => set({ durationSec: sec }),
 

@@ -8,11 +8,13 @@
 
 - **コメント分析画面(MVP)** — 詳細は `docs/COMMENT_ANALYSIS_DESIGN.md` 参照
   - [x] グラフ UI(モックデータ)
+  - [x] 3 フェーズ構造への組み込み + UI 簡素化
   - [ ] yt-dlp でのチャットリプレイ取得(Claude Code)
   - [ ] スコア計算ロジック(キーワード辞書 + 密度集計)
-  - [ ] App.tsx の本格的な動線組み込み(URL DL → 分析 → 編集)
-  - [ ] 区間選択 UI(ドラッグ)
-  - [ ] 編集画面への区間情報受け渡し(ProjectFile.clipRange 拡張)
+  - [ ] edit フェーズで clipRange を使った動画範囲絞り込み(Timeline/VideoPlayer 連携)
+  - [ ] ProjectFile.clipRange 永続化
+  - [ ] 自動候補抽出ボタン
+
 
 ---
 

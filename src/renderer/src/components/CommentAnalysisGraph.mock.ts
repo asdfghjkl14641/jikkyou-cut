@@ -1,6 +1,7 @@
 import type { CommentAnalysis, ScoreSample } from './CommentAnalysisGraph';
 
-export const generateMockAnalysis = (durationSec: number = 3600, bucketSizeSec: number = 5): CommentAnalysis => {
+export const generateMockAnalysis = (durationSec: number, bucketSizeSec: number = 5): CommentAnalysis => {
+  if (durationSec <= 0) return { videoDurationSec: 0, bucketSizeSec, samples: [] };
   const sampleCount = Math.floor(durationSec / bucketSizeSec);
   const samples: ScoreSample[] = [];
 
@@ -20,24 +21,27 @@ export const generateMockAnalysis = (durationSec: number = 3600, bucketSizeSec: 
     const timeSec = i * bucketSizeSec;
     const x = timeSec;
 
-    // 複数の山を要素ごとに配置
+    // 複数の山を動画の長さに合わせてスケーリング
+    const scale = durationSec / 3600;
+
     // コメント密度の山
     let commentDensity = 
-      createPeak(x, 600, 100, 0.8) + 
-      createPeak(x, 1500, 150, 0.9) + 
-      createPeak(x, 2800, 120, 0.7);
+      createPeak(x, 600 * scale, 100 * scale, 0.8) + 
+      createPeak(x, 1500 * scale, 150 * scale, 0.9) + 
+      createPeak(x, 2800 * scale, 120 * scale, 0.7);
     
     // 視聴者増加の山 (少しずらしたり重なったり)
     let viewerGrowth = 
-      createPeak(x, 650, 80, 0.6) + 
-      createPeak(x, 1550, 100, 0.8) + 
-      createPeak(x, 2200, 200, 0.5);
+      createPeak(x, 650 * scale, 80 * scale, 0.6) + 
+      createPeak(x, 1550 * scale, 100 * scale, 0.8) + 
+      createPeak(x, 2200 * scale, 200 * scale, 0.5);
 
     // キーワードヒットの山 (局所的に強い)
     let keywordHits = 
-      createPeak(x, 580, 40, 0.9) + 
-      createPeak(x, 1520, 50, 1.0) + 
-      createPeak(x, 3100, 60, 0.8);
+      createPeak(x, 580 * scale, 40 * scale, 0.9) + 
+      createPeak(x, 1520 * scale, 50 * scale, 1.0) + 
+      createPeak(x, 3100 * scale, 60 * scale, 0.8);
+
 
     // ノイズを少し混ぜる
     commentDensity = Math.min(1, Math.max(0, commentDensity + Math.random() * 0.05));

@@ -19,6 +19,8 @@ export type CommentAnalysis = {
 type Props = {
   analysis: CommentAnalysis;
   onSeek?: (sec: number) => void;
+  selectionRange?: { startSec: number; endSec: number } | null;
+  onSelectionChange?: (range: { startSec: number; endSec: number } | null) => void;
 };
 
 const formatHMS = (totalSec: number): string => {
@@ -33,10 +35,17 @@ const formatHMS = (totalSec: number): string => {
   return `${m}:${String(s).padStart(2, '0')}`;
 };
 
-export default function CommentAnalysisGraph({ analysis, onSeek }: Props) {
+export default function CommentAnalysisGraph({ 
+  analysis, 
+  onSeek, 
+  selectionRange, 
+  onSelectionChange 
+}: Props) {
   const currentSec = useEditorStore((s) => s.currentSec);
   const containerRef = useRef<HTMLDivElement>(null);
   const [hoverSample, setHoverSample] = useState<{ sample: ScoreSample; x: number; y: number } | null>(null);
+  const [dragStartSec, setDragStartSec] = useState<number | null>(null);
+  const [dragCurrentSec, setDragCurrentSec] = useState<number | null>(null);
 
   const durationSec = analysis.videoDurationSec;
 
@@ -45,15 +54,34 @@ export default function CommentAnalysisGraph({ analysis, onSeek }: Props) {
     return Math.min(100, Math.max(0, (currentSec / durationSec) * 100));
   }, [currentSec, durationSec]);
 
+  const getTimeAtX = useCallback((x: number): number => {
+    const rect = containerRef.current?.getBoundingClientRect();
+    if (!rect || rect.width <= 0) return 0;
+    const ratio = Math.max(0, Math.min(1, x / rect.width));
+    return ratio * durationSec;
+  }, [durationSec]);
+
+  const handleMouseDown = (e: MouseEvent<HTMLDivElement>) => {
+    const rect = containerRef.current?.getBoundingClientRect();
+    if (!rect) return;
+    const x = e.clientX - rect.left;
+    const time = getTimeAtX(x);
+    setDragStartSec(time);
+    setDragCurrentSec(time);
+  };
+
   const handleMouseMove = (e: MouseEvent<HTMLDivElement>) => {
     const rect = containerRef.current?.getBoundingClientRect();
     if (!rect || rect.width <= 0) return;
 
     const x = e.clientX - rect.left;
-    const ratio = Math.max(0, Math.min(1, x / rect.width));
-    const time = ratio * durationSec;
+    const time = getTimeAtX(x);
 
-    // Find the closest sample
+    if (dragStartSec !== null) {
+      setDragCurrentSec(time);
+    }
+
+    // Find the closest sample for tooltip
     const sampleIndex = Math.round(time / analysis.bucketSizeSec);
     const sample = analysis.samples[sampleIndex];
 
@@ -68,43 +96,64 @@ export default function CommentAnalysisGraph({ analysis, onSeek }: Props) {
     }
   };
 
-  const handleMouseLeave = () => {
-    setHoverSample(null);
+  const handleMouseUp = (e: MouseEvent<HTMLDivElement>) => {
+    if (dragStartSec === null) return;
+
+    const rect = containerRef.current?.getBoundingClientRect();
+    if (!rect) return;
+    const x = e.clientX - rect.left;
+    const time = getTimeAtX(x);
+
+    // If movement is very small, treat as click/seek
+    const diff = Math.abs(time - dragStartSec);
+    // threshold: 5px
+    const pxDiff = Math.abs(e.clientX - (rect.left + (dragStartSec / durationSec) * rect.width));
+
+    if (pxDiff < 5) {
+      onSeek?.(time);
+      // Optional: clear selection on click? 
+      // User said: "選択済み範囲をもう一度ドラッグしたら新規選択で上書き"
+      // Click usually seeks in these heatmaps.
+    } else {
+      const start = Math.min(dragStartSec, time);
+      const end = Math.max(dragStartSec, time);
+      onSelectionChange?.({ startSec: start, endSec: end });
+    }
+
+    setDragStartSec(null);
+    setDragCurrentSec(null);
   };
 
-  const handleClick = (e: MouseEvent<HTMLDivElement>) => {
-    const rect = containerRef.current?.getBoundingClientRect();
-    if (!rect || rect.width <= 0) return;
-    const ratio = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));
-    onSeek?.(ratio * durationSec);
+  const handleMouseLeave = () => {
+    setHoverSample(null);
+    if (dragStartSec !== null) {
+      // Cancel drag or commit? Usually cancel if it leaves area without mouseup
+      setDragStartSec(null);
+      setDragCurrentSec(null);
+    }
   };
+
+  const dragRange = useMemo(() => {
+    if (dragStartSec === null || dragCurrentSec === null) return null;
+    return {
+      start: Math.min(dragStartSec, dragCurrentSec),
+      end: Math.max(dragStartSec, dragCurrentSec),
+    };
+  }, [dragStartSec, dragCurrentSec]);
 
   return (
     <div className={styles.container}>
-      <div className={styles.header}>
-        <h3 className={styles.title}>盛り上がりスコア分析</h3>
-        <div className={styles.legend}>
-          <span className={styles.legendItem}><span className={styles.dot} style={{ background: 'var(--accent-primary)' }} /> コメント密度</span>
-          <span className={styles.legendItem}><span className={styles.dot} style={{ background: '#818CF8' }} /> 視聴者増加</span>
-          <span className={styles.legendItem}><span className={styles.dot} style={{ background: '#F472B6' }} /> キーワード</span>
-        </div>
-      </div>
-
       <div 
         ref={containerRef} 
         className={styles.graphArea}
+        onMouseDown={handleMouseDown}
         onMouseMove={handleMouseMove}
+        onMouseUp={handleMouseUp}
         onMouseLeave={handleMouseLeave}
-        onClick={handleClick}
       >
         <div className={styles.bars}>
           {analysis.samples.map((s, i) => {
             const height = s.total * 100;
-            // スコアに応じて色を変化させる (低: muted -> 高: accent)
-            // CSS変数の色をJSで補完するのは難しいので、CSSの背景色でグラデーションを作るか、
-            // 段階的にクラスを分けるか。ここでは style で HSL を使うか、段階的な色指定を行う。
-            // 既存の --accent-primary は青系。盛り上がりは暖色系が好ましいので、
-            // 低スコアは muted、高スコアはオレンジ〜赤系を想定。
             const opacity = 0.3 + s.total * 0.7;
             const color = s.total > 0.8 ? '#F87171' : s.total > 0.5 ? '#FB923C' : 'var(--text-muted)';
 
@@ -123,6 +172,28 @@ export default function CommentAnalysisGraph({ analysis, onSeek }: Props) {
             );
           })}
         </div>
+
+        {/* 選択範囲 (ドラッグ中) */}
+        {dragRange && (
+          <div 
+            className={styles.selectionOverlay}
+            style={{ 
+              left: `${(dragRange.start / durationSec) * 100}%`,
+              width: `${((dragRange.end - dragRange.start) / durationSec) * 100}%`
+            }}
+          />
+        )}
+
+        {/* 確定済み選択範囲 */}
+        {selectionRange && !dragRange && (
+          <div 
+            className={styles.selectionOverlay}
+            style={{ 
+              left: `${(selectionRange.startSec / durationSec) * 100}%`,
+              width: `${((selectionRange.endSec - selectionRange.startSec) / durationSec) * 100}%`
+            }}
+          />
+        )}
 
         {/* 現在位置の線 */}
         <div

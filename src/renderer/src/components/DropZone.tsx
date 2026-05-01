@@ -4,12 +4,21 @@ import styles from './DropZone.module.css';
 
 type Props = {
   onFileSelected: (absPath: string) => void;
-  onUrlDownloadRequested: () => void;
+  // Receives the URL the user typed into the input. The parent owns the
+  // download flow (TOS check, settings, progress dialog) — DropZone just
+  // hands off the validated URL string.
+  onUrlDownloadRequested: (url: string) => void;
 };
 
 export default function DropZone({ onFileSelected, onUrlDownloadRequested }: Props) {
   const [dragOver, setDragOver] = useState(false);
   const [url, setUrl] = useState('');
+
+  const submitUrl = useCallback(() => {
+    const trimmed = url.trim();
+    if (!trimmed) return;
+    onUrlDownloadRequested(trimmed);
+  }, [url, onUrlDownloadRequested]);
 
   const handleClick = useCallback(async () => {
     const absPath = await window.api.openFileDialog();
@@ -69,12 +78,18 @@ export default function DropZone({ onFileSelected, onUrlDownloadRequested }: Pro
             placeholder="YouTube または Twitch のURLを入力"
             value={url}
             onChange={(e) => setUrl(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter' && isValidUrl(url)) {
+                e.preventDefault();
+                submitUrl();
+              }
+            }}
           />
           <button
             type="button"
             className={styles.downloadButton}
             disabled={!isValidUrl(url)}
-            onClick={onUrlDownloadRequested}
+            onClick={submitUrl}
           >
             ダウンロード
           </button>
