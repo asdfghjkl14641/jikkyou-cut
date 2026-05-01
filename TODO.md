@@ -42,6 +42,7 @@
 
 ## ✅ 完了済み(直近)
 
+- **2026-05-01** 字幕プレビュー列をさらに 10px に縮小 — 15px でもまだ大きいとのフィードバックで `.subtitlePreview` を `font-size: 10px !important` に。中央列 13px に対して明確に小さく、編集の視線を邪魔しないサイズに固定
 - **2026-05-01** 字幕プレビュー列のサイズ調整(15px) — 中央列が `--font-size-md` = 13px なのに対し右列が 20px だったため ~1.5× 大きく見えていた。`.subtitlePreview` を `font-size: 15px !important` + `line-height: 1.4` に変更し、JSX 側の outline/shadow ratio も 15 基準にスケール。前回の「20px 指示が効かない」感覚は絶対値ではなくサイズ比の問題で、CSS 自体は正しく適用されていた
 - **2026-05-01** FFmpeg 字幕焼き込みを書き出しに統合 — `src/common/subtitle.ts`(`buildAss` / `convertTimecode` / `hexToAss` / `formatAssTime` 純関数)、`src/main/export.ts` の `prepareSubtitles()` でアクティブスタイル解決 + opt-in cue チェック + `temp/jcut-subs-*.ass` 生成 + `subtitles=path:fontsdir=path` フィルタを `[concatv]subtitles=...[outv]` でチェーン。Windows パスは `\` → `/`、`:` → `\\:` で escape。フォント未インストール時等は静かに字幕なしフォールバック。`videoWidth/Height` を `loadedmetadata` で store にキャプチャして ASS の `PlayResX/Y` に渡す。**Phase A はこれで完成**
 - **2026-05-01** 字幕設定 UI 実装 — `SubtitleSettingsDialog` と `FontManagerDialog` を作成。プリセット選択、カスタムスタイル作成、動的プレビュー、フォント DL 機能、キュー一覧の字幕 ON/OFF トグルを実装(Antigravity 担当)
