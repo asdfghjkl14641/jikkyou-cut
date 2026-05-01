@@ -15,6 +15,19 @@
 
 ---
 
+## 2026-05-01 21:30 - 話者カラム表示でドラッグ&ドロップ話者変更
+
+- 誰が: Claude Code
+- 何を: HTML5 Drag and Drop API でキューカードをカラム間移動可。speaker フィールドが即時更新され、Undo/Redo にも自動で乗る
+  - `SpeakerColumnView.tsx`: タイムコードヘッダ左端に `GripVertical` アイコンのドラッグハンドルを追加(`draggable` はハンドルのみ — textarea とは独立)。drag 中は `draggedCueId` で source カードを半透明化、`dragOverSpeaker` で対象カラムをハイライト
+  - グリッドカラムは独立 DOM ではなく CSS Grid 配置なので、ドロップターゲットは `.speakerColumns` コンテナ全体に対する `dragover`/`drop` で受け取り、**マウスの clientX をコンテナの bounding rect に対して hit-test して target 列を決定**
+  - ドロップオーバーレイは `gridRow: 1 / span ${cues.length}`(`-1` は `grid-auto-rows` の場合 implicit row を含まないため使えない)で各カラムに `pointer-events: none` のハイライト要素を敷く。drag 中だけレンダリング
+  - 既存 `updateCueSpeaker` action を再利用 — 同じカラムへのドロップは早期 return で no-op。Undo/Redo は store の history 機構に乗る
+  - `dragend` を source の安全網にして、Esc キャンセル / 範囲外ドロップでも highlight が残らないようにした
+- 理由: Gladia の自動分離精度の限界が明らかになっており、コラボ実況編集では話者ID 修正が頻発する作業。バッジクリック→ドロップダウン→選択の 3 ステップを **ハンドルドラッグ→対象カラムにドロップの 1 動作** に短縮することで、編集効率が体感で大きく改善する
+- 影響: `SpeakerColumnView.tsx`, `SpeakerColumnView.module.css`
+- コミット: (未定)
+
 ## 2026-05-01 21:15 - UI整理(ヘッダ・操作一覧の不要要素削除)
 
 - 誰が: Antigravity

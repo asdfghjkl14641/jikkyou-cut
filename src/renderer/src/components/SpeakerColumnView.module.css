@@ -212,4 +212,60 @@
   overflow: hidden;
 }
 
+/* ---- Drag-and-drop speaker reassignment ----------------------------- */
+
+/* Six-dot grip in the cue card header. Subtle by default; brightens on
+   hover so the user discovers it without it shouting in the layout. */
+.dragHandle {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-muted);
+  cursor: grab;
+  padding: 2px;
+  border-radius: var(--radius-sm);
+  transition: color var(--transition-fast), background-color var(--transition-fast);
+  /* Suppresses the platform "ghost text selection" that fires when the
+     user mousedown-drags out of an inline element. The grip should only
+     ever start an HTML5 drag. */
+  user-select: none;
+}
+
+.dragHandle:hover {
+  color: var(--text-primary);
+  background: var(--bg-surface-hover);
+}
+
+.dragHandle:active {
+  cursor: grabbing;
+}
+
+/* Source card while a drag is in flight. Half-opacity matches the spec;
+   the browser also paints its own translucent drag image, so this is
+   just for the slot the card vacated. */
+.cueCard.dragging {
+  opacity: 0.4;
+}
+
+/* Column drop overlays. Rendered inside `.speakerColumns` only while a
+   drag is active, one per speaker, spanning the full grid height via
+   `gridRow: 1 / -1`. They're below the cue rows in stacking and have
+   `pointer-events: none` so they don't interfere with clicks/dragover
+   on the actual rows — they're purely a visual highlight. */
+.dropOverlay {
+  pointer-events: none;
+  align-self: stretch;
+  justify-self: stretch;
+  border-radius: var(--radius-md);
+  margin: 4px;
+  border: 2px dashed transparent;
+  background: transparent;
+  transition: background-color 100ms ease, border-color 100ms ease;
+}
+
+.dropOverlay.dropTarget {
+  background: rgba(79, 70, 229, 0.1);
+  border-color: var(--accent-primary);
+}
+
 

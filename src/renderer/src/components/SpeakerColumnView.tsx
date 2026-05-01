@@ -3,7 +3,7 @@ import { useEditorStore } from '../store/editorStore';
 import { findCueIndexForCurrent } from '../../../common/segments';
 import { resolveSubtitleStyle } from '../../../common/subtitleResolution';
 import { defaultSpeakerName } from '../../../common/speakers';
-import { Play, User, Wand2 } from 'lucide-react';
+import { GripVertical, Play, User, Wand2 } from 'lucide-react';
 import SpeakerDropdown from './SpeakerDropdown';
 import styles from './SpeakerColumnView.module.css';
 
@@ -25,8 +25,9 @@ export default function SpeakerColumnView({ onSeek }: Props) {
   const focusedIndex = useEditorStore((s) => s.focusedIndex);
   const seekNonce = useEditorStore((s) => s.seekNonce);
   const subtitleSettings = useEditorStore((s) => s.subtitleSettings);
-  
+
   const selectByIndex = useEditorStore((s) => s.selectByIndex);
+  const updateCueSpeaker = useEditorStore((s) => s.updateCueSpeaker);
   
   const activePreset = useMemo(() => {
     if (!subtitleSettings) return null;
@@ -132,6 +133,67 @@ export default function SpeakerColumnView({ onSeek }: Props) {
     cueId: string;
   } | null>(null);
 
+  // Drag-and-drop speaker reassignment. The grid columns aren't separate
+  // DOM nodes (they're CSS Grid placements of the `.cueRow` divs), so the
+  // drop target is the whole `.speakerColumns` container — we hit-test the
+  // mouse's clientX against the container's bounds at dragover/drop time
+  // to figure out which column the user is hovering. `dragOverSpeaker`
+  // drives the highlight overlay; `draggedCueId` lives just long enough
+  // to dim the source card while the drag is in flight.
+  const [draggedCueId, setDraggedCueId] = useState<string | null>(null);
+  const [dragOverSpeaker, setDragOverSpeaker] = useState<string | null>(null);
+
+  const computeTargetSpeaker = (
+    e: React.DragEvent<HTMLDivElement>,
+  ): string | null => {
+    const rect = e.currentTarget.getBoundingClientRect();
+    if (rect.width <= 0 || speakers.length === 0) return null;
+    const colWidth = rect.width / speakers.length;
+    const idx = Math.max(
+      0,
+      Math.min(
+        speakers.length - 1,
+        Math.floor((e.clientX - rect.left) / colWidth),
+      ),
+    );
+    return speakers[idx] ?? null;
+  };
+
+  const handleGridDragOver = (e: React.DragEvent<HTMLDivElement>) => {
+    if (!draggedCueId) return;
+    e.preventDefault();
+    e.dataTransfer.dropEffect = 'move';
+    const target = computeTargetSpeaker(e);
+    if (target && target !== dragOverSpeaker) {
+      setDragOverSpeaker(target);
+    }
+  };
+
+  const handleGridDrop = (e: React.DragEvent<HTMLDivElement>) => {
+    e.preventDefault();
+    const cueId = e.dataTransfer.getData('text/cue-id');
+    setDraggedCueId(null);
+    setDragOverSpeaker(null);
+    if (!cueId) return;
+    const target = computeTargetSpeaker(e);
+    if (!target) return;
+    const cue = cues.find((c) => c.id === cueId);
+    // No-op when dropping back on the source column. Important for the
+    // "speaker is undefined → bucketed into speakers[0]" case too: an
+    // explicit-undefined cue dropped on speakers[0] still gets a real
+    // speaker id assigned, which is the user's likely intent.
+    if (!cue) return;
+    if (cue.speaker === target) return;
+    updateCueSpeaker(cueId, target);
+  };
+
+  // dragend fires on the source regardless of drop outcome — it's our
+  // safety net for cancelled drags (Esc, drop outside any target).
+  const handleDragEnd = () => {
+    setDraggedCueId(null);
+    setDragOverSpeaker(null);
+  };
+
   useEffect(() => {
     const handleOutsideClick = () => setContextMenu(null);
     if (contextMenu) {
@@ -157,30 +219,72 @@ export default function SpeakerColumnView({ onSeek }: Props) {
         ))}
       </div>
 
-      <div 
-        className={styles.speakerColumns} 
+      <div
+        className={styles.speakerColumns}
         style={{ '--column-count': speakers.length } as React.CSSProperties}
+        onDragOver={handleGridDragOver}
+        onDrop={handleGridDrop}
       >
+        {/* Drop-target highlights. Sit under the cue rows (pointer-events
+            none) and cover each column's full height. Only one is lit at
+            a time, matching `dragOverSpeaker`. We span explicit rows via
+            `1 / span N` rather than `1 / -1` because the grid uses
+            `grid-auto-rows` (no template), so `-1` would resolve to the
+            implicit-grid start, not the last row. */}
+        {draggedCueId && speakers.map((spk, idx) => (
+          <div
+            key={`drop-${spk}`}
+            className={`${styles.dropOverlay} ${
+              dragOverSpeaker === spk ? styles.dropTarget : ''
+            }`}
+            style={{
+              gridColumn: idx + 1,
+              gridRow: `1 / span ${Math.max(1, cues.length)}`,
+            }}
+            aria-hidden="true"
+          />
+        ))}
+
         {cues.map((cue, globalIndex) => {
           const isFocused = focusedIndex === globalIndex;
           const isPlaying = currentCueIndex === globalIndex;
-          
+          const isDragging = draggedCueId === cue.id;
+
           const spk = cue.speaker ?? speakers[0] ?? 'speaker_0';
           const colIdx = speakers.indexOf(spk);
-          
+
           // CSS Grid placement (1-indexed)
           const gridColumn = colIdx >= 0 ? colIdx + 1 : 1;
-          
+
           return (
-            <div 
-              key={cue.id} 
+            <div
+              key={cue.id}
               ref={setRowRef(cue.id)}
               className={`${styles.cueRow} ${isFocused ? styles.cueFocused : ''} ${isPlaying ? styles.cuePlaying : ''}`}
               style={{ gridColumn }}
             >
-              <div className={styles.cueCard} onClick={() => handleFocus(globalIndex, cue.startSec)}>
+              <div
+                className={`${styles.cueCard} ${isDragging ? styles.dragging : ''}`}
+                onClick={() => handleFocus(globalIndex, cue.startSec)}
+              >
                 <div className={styles.timecode}>
                   <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                    <span
+                      className={styles.dragHandle}
+                      title="ドラッグして話者を変更"
+                      draggable
+                      onDragStart={(e) => {
+                        e.dataTransfer.setData('text/cue-id', cue.id);
+                        e.dataTransfer.effectAllowed = 'move';
+                        setDraggedCueId(cue.id);
+                      }}
+                      onDragEnd={handleDragEnd}
+                      // Stop click on the handle from focusing the card +
+                      // seeking — the user grabbed it to drag, not select.
+                      onClick={(e) => e.stopPropagation()}
+                    >
+                      <GripVertical size={12} />
+                    </span>
                     {isPlaying && (
                       <span className={styles.playingIcon} aria-label="再生中">
                         <Play size={10} fill="currentColor" />
