@@ -15,6 +15,14 @@
 
 ---
 
+## 2026-05-01 19:30 - 動画プレビュー上の字幕オーバーレイ表示を追加
+
+- 誰が: Antigravity
+- 何を: `SubtitleOverlay` コンポーネントを新設し、`VideoPlayer` の上に配置。設定中のフォント・色・縁・影・位置をリアルタイムに反映。また `App.tsx` と `FontManagerDialog.tsx` にて、ダウンロード済みローカルフォントを `FontFace` API 経由で動的に `document.fonts` へ登録する仕組みを追加。
+- 理由: 書き出しを行わずとも、編集・プレビュー中に字幕の見た目（フォント・色・タイミング等）をリアルタイムで確認できるようにするため。
+- 影響: `SubtitleOverlay.tsx`/`.css` (新規), `VideoPlayer.tsx`, `App.tsx`, `FontManagerDialog.tsx`
+- コミット: (未定)
+
 ## 2026-05-01 19:24 - 字幕プレビュー列を中央列と同じ 13px に最終調整
 
 - 誰が: Claude Code

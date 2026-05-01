@@ -40,6 +40,22 @@ export default function App() {
 
   useEffect(() => {
     void loadSubtitleSettings();
+    
+    // アプリ起動時にダウンロード済みフォントを @font-face として CSS に登録
+    async function registerInstalledFonts() {
+      try {
+        const installedFonts = await window.api.fonts.listInstalled();
+        for (const font of installedFonts) {
+          const fontUrl = `file://${font.filePath.replace(/\\/g, '/')}`;
+          const fontFace = new FontFace(font.family, `url("${fontUrl}")`);
+          await fontFace.load();
+          document.fonts.add(fontFace);
+        }
+      } catch (err) {
+        console.warn('Failed to register installed fonts', err);
+      }
+    }
+    void registerInstalledFonts();
   }, [loadSubtitleSettings]);
 
   const videoRef = useRef<VideoPlayerHandle>(null);

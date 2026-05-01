@@ -81,6 +81,21 @@ export default function FontManagerDialog({ open, onClose }: Props) {
       result.succeeded.forEach(f => nextSelection.delete(f));
       setSelectedFamilies(nextSelection);
       
+      // Load the newly downloaded fonts dynamically
+      try {
+        const installedFonts = await window.api.fonts.listInstalled();
+        for (const font of installedFonts) {
+          if (result.succeeded.includes(font.family)) {
+            const fontUrl = `file://${font.filePath.replace(/\\/g, '/')}`;
+            const fontFace = new FontFace(font.family, `url("${fontUrl}")`);
+            await fontFace.load();
+            document.fonts.add(fontFace);
+          }
+        }
+      } catch (err) {
+        console.warn('Failed to load newly downloaded fonts', err);
+      }
+      
     } catch (err) {
       console.error('Download failed', err);
     } finally {

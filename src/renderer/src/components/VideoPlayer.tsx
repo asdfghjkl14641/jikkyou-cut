@@ -13,6 +13,7 @@ import {
   deriveKeptRegions,
 } from '../../../common/segments';
 import { AlertTriangle, XCircle } from 'lucide-react';
+import SubtitleOverlay from './SubtitleOverlay';
 import styles from './VideoPlayer.module.css';
 
 type Props = {
@@ -266,19 +267,22 @@ const VideoPlayer = forwardRef<VideoPlayerHandle, Props>(function VideoPlayer(
           <span>{networkWarning}</span>
         </div>
       )}
-      <video
-        ref={videoRef}
-        key={filePath}
-        src={toMediaUrl(filePath)}
-        controls
-        className={styles.video}
-        onError={handleError}
-        onPlaying={handlePlaying}
-        onPause={handlePauseOrEnded}
-        onEnded={handlePauseOrEnded}
-        onSeeked={handleSeeked}
-        onLoadedMetadata={handleLoadedMetadata}
-      />
+      <div style={{ position: 'relative', flex: 1, display: 'flex' }}>
+        <video
+          ref={videoRef}
+          key={filePath}
+          src={toMediaUrl(filePath)}
+          controls
+          className={styles.video}
+          onError={handleError}
+          onPlaying={handlePlaying}
+          onPause={handlePauseOrEnded}
+          onEnded={handlePauseOrEnded}
+          onSeeked={handleSeeked}
+          onLoadedMetadata={handleLoadedMetadata}
+        />
+        <SubtitleOverlay />
+      </div>
     </div>
   );
 });
