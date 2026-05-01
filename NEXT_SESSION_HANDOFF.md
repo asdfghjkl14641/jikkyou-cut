@@ -55,7 +55,7 @@
 - `IDEAS.md`(17 項目の長期構想)+ `docs/COMMENT_ANALYSIS_DESIGN.md`(次フェーズ MVP 設計)新規
 - `HANDOFF.md` 全面書き直し、`TODO.md` セクション再編
 
-### 7. コメント分析: 実データ取得 + スコア計算(`<NEW_HASH>`)
+### 7. コメント分析: 実データ取得 + スコア計算(`1533d31`)
 - モック → 実データに置換、3 要素統合スコア(コメント密度 + 視聴者増加 + キーワード)を実 yt-dlp + playboard.co スクレイピング + ハードコード辞書から計算
 - `src/main/commentAnalysis/`: chatReplay(yt-dlp `--write-subs --sub-langs live_chat`/`rechat`)+ viewerStats(playboard `__NEXT_DATA__` 等のヒューリスティックパース)+ scoring(5 秒バケット 3 要素重み付き)+ index(orchestrator)
 - IPC `commentAnalysis.{start, cancel, onProgress}` を新設
@@ -127,8 +127,8 @@
 ## 1. 現在のリポジトリ状態(更新時刻 2026-05-02 11:30)
 
 ```
-HEAD = <NEW_HASH> feat(comment-analysis): 実データ取得 + スコア計算ロジック実装
-origin/main = <NEW_HASH>(同期済み)
+HEAD = 1533d31 feat(comment-analysis): 実データ取得 + スコア計算ロジック実装
+origin/main = 1533d31(同期済み)
 working tree clean
 ```
 
@@ -164,7 +164,7 @@ a0a809e style(dropzone): remove 'or' text and divider
 | 3 フェーズ構造(load / clip-select / edit)| `1678746` | **実機確認済み** |
 | ドキュメント整理(IDEAS.md + COMMENT_ANALYSIS_DESIGN.md)| `076240f` | 完了 |
 | プログレッシブ DL spike(検証のみ、本実装未着手)| `b73faa0` | spike レポート完成 — `docs/PROGRESSIVE_DL_SPIKE_REPORT.md` 参照 |
-| コメント分析バックエンド(yt-dlp チャット + playboard 視聴者数 + 3 要素スコア) | `<NEW_HASH>` | 実装完了、ClipSelectView 結線済み — playboard はサンドボックス IP block で実機検証未済、ユーザ環境で動作確認必要 |
+| コメント分析バックエンド(yt-dlp チャット + playboard 視聴者数 + 3 要素スコア) | `1533d31` | 実装完了、ClipSelectView 結線済み — playboard はサンドボックス IP block で実機検証未済、ユーザ環境で動作確認必要 |
 
 ## 3. 進行中タスク(本セッション末尾時点)
 
