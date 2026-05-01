@@ -43,6 +43,12 @@ export type TranscriptionStartArgs = {
   // (mirrored into the editor store). Solo recordings should pass `false`
   // so the API skips the heavier diarization pass.
   collaborationMode: boolean;
+  // Hint for Gladia diarization. `null` = auto-detect (no
+  // `diarization_config` sent). `2..5` = sent as `number_of_speakers` (the
+  // user knows the exact count). `6` = the "6+" bucket, sent as
+  // `min_speakers: 6` (no upper bound). Ignored when `collaborationMode`
+  // is false.
+  expectedSpeakerCount: number | null;
 };
 
 export type ApiKeyValidationResult = {

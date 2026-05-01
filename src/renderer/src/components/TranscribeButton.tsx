@@ -29,10 +29,30 @@ export default function TranscribeButton({ apiKeyConfigured }: Props) {
   const durationSec = useEditorStore((s) => s.durationSec);
   const collaborationMode = useEditorStore((s) => s.collaborationMode);
   const setCollaborationMode = useEditorStore((s) => s.setCollaborationMode);
+  const expectedSpeakerCount = useEditorStore((s) => s.expectedSpeakerCount);
+  const setExpectedSpeakerCount = useEditorStore((s) => s.setExpectedSpeakerCount);
   const { start, cancel } = useTranscription();
 
   const isRunning = status === 'running';
   const canStart = apiKeyConfigured && durationSec != null && !isRunning;
+  // Speaker-count select is only meaningful when diarization is on. We
+  // also disable it during a running transcription so a mid-run flip
+  // can't desync the request body from what the user sees.
+  const speakerSelectDisabled = !collaborationMode || isRunning;
+  // `<select>` value props are strings; we use 'auto' for null and the
+  // raw integer string for explicit counts. `6` is the "6+" sentinel.
+  const speakerSelectValue =
+    expectedSpeakerCount == null ? 'auto' : String(expectedSpeakerCount);
+  const onSpeakerCountChange = (raw: string) => {
+    if (raw === 'auto') {
+      setExpectedSpeakerCount(null);
+      return;
+    }
+    const n = Number.parseInt(raw, 10);
+    if (Number.isFinite(n) && n >= 2 && n <= 6) {
+      setExpectedSpeakerCount(n);
+    }
+  };
 
   const phaseLabel = progress ? PHASE_LABEL[progress.phase] : '';
   const percent = (() => {
@@ -65,6 +85,25 @@ export default function TranscribeButton({ apiKeyConfigured }: Props) {
           <span className={styles.slider}></span>
         </span>
       </label>
+
+      <select
+        className={styles.speakerSelect}
+        value={speakerSelectValue}
+        onChange={(e) => onSpeakerCountChange(e.target.value)}
+        disabled={speakerSelectDisabled}
+        title={
+          collaborationMode
+            ? '話者数を明示するとGladiaの分離精度が上がります(自動推定では実話者数より少なく検出されることがあります)'
+            : 'マルチを ON にすると話者数を指定できます'
+        }
+      >
+        <option value="auto">自動</option>
+        <option value="2">2人</option>
+        <option value="3">3人</option>
+        <option value="4">4人</option>
+        <option value="5">5人</option>
+        <option value="6">6人以上</option>
+      </select>
 
       {!isRunning && (
         <button

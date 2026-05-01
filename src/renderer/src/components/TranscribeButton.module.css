@@ -74,6 +74,45 @@
   transform: translateX(16px);
 }
 
+/* Speaker-count select sits right of the toggle. Visual weight tuned to
+   match the toggle's label text (xs / secondary) so the trio reads as a
+   single control group, not three competing widgets. */
+.speakerSelect {
+  appearance: none;
+  -webkit-appearance: none;
+  background-color: var(--bg-surface);
+  background-image:
+    linear-gradient(45deg, transparent 50%, var(--text-muted) 50%),
+    linear-gradient(135deg, var(--text-muted) 50%, transparent 50%);
+  background-position:
+    calc(100% - 12px) 50%,
+    calc(100% - 7px) 50%;
+  background-size: 5px 5px, 5px 5px;
+  background-repeat: no-repeat;
+  border: 1px solid var(--border-subtle);
+  color: var(--text-primary);
+  font-size: var(--font-size-xs);
+  padding: 4px 22px 4px 8px;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  transition: all var(--transition-fast);
+}
+
+.speakerSelect:hover:not(:disabled) {
+  border-color: var(--accent-primary);
+}
+
+.speakerSelect:focus-visible {
+  outline: none;
+  border-color: var(--accent-primary);
+  box-shadow: 0 0 0 2px rgba(79, 70, 229, 0.2);
+}
+
+.speakerSelect:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
 .startButton {
   appearance: none;
   background: var(--accent-primary);

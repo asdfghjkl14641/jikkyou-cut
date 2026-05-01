@@ -24,6 +24,17 @@ function normaliseContext(raw: unknown): TranscriptionContext {
   };
 }
 
+// Coerce on-disk speaker count into the documented domain. Valid values are
+// `null` (auto), `2` / `3` / `4` / `5`, or `6` (the "6+" sentinel). Anything
+// else — negative, zero, fractional, > 6 — collapses to null so we never
+// send a malformed `diarization_config` to Gladia.
+function normaliseSpeakerCount(raw: unknown): number | null {
+  if (typeof raw !== 'number' || !Number.isFinite(raw)) return null;
+  const n = Math.trunc(raw);
+  if (n >= 2 && n <= 6) return n;
+  return null;
+}
+
 // Migration note: a legacy `whisperModelPath` field may exist on disk from
 // the pre-Gemini build. We silently drop it.
 export async function loadConfig(): Promise<AppConfig> {
@@ -38,6 +49,7 @@ export async function loadConfig(): Promise<AppConfig> {
       collaborationMode: typeof parsed['collaborationMode'] === 'boolean'
         ? (parsed['collaborationMode'] as boolean)
         : DEFAULT_CONFIG.collaborationMode,
+      expectedSpeakerCount: normaliseSpeakerCount(parsed['expectedSpeakerCount']),
     };
   } catch {
     return DEFAULT_CONFIG;
@@ -57,6 +69,13 @@ export async function saveConfig(
       partial.collaborationMode != null
         ? partial.collaborationMode
         : current.collaborationMode,
+    // Note `=== undefined` rather than `!= null`: callers should be able to
+    // explicitly pass `null` to switch back to auto-detect, which would
+    // otherwise be swallowed by a `!= null` check.
+    expectedSpeakerCount:
+      partial.expectedSpeakerCount !== undefined
+        ? normaliseSpeakerCount(partial.expectedSpeakerCount)
+        : current.expectedSpeakerCount,
   };
   const p = getConfigPath();
   await fs.mkdir(path.dirname(p), { recursive: true });

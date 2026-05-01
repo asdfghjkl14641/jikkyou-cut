@@ -58,13 +58,17 @@ export default function App() {
     void registerInstalledFonts();
   }, [loadSubtitleSettings]);
 
-  // Hydrate the in-memory collaborationMode from disk. We use a low-level
-  // setState rather than the public setter so this initial sync doesn't
-  // trigger another saveSettings round-trip. `view` arrives async from
-  // useSettings — guarded so we only fire once per non-null value.
+  // Hydrate the in-memory collaborationMode + expectedSpeakerCount from
+  // disk. We use a low-level setState rather than the public setters so
+  // this initial sync doesn't trigger another saveSettings round-trip.
+  // `view` arrives async from useSettings — guarded so we only fire once
+  // per non-null value.
   useEffect(() => {
     if (!view) return;
-    useEditorStore.setState({ collaborationMode: view.config.collaborationMode });
+    useEditorStore.setState({
+      collaborationMode: view.config.collaborationMode,
+      expectedSpeakerCount: view.config.expectedSpeakerCount,
+    });
   }, [view]);
 
   const videoRef = useRef<VideoPlayerHandle>(null);

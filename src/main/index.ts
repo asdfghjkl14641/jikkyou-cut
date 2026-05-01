@@ -94,6 +94,12 @@ function registerIpcHandlers() {
         typeof args.collaborationMode === 'boolean'
           ? args.collaborationMode
           : config.collaborationMode,
+      // Same legacy-fallback story as collaborationMode. `null` is a valid
+      // value (auto-detect), so we discriminate on `=== undefined`.
+      expectedSpeakerCount:
+        args.expectedSpeakerCount !== undefined
+          ? args.expectedSpeakerCount
+          : config.expectedSpeakerCount,
       onProgress: (p) => {
         mainWindow?.webContents.send('transcription:progress', p);
       },

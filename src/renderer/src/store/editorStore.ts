@@ -123,6 +123,12 @@ type EditorState = {
   collaborationMode: boolean;
   setCollaborationMode: (mode: boolean) => void;
 
+  // Speaker-count hint for diarization. `null` = auto-detect, otherwise
+  // 2..6 (6 is the "6+" sentinel sent as `min_speakers: 6`). Persisted via
+  // `AppConfig.expectedSpeakerCount`.
+  expectedSpeakerCount: number | null;
+  setExpectedSpeakerCount: (count: number | null) => void;
+
   // View mode for cue list
   viewMode: 'linear' | 'speaker-column';
   setViewMode: (mode: 'linear' | 'speaker-column') => void;
@@ -190,7 +196,9 @@ export const useEditorStore = create<EditorState>((set, get) => ({
   subtitleSettings: null,
 
   collaborationMode: false,
-  
+
+  expectedSpeakerCount: null,
+
   viewMode: 'linear',
 
   setFile: (absPath) =>
@@ -540,6 +548,19 @@ export const useEditorStore = create<EditorState>((set, get) => ({
       .saveSettings({ collaborationMode: mode })
       .catch((err) => {
         console.warn('[settings] failed to persist collaborationMode:', err);
+      });
+  },
+
+  setExpectedSpeakerCount: (count) => {
+    set({ expectedSpeakerCount: count });
+    // Same fire-and-forget pattern as setCollaborationMode. `null`
+    // (auto-detect) is a meaningful value here, so we pass it through
+    // verbatim — saveSettings discriminates on `=== undefined`, not
+    // `!= null`.
+    window.api
+      .saveSettings({ expectedSpeakerCount: count })
+      .catch((err) => {
+        console.warn('[settings] failed to persist expectedSpeakerCount:', err);
       });
   },
 

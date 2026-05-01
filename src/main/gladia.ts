@@ -157,6 +157,7 @@ async function submitJob(
   apiKey: string,
   ctx: TranscriptionContext,
   collaborationMode: boolean,
+  expectedSpeakerCount: number | null,
   signal: AbortSignal,
 ): Promise<{ id: string; resultUrl: string }> {
   const vocab = buildCustomVocabulary(ctx);
@@ -168,8 +169,28 @@ async function submitJob(
   if (vocab.length > 0) {
     body['custom_vocabulary'] = vocab;
   }
+
+  // Diarization hint. The Gladia docs note these are hints, not hard
+  // constraints — but auto-detection regularly under-counts speakers
+  // (3-person recordings mis-clustered as 2), so the hint is worth sending
+  // whenever we have one. Only attached when collaborationMode is true:
+  // Gladia ignores diarization_config when diarization itself is off,
+  // but sending it anyway would be a contract smell.
+  let diarizationHint: 'auto' | string = 'auto';
+  if (collaborationMode && expectedSpeakerCount != null) {
+    if (expectedSpeakerCount >= 6) {
+      // The "6+" bucket — give Gladia a floor and let it find the actual
+      // ceiling rather than capping arbitrarily.
+      body['diarization_config'] = { min_speakers: 6 };
+      diarizationHint = 'min_speakers=6';
+    } else if (expectedSpeakerCount >= 2) {
+      body['diarization_config'] = { number_of_speakers: expectedSpeakerCount };
+      diarizationHint = `number_of_speakers=${expectedSpeakerCount}`;
+    }
+  }
+
   console.log(
-    `[gladia-submit] vocab=${vocab.length} terms, diarization=${collaborationMode}, language=ja`,
+    `[gladia-submit] vocab=${vocab.length} terms, diarization=${collaborationMode}, speakers=${diarizationHint}, language=ja`,
   );
 
   const res = await fetch(`${GLADIA_BASE}/pre-recorded`, {
@@ -326,6 +347,7 @@ export async function transcribe({
   apiKey,
   context,
   collaborationMode,
+  expectedSpeakerCount,
   onProgress,
 }: {
   videoFilePath: string;
@@ -333,6 +355,7 @@ export async function transcribe({
   apiKey: string;
   context: TranscriptionContext;
   collaborationMode: boolean;
+  expectedSpeakerCount: number | null;
   onProgress: (p: TranscriptionProgress) => void;
 }): Promise<TranscriptionResult> {
   if (activeJob) throw new Error('別の文字起こしが実行中です');
@@ -368,6 +391,7 @@ export async function transcribe({
       apiKey,
       context,
       collaborationMode,
+      expectedSpeakerCount,
       ac.signal,
     );
     job.jobId = id;

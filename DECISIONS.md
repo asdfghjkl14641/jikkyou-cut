@@ -15,6 +15,23 @@
 
 ---
 
+## 2026-05-01 20:50 - 話者数指定 UI で Gladia 話者分離精度を向上
+
+- 誰が: Claude Code
+- 何を: 話者数を明示する UI を追加し、Gladia リクエストに `diarization_config` を載せる
+  - `src/common/config.ts`: `AppConfig.expectedSpeakerCount: number | null` 追加(`null` = 自動、2..5 = 明示、`6` = "6人以上"のセンチネル)
+  - `src/main/config.ts`: `normaliseSpeakerCount` で 2..6 の範囲だけ通す。それ以外は null へクランプ。`saveConfig` は `=== undefined` で discriminate して null 値の意図的セットも通す
+  - `src/common/types.ts`: `TranscriptionStartArgs.expectedSpeakerCount` 追加
+  - `src/main/gladia.ts`: `submitJob` 引数に追加。`collaborationMode` が ON かつ count があるときだけ `diarization_config` を添える。2..5 → `number_of_speakers`、6 → `min_speakers: 6`(上限を切らない)。ログにも反映
+  - `src/main/index.ts`: IPC ハンドラで legacy fallback(`undefined` のとき config から読む、`null` は通す)
+  - `editorStore.ts`: `expectedSpeakerCount` ステート + `setExpectedSpeakerCount` setter(`saveSettings` を fire-and-forget で叩いて永続化)
+  - `App.tsx`: 既存の collaborationMode ハイドレーションに `expectedSpeakerCount` も同梱
+  - `useTranscription.ts`: store 値を IPC に渡す
+  - `TranscribeButton.tsx/module.css`: 「マルチ」トグルの右隣に `<select>` を追加(自動/2人/3人/4人/5人/6人以上)。`!collaborationMode || isRunning` で disabled。CSS は CSS-only な三角矢印 + ホバー/フォーカス時のアクセントカラー強調で既存トグルに馴染ませた
+- 理由: 直前の調査(`.jcut.json` の speaker distinct 値が 2)で **3 人実況動画でも Gladia 自動推定が 2 人にまとめてしまう** ことを実データで確認。`diarization_config` を送って hint で精度向上を狙う。Gladia 公式は「hint であり保証されない」と明記しているが、auto より明確に良い結果になることは期待できる。100% 解決しないケースは将来 Phase B-2(話者ID 手動修正 UI)で対応
+- 影響: `src/common/config.ts`, `src/common/types.ts`, `src/main/config.ts`, `src/main/gladia.ts`, `src/main/index.ts`, `src/renderer/src/store/editorStore.ts`, `src/renderer/src/App.tsx`, `src/renderer/src/hooks/useTranscription.ts`, `src/renderer/src/components/TranscribeButton.tsx`, `src/renderer/src/components/TranscribeButton.module.css`
+- コミット: (未定)
+
 ## 2026-05-01 20:10 - 話者分離有効化トグル(コラボモード)実装(Phase B-1)
 
 - 誰が: Claude Code
