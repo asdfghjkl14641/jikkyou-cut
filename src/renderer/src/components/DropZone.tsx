@@ -56,17 +56,12 @@ export default function DropZone({ onFileSelected, onUrlDownloadRequested }: Pro
         </div>
         <div className={styles.textContainer}>
           <div className={styles.primary}>動画ファイルをここにドロップ</div>
-          <div className={styles.secondary}>または クリックしてメニューから選択</div>
+          <div className={styles.secondary}>クリックしてメニューから選択</div>
         </div>
       </button>
 
-      <div className={styles.divider}>
-        <div className={styles.dividerLine} />
-        <span className={styles.dividerText}>または</span>
-        <div className={styles.dividerLine} />
-      </div>
-
       <div className={styles.urlSection}>
+
         <div className={styles.urlInputWrapper}>
           <input
             type="text"

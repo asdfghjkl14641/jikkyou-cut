@@ -3,7 +3,7 @@
   display: flex;
   flex-direction: column;
   align-items: stretch;
-  gap: var(--space-6);
+  gap: var(--space-4);
   animation: fadeIn 0.5s ease-out forwards;
 }
 
@@ -81,27 +81,6 @@
   color: var(--text-muted);
   font-size: var(--font-size-xs);
   line-height: 1.6;
-}
-
-.divider {
-  display: flex;
-  align-items: center;
-  gap: var(--space-4);
-  color: var(--text-muted);
-}
-
-.dividerLine {
-  flex: 1;
-  height: 1px;
-  background: var(--border-subtle);
-  opacity: 0.5;
-}
-
-.dividerText {
-  font-size: var(--font-size-xs);
-  font-weight: var(--font-weight-medium);
-  text-transform: uppercase;
-  letter-spacing: 0.1em;
 }
 
 .urlSection {
