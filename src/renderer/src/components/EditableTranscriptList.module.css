@@ -21,7 +21,6 @@
   flex: 1;
   overflow-y: auto;
   padding: var(--space-1) 0;
-  container-type: inline-size;
 }
 
 .cue {
@@ -208,7 +207,7 @@
   word-break: break-word;
 }
 
-@container (max-width: 600px) {
+@media (max-width: 800px) {
   .cue {
     grid-template-columns: 1fr;
   }

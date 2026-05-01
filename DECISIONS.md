@@ -33,6 +33,14 @@
 - 影響: `src/common/subtitle.ts` (新規)、`src/common/types.ts`、`src/main/export.ts`、`src/main/index.ts`、`src/renderer/src/store/editorStore.ts`、`src/renderer/src/components/VideoPlayer.tsx`、`src/renderer/src/hooks/useExport.ts`
 - コミット: `9bb4012`
 
+## 2026-05-01 16:15 - 緊急修正: キュー一覧のコンテナクエリバグを Media Query に置換
+
+- 誰が: Antigravity
+- 何を: `EditableTranscriptList.module.css` の `@container` を `@media (max-width: 800px)` に変更
+- 理由: `container-type` を指定していても一部環境でコンテナ幅が正しく評価されず、デフォルトの `display: none` または grid の崩れにより右列が常時消える不具合が報告されたため。シンプルな Window 幅基準のメディアクエリにフォールバックして安定化を図った。
+- 影響: `EditableTranscriptList.module.css` のみ
+- コミット: (未定)
+
 ## 2026-05-01 16:07 - キュー一覧を2カラム構成(編集列+字幕プレビュー列)に拡張
 
 - 誰が: Antigravity
