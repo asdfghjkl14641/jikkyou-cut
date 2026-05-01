@@ -21,7 +21,7 @@
 - 何を: DropZone内にURL入力エリア追加、ヘッダのURL DLアイコン削除
 - 理由: 動画読み込み入口を1箇所に集約してUX向上
 - 影響: DropZone, App.tsx, DropZone.module.css
-- コミット: (未定)
+- コミット: c2bc6df
 
 ## 2026-05-01 22:20 - URL動画ダウンロード機能(yt-dlp統合)
 
