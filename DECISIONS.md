@@ -15,13 +15,21 @@
 
 ---
 
+## 2026-05-01 19:24 - 字幕プレビュー列を中央列と同じ 13px に最終調整
+
+- 誰が: Claude Code
+- 何を: `.subtitlePreview` を `font-size: 13px !important`、`previewStyle` の ratio 分母も 13 に再変更
+- 理由: 10px は逆に小さすぎて読みにくいとのフィードバック。中央列の継承サイズ(`--font-size-md` = 13px)とぴったり揃えることで両列の視覚的密度が完全一致し、行ごとの比較が直感的になる
+- 影響: `EditableTranscriptList.module.css` / `EditableTranscriptList.tsx`
+- コミット: (未定)
+
 ## 2026-05-01 19:18 - 字幕プレビュー列のサイズをさらに 10px に縮小
 
 - 誰が: Claude Code
 - 何を: `.subtitlePreview` を `font-size: 10px !important`、`previewStyle` の ratio 分母も 10 に再変更
 - 理由: ユーザフィードバックで 15px でもまだ大きいとのこと。中央列 13px に対して右列を **明確に小さい 10px** にすることで、字幕プレビューが視覚的にサブ要素として落ち着き、メイン編集視線(中央列)を邪魔しない
 - 影響: `EditableTranscriptList.module.css` / `EditableTranscriptList.tsx`
-- コミット: (未定)
+- コミット: `1199979`
 
 ## 2026-05-01 19:05 - 字幕プレビュー列のサイズを 15px に再調整(原因究明込み)
 
