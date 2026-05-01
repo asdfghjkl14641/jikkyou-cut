@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, type MouseEvent } from 'react';
 import { useEditorStore } from '../store/editorStore';
-import { findCueIndexForScroll } from '../../../common/segments';
+import { findCueIndexForCurrent } from '../../../common/segments';
 import { Play } from 'lucide-react';
 import styles from './EditableTranscriptList.module.css';
 
@@ -24,20 +24,16 @@ export default function EditableTranscriptList({ onSeek }: Props) {
   const focusedIndex = useEditorStore((s) => s.focusedIndex);
   const seekNonce = useEditorStore((s) => s.seekNonce);
 
-  // Derive currentCueIndex from currentSec via a memoising selector. Returns
-  // the same number across rAF ticks unless the playhead crosses a cue
-  // boundary, so this row's render skips when the index is stable.
-  const currentCueIndex = useEditorStore((s) => {
-    if (s.cues.length === 0) return null;
-    const t = s.currentSec;
-    for (let i = 0; i < s.cues.length; i += 1) {
-      const c = s.cues[i];
-      if (!c) continue;
-      if (t < c.startSec) return null;
-      if (t < c.endSec) return i;
-    }
-    return null;
-  });
+  // Derive currentCueIndex from currentSec via a memoising selector that
+  // also falls back to the nearest preceding cue when `currentSec` lies in
+  // a gap. The same `findCueIndexForCurrent` function drives both the
+  // ▶ + red-bar highlight here and the seek-time scroll target below — so
+  // they stay perfectly in sync. Returns the same number across rAF ticks
+  // unless the playhead crosses a meaningful boundary, so the rows skip
+  // re-rendering when the index is stable.
+  const currentCueIndex = useEditorStore((s) =>
+    findCueIndexForCurrent(s.currentSec, s.cues),
+  );
 
   const selectByIndex = useEditorStore((s) => s.selectByIndex);
   const extendSelectionTo = useEditorStore((s) => s.extendSelectionTo);
@@ -78,19 +74,15 @@ export default function EditableTranscriptList({ onSeek }: Props) {
     });
   }, [focusedIndex]);
 
-  // Scroll a relevant row into view ONLY on explicit seek events
+  // Scroll the current row into view ONLY on explicit seek events
   // (bumpSeekNonce is called from VideoPlayer.handleSeeked). Ordinary
-  // playback drift does not trigger scrolling.
-  //
-  // Note: this picks the *scroll target*, NOT the playing-cue marker. When
-  // the seek lands in a between-cue gap (silence) we still want the list to
-  // follow — `findCueIndexForScroll` returns the nearest preceding cue in
-  // that case, while the ▶ + red-bar marker (driven separately by
-  // `currentCueIndex`) correctly stays off in gaps.
+  // playback drift does not trigger scrolling. Uses the same
+  // `findCueIndexForCurrent` as the highlight selector above, so the
+  // scroll target and the ▶ marker can never disagree.
   useEffect(() => {
     if (seekNonce === 0) return; // Skip the mount-time fire
     const state = useEditorStore.getState();
-    const idx = findCueIndexForScroll(state.currentSec, state.cues);
+    const idx = findCueIndexForCurrent(state.currentSec, state.cues);
     if (idx == null) return;
     const cue = state.cues[idx];
     if (!cue) return;

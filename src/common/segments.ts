@@ -148,22 +148,22 @@ export function decidePreviewSkip(
 }
 
 /**
- * Picks the cue index the transcript list should scroll to when the user
- * seeks the video. Unlike playback-time highlight detection (▶ + red bar),
- * this MUST always return *some* cue when cues exist — the user clicked
- * somewhere expecting the list to follow.
+ * Picks the cue index that best represents `currentSec` for both scroll
+ * targeting AND playback highlighting. The list always wants *some* row
+ * marked as "current" while a video file is loaded — having no marker at
+ * all in cue-gap silences leaves the user wondering where playback is.
  *
  *  1. If `currentSec` falls inside a cue, return that cue's index.
  *  2. Else (gap between cues / beyond the last cue), return the index of
  *     the most recent cue that ended at or before `currentSec`.
  *  3. Else (`currentSec` is before the first cue, e.g. lead-in silence),
- *     return 0 so the first cue scrolls into view.
+ *     return 0 so the first cue is treated as current.
  *
  * Returns `null` only when the cue list is empty.
  *
  * Pure function. Assumes cues are non-overlapping and sorted by `startSec`.
  */
-export function findCueIndexForScroll(
+export function findCueIndexForCurrent(
   currentSec: number,
   cues: readonly TranscriptCue[],
 ): number | null {
