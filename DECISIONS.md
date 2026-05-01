@@ -15,6 +15,22 @@
 
 ---
 
+## 2026-05-01 23:00 - ドキュメント整理(IDEAS.md + COMMENT_ANALYSIS_DESIGN.md 作成)
+
+- 誰が: Claude Code
+- 何を: 既存 3 ドキュメント(`HANDOFF.md` / `DECISIONS.md` / `TODO.md`)を最新化し、長期構想と次フェーズ設計を独立ドキュメントに切り出す
+  - `HANDOFF.md`: Gemini → Gladia 移行・字幕 Phase A〜B-3・URL DL・DropZone 統合・話者カラム表示・DnD 話者変更まで全て反映する全面書き直し。新ディレクトリ構成、最新 `IpcApi`、最新 `editorStore` ステート、最新キーボードショートカット、`SpeakerStyle` / `SpeakerPreset` / `StylePreset` / `SubtitleSettings` / `ProjectFile` 等の主要型を反映
+  - `TODO.md`: セクション再編。「🚧 進行中」「🔵 次にやる(MVP 直近 = コメント分析画面)」「🟡 検討中」「📋 未着手 (High/Med/Low)」「🟢 将来 = IDEAS.md」「✅ 完了済み」の階層に整理。完了済みは時系列でフラットに並べた
+  - `IDEAS.md` (新規、リポジトリルート): 17 項目の長期構想を優先度付きでカタログ化(配信アーカイブ→自動動画化、盛り上がり検出 AI、感情波形、神回検出、視聴維持率シミュレーター、伏線検出、空気転換点、会話密度、理解不能区間、感情カーブ、編集者プロファイル学習、動画役割分析、コメント予測 AI、配信者疲労、神タイミング SE、切り抜きタイトル生成)。"AI 動画編集ソフト" ではなく "動画の中身を理解する編集ソフト" という方向性を明文化
+  - `docs/COMMENT_ANALYSIS_DESIGN.md` (新規): 次フェーズ「コメント分析画面」の MVP 設計。yt-dlp チャットリプレイ取得 → コメント密度 + キーワード出現 + (将来)視聴者数増加の合成スコア → グラフ表示 + 自動候補抽出 + 手動ドラッグ区間選択 → 編集画面へ区間情報を渡す。技術設計(`src/main/commentAnalysis/`、`CommentAnalysisView.tsx`、ProjectFile.clipRange 拡張)、実装段階(MVP / Phase 2 / Phase 3)、開放されている設計判断まで網羅
+- 暗黙だった意思決定を明示化:
+  - **Gladia 継続決定**: 自動分離精度の限界は明らかだが、別 ASR への乗り換えは検討しない。手動修正 UI(Phase B-2)+ プリセット階層(Phase B-3)で補う方針
+  - **プリセット階層**: `SpeakerPreset`(セットプリセット = 動画ごとの「コラボメンバー一覧」)と `StylePreset`(スタイルプリセット = テンション別 = 強調/ささやき/叫び/ナレーション 等)の二階層で分離。`subtitleResolution` が cue.styleOverride > preset.speakerStyles[cue.speaker] > preset.default の順で解決
+  - **"自分用ツール" 段階**: 配布バイナリ化・配布サイズ・自動更新 等の懸念は脇に置き、まず作者のワークフロー最適化を優先する段階。長期的に「動画の中身を理解する編集ソフト」(IDEAS.md)へ進む
+- 理由: 長セッションが連続して未確定事項・将来構想が増えてきた。次セッションをスムーズに始められるよう、全体像を最新化 + 長期構想と次フェーズ設計を独立ドキュメントに切り出して、TODO.md は直近タスクに集中させる
+- 影響: `HANDOFF.md`, `TODO.md`, `DECISIONS.md`(本エントリ追記)、`IDEAS.md`(新規)、`docs/COMMENT_ANALYSIS_DESIGN.md`(新規)
+- コミット: (未定)
+
 ## 2026-05-01 22:30 - DropZone に URL DL 機能を統合(動線一本化)
 
 - 誰が: Antigravity
