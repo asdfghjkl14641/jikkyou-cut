@@ -142,6 +142,40 @@
   justify-content: space-between;
 }
 
+.overrideIcon {
+  cursor: pointer;
+  padding: 4px;
+  border-radius: var(--radius-sm);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: all var(--transition-fast);
+}
+
+.overrideIcon:hover {
+  background: var(--bg-surface-hover);
+}
+
+.overrideIconHover {
+  cursor: pointer;
+  padding: 4px;
+  border-radius: var(--radius-sm);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: all var(--transition-fast);
+  opacity: 0;
+}
+
+.cueCard:hover .overrideIconHover {
+  opacity: 1;
+}
+
+.overrideIconHover:hover {
+  background: var(--bg-surface-hover);
+  color: var(--text-primary);
+}
+
 .textInput {
   width: 100%;
   background: transparent;

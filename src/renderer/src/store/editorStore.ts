@@ -7,6 +7,7 @@ import type {
   TranscriptionResult,
   SubtitleSettings,
   ProjectFile,
+  SpeakerStyle,
 } from '../../../common/types';
 
 type TranscriptionStatus =
@@ -117,6 +118,7 @@ type EditorState = {
   setActivePresetId: (presetId: string) => void;
   toggleCueSubtitle: (cueId: string) => void;
   updateCueSpeaker: (cueId: string, newSpeakerId: string | undefined) => void;
+  updateCueStyleOverride: (cueId: string, style: SpeakerStyle | undefined) => void;
 
   // Collaboration mode (Gladia diarization toggle). Mirrors the persisted
   // `AppConfig.collaborationMode` — App.tsx hydrates on mount, the setter
@@ -576,6 +578,28 @@ export const useEditorStore = create<EditorState>((set, get) => ({
     const nextCues = cues.map((c) =>
       c.id === cueId ? { ...c, speaker: newSpeakerId } : c,
     );
+    const nextPast = [...past, snapshot];
+    if (nextPast.length > HISTORY_LIMIT) nextPast.shift();
+    set({
+      cues: nextCues,
+      past: nextPast,
+      future: [],
+    });
+  },
+
+  updateCueStyleOverride: (cueId, style) => {
+    const { cues, past } = get();
+    const snapshot = cloneCues(cues);
+    const nextCues = cues.map((c) => {
+      if (c.id !== cueId) return c;
+      const copy = { ...c };
+      if (style) {
+        copy.styleOverride = { ...style };
+      } else {
+        delete copy.styleOverride;
+      }
+      return copy;
+    });
     const nextPast = [...past, snapshot];
     if (nextPast.length > HISTORY_LIMIT) nextPast.shift();
     set({

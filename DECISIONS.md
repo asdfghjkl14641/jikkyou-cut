@@ -15,6 +15,14 @@
 
 ---
 
+## 2026-05-01 20:30 - 字幕機能 Phase 2: キュー単位の字幕スタイル上書き
+
+- 誰が: Antigravity
+- 何を: StylePreset 型導入、字幕設定画面に「スタイルプリセット」タブ、キュー右クリックで上書きメニュー、リニア+話者カラム両モード対応、resolveSubtitleStyle で優先順位統一
+- 理由: 実況のテンション・場面に応じた字幕の表情変化を実現
+- 影響: types, subtitleSettings, export, editorStore, SubtitleSettingsDialog, SubtitleOverlay, EditableTranscriptList, SpeakerColumnView
+- コミット: (未定)
+
 ## 2026-05-01 20:25 - 字幕設定・話者プリセット機能の詳細修正(Phase 1完了)
 
 - 誰が: Antigravity

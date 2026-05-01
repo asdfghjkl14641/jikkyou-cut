@@ -221,3 +221,52 @@
   }
 }
 
+.contextMenu {
+  position: fixed;
+  background: var(--bg-surface);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.5);
+  padding: 4px 0;
+  min-width: 200px;
+  z-index: 1000;
+  font-size: var(--font-size-sm);
+  color: var(--text-primary);
+}
+
+.contextMenuItem {
+  padding: 8px 16px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  position: relative;
+}
+
+.contextMenuItem:hover {
+  background: var(--bg-surface-hover);
+}
+
+.contextMenuItem.active {
+  color: var(--accent-primary);
+}
+
+.contextMenuDivider {
+  height: 1px;
+  background: var(--border-subtle);
+  margin: 4px 0;
+}
+
+.subMenu {
+  position: absolute;
+  top: 0;
+  left: 100%;
+  background: var(--bg-surface);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.5);
+  padding: 4px 0;
+  min-width: 200px;
+  z-index: 1001;
+}
+

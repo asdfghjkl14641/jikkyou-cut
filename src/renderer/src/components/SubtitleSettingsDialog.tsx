@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useEditorStore } from '../store/editorStore';
 import { X, Plus, Trash2 } from 'lucide-react';
 import { nanoid } from 'nanoid';
-import type { SubtitleSettings, SpeakerPreset, SpeakerStyle, InstalledFont } from '../../../common/types';
+import type { SubtitleSettings, SpeakerPreset, SpeakerStyle, InstalledFont, StylePreset } from '../../../common/types';
 import { defaultSpeakerName } from '../../../common/speakers';
 import FontManagerDialog from './FontManagerDialog';
 import styles from './SubtitleSettingsDialog.module.css';
@@ -38,7 +38,15 @@ export default function SubtitleSettingsDialog({ open, onClose }: Props) {
 
   const [installedFonts, setInstalledFonts] = useState<InstalledFont[]>([]);
   const [fontManagerOpen, setFontManagerOpen] = useState(false);
+  const [activeTab, setActiveTab] = useState<'speaker' | 'style'>('speaker');
   const [selectedSpeakerId, setSelectedSpeakerId] = useState<string>('default');
+  const [selectedStylePresetId, setSelectedStylePresetId] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (activeTab === 'style' && !selectedStylePresetId && subtitleSettings?.stylePresets && subtitleSettings.stylePresets.length > 0) {
+      setSelectedStylePresetId(subtitleSettings.stylePresets[0]!.id);
+    }
+  }, [activeTab, selectedStylePresetId, subtitleSettings]);
 
   // Fetch fonts when dialog opens or when returning from FontManager
   const loadFonts = useCallback(async () => {
@@ -173,16 +181,28 @@ export default function SubtitleSettingsDialog({ open, onClose }: Props) {
   };
 
   const activeSpeakerStyle = activePreset.speakerStyles.find(s => s.speakerId === selectedSpeakerId) ?? activePreset.speakerStyles[0]!;
+  const activeStylePreset = subtitleSettings.stylePresets.find(p => p.id === selectedStylePresetId) ?? subtitleSettings.stylePresets[0];
 
-  const updateActiveSpeaker = (updates: Partial<SpeakerStyle>) => {
-    const newStyles = activePreset.speakerStyles.map((s) =>
-      s.speakerId === activeSpeakerStyle.speakerId ? { ...s, ...updates } : s
-    );
-    updateActivePreset({ speakerStyles: newStyles });
+  const currentEditingStyle = activeTab === 'speaker' ? activeSpeakerStyle : activeStylePreset?.style;
+  const isEditingDefaultSpeaker = activeTab === 'speaker' && activeSpeakerStyle.speakerId === 'default';
+
+  const updateCurrentStyle = (updates: Partial<SpeakerStyle>) => {
+    if (activeTab === 'speaker') {
+      const newStyles = activePreset.speakerStyles.map((s) =>
+        s.speakerId === activeSpeakerStyle.speakerId ? { ...s, ...updates } : s
+      );
+      updateActivePreset({ speakerStyles: newStyles });
+    } else if (activeStylePreset) {
+      const newPresets = subtitleSettings.stylePresets.map(p => 
+        p.id === activeStylePreset.id ? { ...p, style: { ...p.style, ...updates } } : p
+      );
+      updateSettings({ ...subtitleSettings, stylePresets: newPresets });
+    }
   };
 
   const updateShadow = (updates: Partial<SpeakerStyle['shadow']>) => {
-    updateActiveSpeaker({ shadow: { ...activeSpeakerStyle.shadow, ...updates } });
+    if (!currentEditingStyle) return;
+    updateCurrentStyle({ shadow: { ...currentEditingStyle.shadow, ...updates } });
   };
 
   const handleAddSpeaker = () => {
@@ -219,25 +239,52 @@ export default function SubtitleSettingsDialog({ open, onClose }: Props) {
     }
   };
 
-  const activeFont = installedFonts.find((f) => f.family === activeSpeakerStyle.fontFamily);
-
-  // Dynamic style for preview
-  const previewStyle: React.CSSProperties = {
-    fontFamily: `"${activeSpeakerStyle.fontFamily}", sans-serif`,
-    fontSize: `${activeSpeakerStyle.fontSize}px`,
-    color: activeSpeakerStyle.textColor,
-    WebkitTextStroke: `${activeSpeakerStyle.outlineWidth}px ${activeSpeakerStyle.outlineColor}`,
-    paintOrder: 'stroke fill',
+  const handleAddStylePreset = () => {
+    const newPreset: StylePreset = {
+      id: nanoid(),
+      name: 'カスタムスタイル',
+      style: {
+        fontFamily: 'Noto Sans JP',
+        fontSize: 48,
+        textColor: '#FFFFFF',
+        outlineColor: '#000000',
+        outlineWidth: 4,
+        shadow: { enabled: true, color: '#000000', offsetPx: 3 },
+        position: 'bottom',
+      }
+    };
+    updateSettings({ ...subtitleSettings, stylePresets: [...subtitleSettings.stylePresets, newPreset] });
+    setSelectedStylePresetId(newPreset.id);
   };
 
-  if (activeSpeakerStyle.shadow.enabled) {
-    const s = activeSpeakerStyle.shadow;
+  const handleDeleteStylePreset = (id: string) => {
+    if (!window.confirm('このスタイルプリセットを削除しますか？')) return;
+    const newPresets = subtitleSettings.stylePresets.filter(p => p.id !== id);
+    updateSettings({ ...subtitleSettings, stylePresets: newPresets });
+    if (selectedStylePresetId === id) {
+      setSelectedStylePresetId(newPresets[0]?.id ?? null);
+    }
+  };
+
+  const activeFont = currentEditingStyle ? installedFonts.find((f) => f.family === currentEditingStyle.fontFamily) : undefined;
+
+  // Dynamic style for preview
+  const previewStyle: React.CSSProperties | undefined = currentEditingStyle ? {
+    fontFamily: `"${currentEditingStyle.fontFamily}", sans-serif`,
+    fontSize: `${currentEditingStyle.fontSize}px`,
+    color: currentEditingStyle.textColor,
+    WebkitTextStroke: `${currentEditingStyle.outlineWidth}px ${currentEditingStyle.outlineColor}`,
+    paintOrder: 'stroke fill',
+  } : undefined;
+
+  if (currentEditingStyle?.shadow.enabled && previewStyle) {
+    const s = currentEditingStyle.shadow;
     previewStyle.filter = `drop-shadow(0px ${s.offsetPx}px 0px ${s.color})`;
   }
 
   let alignSelf = 'center';
-  if (activeSpeakerStyle.position === 'top') alignSelf = 'flex-start';
-  if (activeSpeakerStyle.position === 'bottom') alignSelf = 'flex-end';
+  if (currentEditingStyle?.position === 'top') alignSelf = 'flex-start';
+  if (currentEditingStyle?.position === 'bottom') alignSelf = 'flex-end';
 
   return (
     <>
@@ -284,251 +331,324 @@ export default function SubtitleSettingsDialog({ open, onClose }: Props) {
           </div>
         </div>
 
+        <div className={styles.tabBar}>
+          <button 
+            type="button" 
+            className={`${styles.tabButton} ${activeTab === 'speaker' ? styles.tabActive : ''}`}
+            onClick={() => setActiveTab('speaker')}
+          >
+            スピーカー設定
+          </button>
+          <button 
+            type="button" 
+            className={`${styles.tabButton} ${activeTab === 'style' ? styles.tabActive : ''}`}
+            onClick={() => setActiveTab('style')}
+          >
+            スタイルプリセット
+          </button>
+        </div>
+
         <div className={styles.body}>
-          {/* Left Column: Speakers List */}
+          {/* Left Column: List */}
           <div className={styles.leftColumn}>
-            <div className={styles.styleListSection}>
-              <div className={styles.sectionTitle}>
-                <span>スピーカー</span>
-                <button type="button" className={styles.iconButton} onClick={handleAddSpeaker} title="話者を追加">
-                  <Plus size={16} />
-                </button>
+            {activeTab === 'speaker' ? (
+              <div className={styles.styleListSection}>
+                <div className={styles.sectionTitle}>
+                  <span>スピーカー</span>
+                  <button type="button" className={styles.iconButton} onClick={handleAddSpeaker} title="話者を追加">
+                    <Plus size={16} />
+                  </button>
+                </div>
+                <ul className={styles.styleList}>
+                  {activePreset.speakerStyles.map((speaker) => (
+                    <li
+                      key={speaker.speakerId}
+                      className={`${styles.styleItem} ${speaker.speakerId === selectedSpeakerId ? styles.active : ''}`}
+                      onClick={() => setSelectedSpeakerId(speaker.speakerId)}
+                    >
+                      <span className={styles.styleName}>{speaker.speakerName}</span>
+                      {speaker.speakerId !== 'default' && (
+                        <div className={styles.styleActions}>
+                          <button
+                            type="button"
+                            className={`${styles.iconButton} ${styles.danger}`}
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              handleDeleteSpeaker(speaker.speakerId);
+                            }}
+                            title="削除"
+                          >
+                            <Trash2 size={14} />
+                          </button>
+                        </div>
+                      )}
+                    </li>
+                  ))}
+                </ul>
               </div>
-              <ul className={styles.styleList}>
-                {activePreset.speakerStyles.map((speaker) => (
-                  <li
-                    key={speaker.speakerId}
-                    className={`${styles.styleItem} ${speaker.speakerId === selectedSpeakerId ? styles.active : ''}`}
-                    onClick={() => setSelectedSpeakerId(speaker.speakerId)}
-                  >
-                    <span className={styles.styleName}>{speaker.speakerName}</span>
-                    {speaker.speakerId !== 'default' && (
+            ) : (
+              <div className={styles.styleListSection}>
+                <div className={styles.sectionTitle}>
+                  <span>プリセット</span>
+                  <button type="button" className={styles.iconButton} onClick={handleAddStylePreset} title="スタイルを追加">
+                    <Plus size={16} />
+                  </button>
+                </div>
+                <ul className={styles.styleList}>
+                  {subtitleSettings.stylePresets.map((preset) => (
+                    <li
+                      key={preset.id}
+                      className={`${styles.styleItem} ${preset.id === selectedStylePresetId ? styles.active : ''}`}
+                      onClick={() => setSelectedStylePresetId(preset.id)}
+                    >
+                      <span className={styles.styleName}>{preset.name}</span>
                       <div className={styles.styleActions}>
                         <button
                           type="button"
                           className={`${styles.iconButton} ${styles.danger}`}
                           onClick={(e) => {
                             e.stopPropagation();
-                            handleDeleteSpeaker(speaker.speakerId);
+                            handleDeleteStylePreset(preset.id);
                           }}
                           title="削除"
                         >
                           <Trash2 size={14} />
                         </button>
                       </div>
-                    )}
-                  </li>
-                ))}
-              </ul>
-            </div>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
           </div>
 
           {/* Right Column: Settings & Preview */}
           <div className={styles.rightColumn}>
-            <div className={styles.sectionTitle}>詳細設定</div>
-            
-            <div className={styles.settingGroup}>
-              <span className={styles.settingLabel}>話者名</span>
-              <input
-                type="text"
-                className={styles.input}
-                value={activeSpeakerStyle.speakerName}
-                onChange={(e) => updateActiveSpeaker({ speakerName: e.target.value })}
-                disabled={activeSpeakerStyle.speakerId === 'default'}
-              />
-            </div>
-
-            <div className={styles.settingGroup}>
-              <div className={styles.settingLabel}>
-                <span>フォント</span>
-                <button type="button" className={styles.linkButton} onClick={() => setFontManagerOpen(true)}>
-                  + フォントをダウンロード
-                </button>
-              </div>
-              <select
-                className={styles.select}
-                value={activeSpeakerStyle.fontFamily}
-                onChange={(e) => updateActiveSpeaker({ fontFamily: e.target.value })}
-              >
-                {installedFonts.map((f) => (
-                  <option key={f.family} value={f.family}>{f.family}</option>
-                ))}
-                {!installedFonts.find(f => f.family === activeSpeakerStyle.fontFamily) && (
-                  <option value={activeSpeakerStyle.fontFamily}>{activeSpeakerStyle.fontFamily} (未インストール)</option>
-                )}
-              </select>
-            </div>
-
-            <div className={styles.settingGroup}>
-              <span className={styles.settingLabel}>
-                <span>サイズ</span>
-                <span className={styles.settingLabelValue}>{activeSpeakerStyle.fontSize}px</span>
-              </span>
-              <input
-                type="range"
-                className={styles.rangeInput}
-                min="20"
-                max="100"
-                value={activeSpeakerStyle.fontSize}
-                onChange={(e) => updateActiveSpeaker({ fontSize: Number(e.target.value) })}
-              />
-            </div>
-
-            <div className={styles.settingRow}>
-              <div className={styles.settingGroup} style={{ flex: 1 }}>
-                <span className={styles.settingLabel}>本文色</span>
-                <div className={styles.colorInputWrapper}>
-                  <input
-                    type="color"
-                    className={styles.colorInput}
-                    value={activeSpeakerStyle.textColor}
-                    onChange={(e) => updateActiveSpeaker({ textColor: e.target.value })}
-                  />
-                  <input 
-                    type="text" 
-                    className={styles.input} 
-                    value={activeSpeakerStyle.textColor}
-                    onChange={(e) => updateActiveSpeaker({ textColor: e.target.value })}
-                    style={{ width: '80px', flex: 'none' }}
-                  />
-                </div>
-              </div>
-              <div className={styles.settingGroup} style={{ flex: 1 }}>
-                <span className={styles.settingLabel}>縁の色</span>
-                <div className={styles.colorInputWrapper}>
-                  <input
-                    type="color"
-                    className={styles.colorInput}
-                    value={activeSpeakerStyle.outlineColor}
-                    onChange={(e) => updateActiveSpeaker({ outlineColor: e.target.value })}
-                  />
-                  <input 
-                    type="text" 
-                    className={styles.input} 
-                    value={activeSpeakerStyle.outlineColor}
-                    onChange={(e) => updateActiveSpeaker({ outlineColor: e.target.value })}
-                    style={{ width: '80px', flex: 'none' }}
-                  />
-                </div>
-              </div>
-            </div>
-
-            <div className={styles.settingGroup}>
-              <span className={styles.settingLabel}>
-                <span>縁の太さ</span>
-                <span className={styles.settingLabelValue}>{activeSpeakerStyle.outlineWidth}px</span>
-              </span>
-              <input
-                type="range"
-                className={styles.rangeInput}
-                min="0"
-                max="10"
-                value={activeSpeakerStyle.outlineWidth}
-                onChange={(e) => updateActiveSpeaker({ outlineWidth: Number(e.target.value) })}
-              />
-            </div>
-
-            <div className={styles.settingGroup}>
-              <label className={styles.checkboxLabel}>
-                <input
-                  type="checkbox"
-                  className={styles.checkbox}
-                  checked={activeSpeakerStyle.shadow.enabled}
-                  onChange={(e) => updateShadow({ enabled: e.target.checked })}
-                />
-                影をつける
-              </label>
-              
-              {activeSpeakerStyle.shadow.enabled && (
-                <div className={styles.settingRow} style={{ marginTop: 'var(--space-2)' }}>
-                  <div className={styles.colorInputWrapper}>
+            {currentEditingStyle && (
+              <>
+                <div className={styles.sectionTitle}>詳細設定</div>
+                
+                {activeTab === 'speaker' ? (
+                  <div className={styles.settingGroup}>
+                    <span className={styles.settingLabel}>話者名</span>
                     <input
-                      type="color"
-                      className={styles.colorInput}
-                      value={activeSpeakerStyle.shadow.color}
-                      onChange={(e) => updateShadow({ color: e.target.value })}
-                    />
-                    <input 
-                      type="text" 
-                      className={styles.input} 
-                      value={activeSpeakerStyle.shadow.color}
-                      onChange={(e) => updateShadow({ color: e.target.value })}
-                      style={{ width: '80px', flex: 'none' }}
+                      type="text"
+                      className={styles.input}
+                      value={activeSpeakerStyle.speakerName}
+                      onChange={(e) => updateCurrentStyle({ speakerName: e.target.value } as any)}
+                      disabled={isEditingDefaultSpeaker}
                     />
                   </div>
+                ) : (
+                  <div className={styles.settingGroup}>
+                    <span className={styles.settingLabel}>プリセット名</span>
+                    <input
+                      type="text"
+                      className={styles.input}
+                      value={activeStylePreset?.name || ''}
+                      onChange={(e) => {
+                        const newPresets = subtitleSettings.stylePresets.map(p => 
+                          p.id === activeStylePreset?.id ? { ...p, name: e.target.value } : p
+                        );
+                        updateSettings({ ...subtitleSettings, stylePresets: newPresets });
+                      }}
+                    />
+                  </div>
+                )}
+
+                <div className={styles.settingGroup}>
+                  <div className={styles.settingLabel}>
+                    <span>フォント</span>
+                    <button type="button" className={styles.linkButton} onClick={() => setFontManagerOpen(true)}>
+                      + フォントをダウンロード
+                    </button>
+                  </div>
+                  <select
+                    className={styles.select}
+                    value={currentEditingStyle.fontFamily}
+                    onChange={(e) => updateCurrentStyle({ fontFamily: e.target.value })}
+                  >
+                    {installedFonts.map((f) => (
+                      <option key={f.family} value={f.family}>{f.family}</option>
+                    ))}
+                    {!installedFonts.find(f => f.family === currentEditingStyle.fontFamily) && (
+                      <option value={currentEditingStyle.fontFamily}>{currentEditingStyle.fontFamily} (未インストール)</option>
+                    )}
+                  </select>
+                </div>
+
+                <div className={styles.settingGroup}>
+                  <span className={styles.settingLabel}>
+                    <span>サイズ</span>
+                    <span className={styles.settingLabelValue}>{currentEditingStyle.fontSize}px</span>
+                  </span>
                   <input
                     type="range"
                     className={styles.rangeInput}
-                    min="1"
-                    max="10"
-                    value={activeSpeakerStyle.shadow.offsetPx}
-                    onChange={(e) => updateShadow({ offsetPx: Number(e.target.value) })}
-                    style={{ flex: 1 }}
+                    min="20"
+                    max="100"
+                    value={currentEditingStyle.fontSize}
+                    onChange={(e) => updateCurrentStyle({ fontSize: Number(e.target.value) })}
                   />
-                  <span className={styles.settingLabelValue} style={{ width: '30px', textAlign: 'right' }}>
-                    {activeSpeakerStyle.shadow.offsetPx}px
-                  </span>
                 </div>
-              )}
-            </div>
 
-            <div className={styles.settingGroup}>
-              <span className={styles.settingLabel}>表示位置</span>
-              <div className={styles.radioGroup}>
-                <label className={styles.radioLabel}>
-                  <input
-                    type="radio"
-                    className={styles.radio}
-                    name="position"
-                    value="top"
-                    checked={activeSpeakerStyle.position === 'top'}
-                    onChange={() => updateActiveSpeaker({ position: 'top' })}
-                  />
-                  上
-                </label>
-                <label className={styles.radioLabel}>
-                  <input
-                    type="radio"
-                    className={styles.radio}
-                    name="position"
-                    value="middle"
-                    checked={activeSpeakerStyle.position === 'middle'}
-                    onChange={() => updateActiveSpeaker({ position: 'middle' })}
-                  />
-                  中央
-                </label>
-                <label className={styles.radioLabel}>
-                  <input
-                    type="radio"
-                    className={styles.radio}
-                    name="position"
-                    value="bottom"
-                    checked={activeSpeakerStyle.position === 'bottom'}
-                    onChange={() => updateActiveSpeaker({ position: 'bottom' })}
-                  />
-                  下
-                </label>
-              </div>
-            </div>
+                <div className={styles.settingRow}>
+                  <div className={styles.settingGroup} style={{ flex: 1 }}>
+                    <span className={styles.settingLabel}>本文色</span>
+                    <div className={styles.colorInputWrapper}>
+                      <input
+                        type="color"
+                        className={styles.colorInput}
+                        value={currentEditingStyle.textColor}
+                        onChange={(e) => updateCurrentStyle({ textColor: e.target.value })}
+                      />
+                      <input 
+                        type="text" 
+                        className={styles.input} 
+                        value={currentEditingStyle.textColor}
+                        onChange={(e) => updateCurrentStyle({ textColor: e.target.value })}
+                        style={{ width: '80px', flex: 'none' }}
+                      />
+                    </div>
+                  </div>
+                  <div className={styles.settingGroup} style={{ flex: 1 }}>
+                    <span className={styles.settingLabel}>縁の色</span>
+                    <div className={styles.colorInputWrapper}>
+                      <input
+                        type="color"
+                        className={styles.colorInput}
+                        value={currentEditingStyle.outlineColor}
+                        onChange={(e) => updateCurrentStyle({ outlineColor: e.target.value })}
+                      />
+                      <input 
+                        type="text" 
+                        className={styles.input} 
+                        value={currentEditingStyle.outlineColor}
+                        onChange={(e) => updateCurrentStyle({ outlineColor: e.target.value })}
+                        style={{ width: '80px', flex: 'none' }}
+                      />
+                    </div>
+                  </div>
+                </div>
 
-            <div className={styles.previewSection}>
-              {activeFont && (
-                <style dangerouslySetInnerHTML={{
-                  __html: `
-                    @font-face {
-                      font-family: "${activeFont.family}";
-                      src: url("file:///${activeFont.filePath.replace(/\\/g, '/')}");
-                    }
-                  `
-                }} />
-              )}
-              <div
-                className={styles.previewText}
-                style={{ ...previewStyle, alignSelf }}
-              >
-                サンプルテキスト
-              </div>
-            </div>
+                <div className={styles.settingGroup}>
+                  <span className={styles.settingLabel}>
+                    <span>縁の太さ</span>
+                    <span className={styles.settingLabelValue}>{currentEditingStyle.outlineWidth}px</span>
+                  </span>
+                  <input
+                    type="range"
+                    className={styles.rangeInput}
+                    min="0"
+                    max="10"
+                    value={currentEditingStyle.outlineWidth}
+                    onChange={(e) => updateCurrentStyle({ outlineWidth: Number(e.target.value) })}
+                  />
+                </div>
+
+                <div className={styles.settingGroup}>
+                  <label className={styles.checkboxLabel}>
+                    <input
+                      type="checkbox"
+                      className={styles.checkbox}
+                      checked={currentEditingStyle.shadow.enabled}
+                      onChange={(e) => updateShadow({ enabled: e.target.checked })}
+                    />
+                    影をつける
+                  </label>
+                  
+                  {currentEditingStyle.shadow.enabled && (
+                    <div className={styles.settingRow} style={{ marginTop: 'var(--space-2)' }}>
+                      <div className={styles.colorInputWrapper}>
+                        <input
+                          type="color"
+                          className={styles.colorInput}
+                          value={currentEditingStyle.shadow.color}
+                          onChange={(e) => updateShadow({ color: e.target.value })}
+                        />
+                        <input 
+                          type="text" 
+                          className={styles.input} 
+                          value={currentEditingStyle.shadow.color}
+                          onChange={(e) => updateShadow({ color: e.target.value })}
+                          style={{ width: '80px', flex: 'none' }}
+                        />
+                      </div>
+                      <input
+                        type="range"
+                        className={styles.rangeInput}
+                        min="1"
+                        max="10"
+                        value={currentEditingStyle.shadow.offsetPx}
+                        onChange={(e) => updateShadow({ offsetPx: Number(e.target.value) })}
+                        style={{ flex: 1 }}
+                      />
+                      <span className={styles.settingLabelValue} style={{ width: '30px', textAlign: 'right' }}>
+                        {currentEditingStyle.shadow.offsetPx}px
+                      </span>
+                    </div>
+                  )}
+                </div>
+
+                <div className={styles.settingGroup}>
+                  <span className={styles.settingLabel}>表示位置</span>
+                  <div className={styles.radioGroup}>
+                    <label className={styles.radioLabel}>
+                      <input
+                        type="radio"
+                        className={styles.radio}
+                        name="position"
+                        value="top"
+                        checked={currentEditingStyle.position === 'top'}
+                        onChange={() => updateCurrentStyle({ position: 'top' })}
+                      />
+                      上
+                    </label>
+                    <label className={styles.radioLabel}>
+                      <input
+                        type="radio"
+                        className={styles.radio}
+                        name="position"
+                        value="middle"
+                        checked={currentEditingStyle.position === 'middle'}
+                        onChange={() => updateCurrentStyle({ position: 'middle' })}
+                      />
+                      中央
+                    </label>
+                    <label className={styles.radioLabel}>
+                      <input
+                        type="radio"
+                        className={styles.radio}
+                        name="position"
+                        value="bottom"
+                        checked={currentEditingStyle.position === 'bottom'}
+                        onChange={() => updateCurrentStyle({ position: 'bottom' })}
+                      />
+                      下
+                    </label>
+                  </div>
+                </div>
+
+                <div className={styles.previewSection}>
+                  {activeFont && (
+                    <style dangerouslySetInnerHTML={{
+                      __html: `
+                        @font-face {
+                          font-family: "${activeFont.family}";
+                          src: url("file:///${activeFont.filePath.replace(/\\/g, '/')}");
+                        }
+                      `
+                    }} />
+                  )}
+                  <div
+                    className={styles.previewText}
+                    style={{ ...previewStyle, alignSelf }}
+                  >
+                    サンプルテキスト
+                  </div>
+                </div>
+              </>
+            )}
           </div>
         </div>
       </dialog>

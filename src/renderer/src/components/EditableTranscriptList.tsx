@@ -1,6 +1,7 @@
-import { useEffect, useMemo, useRef, type MouseEvent } from 'react';
+import { useEffect, useMemo, useRef, useState, type MouseEvent } from 'react';
 import { useEditorStore } from '../store/editorStore';
 import type { TranscriptCue } from '../../../common/types';
+import { resolveSubtitleStyle } from '../../../common/subtitleResolution';
 import { findCueIndexForCurrent } from '../../../common/segments';
 import { Play, Subtitles } from 'lucide-react';
 import ViewModeTab from './ViewModeTab';
@@ -58,10 +59,7 @@ export default function EditableTranscriptList({ onSeek }: Props) {
   const getPreviewStyleForCue = (cue: TranscriptCue): React.CSSProperties | undefined => {
     if (!activePreset) return undefined;
     
-    let activeStyle = activePreset.speakerStyles.find(s => s.speakerId === cue.speaker);
-    if (!activeStyle) {
-      activeStyle = activePreset.speakerStyles.find(s => s.speakerId === 'default');
-    }
+    const activeStyle = resolveSubtitleStyle(cue, activePreset);
     if (!activeStyle) return undefined;
 
     const ratio = PREVIEW_FONT_SIZE_PX / (activeStyle.fontSize || 80);
@@ -136,6 +134,20 @@ export default function EditableTranscriptList({ onSeek }: Props) {
     });
   }, [seekNonce]);
 
+  const [contextMenu, setContextMenu] = useState<{
+    x: number;
+    y: number;
+    cueId: string;
+  } | null>(null);
+
+  useEffect(() => {
+    const handleOutsideClick = () => setContextMenu(null);
+    if (contextMenu) {
+      document.addEventListener('mousedown', handleOutsideClick);
+      return () => document.removeEventListener('mousedown', handleOutsideClick);
+    }
+  }, [contextMenu]);
+
   const handleRowClick = (
     e: MouseEvent<HTMLDivElement>,
     index: number,
@@ -201,6 +213,10 @@ export default function EditableTranscriptList({ onSeek }: Props) {
               onClick={(e) => handleRowClick(e, index, cue.startSec)}
               role="button"
               tabIndex={-1}
+              onContextMenu={(e) => {
+                e.preventDefault();
+                setContextMenu({ x: e.clientX, y: e.clientY, cueId: cue.id });
+              }}
             >
               <div className={styles.cueLeft}>
                 <div className={styles.timecode}>
@@ -266,8 +282,108 @@ export default function EditableTranscriptList({ onSeek }: Props) {
             <span><kbd>Space</kbd> 再生</span>
             <span><kbd>Ctrl</kbd>+<kbd>Z</kbd> Undo</span>
           </div>
+          
+          {contextMenu && (
+            <CueContextMenu
+              x={contextMenu.x}
+              y={contextMenu.y}
+              cueId={contextMenu.cueId}
+              onClose={() => setContextMenu(null)}
+            />
+          )}
         </>
       )}
+    </div>
+  );
+}
+
+function CueContextMenu({ x, y, cueId, onClose }: { x: number, y: number, cueId: string, onClose: () => void }) {
+  const subtitleSettings = useEditorStore(s => s.subtitleSettings);
+  const cues = useEditorStore(s => s.cues);
+  const updateCueStyleOverride = useEditorStore(s => s.updateCueStyleOverride);
+  const toggleCueSubtitle = useEditorStore(s => s.toggleCueSubtitle);
+  const toggleDeletedOnSelection = useEditorStore(s => s.toggleDeletedOnSelection);
+  const selectByIndex = useEditorStore(s => s.selectByIndex);
+  
+  const cue = cues.find(c => c.id === cueId);
+  const cueIndex = cues.findIndex(c => c.id === cueId);
+  
+  const [showStyleSubMenu, setShowStyleSubMenu] = useState(false);
+  
+  if (!cue || !subtitleSettings) return null;
+
+  const stylePresets = subtitleSettings.stylePresets;
+  const isOverride = !!cue.styleOverride;
+
+  const handleApplyPreset = (presetId: string | null) => {
+    if (presetId === null) {
+      updateCueStyleOverride(cueId, undefined);
+    } else {
+      const p = stylePresets.find(p => p.id === presetId);
+      if (p) {
+        // Create an independent copy
+        const styleToSave = { ...p.style, speakerId: cue.id, speakerName: '上書きスタイル' };
+        updateCueStyleOverride(cueId, styleToSave);
+      }
+    }
+    onClose();
+  };
+
+  const handleToggleSubtitle = () => {
+    toggleCueSubtitle(cueId);
+    onClose();
+  };
+
+  const handleDelete = () => {
+    selectByIndex(cueIndex);
+    toggleDeletedOnSelection();
+    onClose();
+  };
+
+  return (
+    <div
+      className={styles.contextMenu}
+      style={{ left: x, top: y }}
+      onClick={(e) => e.stopPropagation()}
+    >
+      <div 
+        className={styles.contextMenuItem}
+        onMouseEnter={() => setShowStyleSubMenu(true)}
+        onMouseLeave={() => setShowStyleSubMenu(false)}
+      >
+        <span>字幕スタイル ▶</span>
+        <span style={{ color: 'var(--text-muted)' }}>
+          {isOverride ? '上書き中' : 'デフォルト'}
+        </span>
+        
+        {showStyleSubMenu && (
+          <div className={styles.subMenu}>
+            <div 
+              className={`${styles.contextMenuItem} ${!isOverride ? styles.active : ''}`}
+              onClick={() => handleApplyPreset(null)}
+            >
+              {!isOverride && '✓ '}デフォルト(話者の設定)
+            </div>
+            <div className={styles.contextMenuDivider} />
+            {stylePresets.map(p => (
+              <div
+                key={p.id}
+                className={styles.contextMenuItem}
+                onClick={() => handleApplyPreset(p.id)}
+              >
+                {p.name}
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+      <div className={styles.contextMenuItem} onClick={handleToggleSubtitle}>
+        字幕ON/OFF切替
+      </div>
+      <div className={styles.contextMenuDivider} />
+      <div className={styles.contextMenuItem} onClick={handleDelete}>
+        削除/復活 (D)
+      </div>
     </div>
   );
 }

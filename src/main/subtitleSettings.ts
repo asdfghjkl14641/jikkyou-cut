@@ -1,7 +1,7 @@
 import { app } from 'electron';
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
-import type { SubtitleSettings, SubtitleStyle, SpeakerPreset } from '../common/types';
+import type { SubtitleSettings, SubtitleStyle, SpeakerPreset, StylePreset } from '../common/types';
 
 const SETTINGS_FILE = 'subtitle-settings.json';
 
@@ -28,10 +28,79 @@ const DEFAULT_PRESET: SpeakerPreset = {
   updatedAt: Date.now(),
 };
 
+const BUILTIN_STYLE_PRESETS: StylePreset[] = [
+  {
+    id: 'style-preset-emphasis',
+    name: '強調',
+    style: {
+      fontFamily: 'Train One',
+      fontSize: 56,
+      textColor: '#FF0000',
+      outlineColor: '#000000',
+      outlineWidth: 6,
+      shadow: { enabled: true, color: '#000000', offsetPx: 4 },
+      position: 'bottom',
+    }
+  },
+  {
+    id: 'style-preset-whisper',
+    name: 'ささやき',
+    style: {
+      fontFamily: 'Klee One',
+      fontSize: 36,
+      textColor: '#EEEEEE',
+      outlineColor: '#000000',
+      outlineWidth: 2,
+      shadow: { enabled: false, color: '#000000', offsetPx: 1 },
+      position: 'bottom',
+    }
+  },
+  {
+    id: 'style-preset-shout',
+    name: '叫び',
+    style: {
+      fontFamily: 'Reggae One',
+      fontSize: 64,
+      textColor: '#FFFF00',
+      outlineColor: '#000000',
+      outlineWidth: 8,
+      shadow: { enabled: true, color: '#000000', offsetPx: 5 },
+      position: 'bottom',
+    }
+  },
+  {
+    id: 'style-preset-narration',
+    name: 'ナレーション',
+    style: {
+      fontFamily: 'Noto Sans JP',
+      fontSize: 40,
+      textColor: '#FFFFFF',
+      outlineColor: '#000000',
+      outlineWidth: 3,
+      shadow: { enabled: true, color: '#000000', offsetPx: 2 },
+      position: 'top',
+    }
+  },
+  {
+    id: 'style-preset-custom',
+    name: 'カスタム1',
+    style: {
+      fontFamily: 'Noto Sans JP',
+      fontSize: 48,
+      textColor: '#FFFFFF',
+      outlineColor: '#000000',
+      outlineWidth: 4,
+      shadow: { enabled: true, color: '#000000', offsetPx: 3 },
+      position: 'bottom',
+    }
+  }
+];
+
 export const DEFAULT_SUBTITLE_SETTINGS: SubtitleSettings = {
   enabled: true,
   presets: [DEFAULT_PRESET],
   activePresetId: 'preset-default',
+  stylePresets: BUILTIN_STYLE_PRESETS,
 };
 
 // Re-injects the canonical default preset if missing or ensures it has the
@@ -60,10 +129,13 @@ function reconcilePresets(loaded: SubtitleSettings): SubtitleSettings {
     ? loaded.activePresetId
     : 'preset-default';
 
+  const stylePresets = Array.isArray(loaded.stylePresets) ? loaded.stylePresets : BUILTIN_STYLE_PRESETS;
+
   return {
     enabled: typeof loaded.enabled === 'boolean' ? loaded.enabled : true,
     presets,
     activePresetId,
+    stylePresets,
   };
 }
 

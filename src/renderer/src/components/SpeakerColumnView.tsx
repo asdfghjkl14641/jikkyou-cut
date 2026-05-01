@@ -1,7 +1,7 @@
-import React, { useEffect, useMemo, useRef } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { useEditorStore } from '../store/editorStore';
 import { findCueIndexForCurrent } from '../../../common/segments';
-import { Play, User } from 'lucide-react';
+import { Play, User, Wand2 } from 'lucide-react';
 import SpeakerDropdown from './SpeakerDropdown';
 import styles from './SpeakerColumnView.module.css';
 
@@ -118,6 +118,20 @@ export default function SpeakerColumnView({ onSeek }: Props) {
     });
   };
 
+  const [contextMenu, setContextMenu] = useState<{
+    x: number;
+    y: number;
+    cueId: string;
+  } | null>(null);
+
+  useEffect(() => {
+    const handleOutsideClick = () => setContextMenu(null);
+    if (contextMenu) {
+      document.addEventListener('mousedown', handleOutsideClick);
+      return () => document.removeEventListener('mousedown', handleOutsideClick);
+    }
+  }, [contextMenu]);
+
   return (
     <div className={styles.container}>
       {/* Shared sticky headers */}
@@ -170,6 +184,30 @@ export default function SpeakerColumnView({ onSeek }: Props) {
                     cueId={cue.id}
                     currentSpeaker={cue.speaker}
                   />
+                  {cue.styleOverride && (
+                    <span 
+                      className={styles.overrideIcon} 
+                      title={`${cue.styleOverride.speakerName} 適用中`}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setContextMenu({ x: e.clientX, y: e.clientY, cueId: cue.id });
+                      }}
+                    >
+                      <Wand2 size={12} color="var(--accent-primary)" />
+                    </span>
+                  )}
+                  {!cue.styleOverride && (
+                    <span 
+                      className={styles.overrideIconHover}
+                      title="字幕スタイル上書き"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setContextMenu({ x: e.clientX, y: e.clientY, cueId: cue.id });
+                      }}
+                    >
+                      <Wand2 size={12} color="var(--text-muted)" />
+                    </span>
+                  )}
                 </div>
                 <textarea
                   className={styles.textInput}
@@ -188,6 +226,105 @@ export default function SpeakerColumnView({ onSeek }: Props) {
         <span><kbd>↑</kbd>/<kbd>↓</kbd> 選択</span>
         <span><kbd>Space</kbd> 再生</span>
         <span><kbd>Ctrl</kbd>+<kbd>Z</kbd> Undo</span>
+      </div>
+
+      {contextMenu && (
+        <CueContextMenu
+          x={contextMenu.x}
+          y={contextMenu.y}
+          cueId={contextMenu.cueId}
+          onClose={() => setContextMenu(null)}
+        />
+      )}
+    </div>
+  );
+}
+
+function CueContextMenu({ x, y, cueId, onClose }: { x: number, y: number, cueId: string, onClose: () => void }) {
+  const subtitleSettings = useEditorStore(s => s.subtitleSettings);
+  const cues = useEditorStore(s => s.cues);
+  const updateCueStyleOverride = useEditorStore(s => s.updateCueStyleOverride);
+  
+  const cue = cues.find(c => c.id === cueId);
+  const [showStyleSubMenu, setShowStyleSubMenu] = React.useState(false);
+  
+  if (!cue || !subtitleSettings) return null;
+
+  const stylePresets = subtitleSettings.stylePresets;
+  const isOverride = !!cue.styleOverride;
+
+  const handleApplyPreset = (presetId: string | null) => {
+    if (presetId === null) {
+      updateCueStyleOverride(cueId, undefined);
+    } else {
+      const p = stylePresets.find(p => p.id === presetId);
+      if (p) {
+        const styleToSave = { ...p.style, speakerId: cue.id, speakerName: '上書きスタイル' };
+        updateCueStyleOverride(cueId, styleToSave);
+      }
+    }
+    onClose();
+  };
+
+  return (
+    <div
+      style={{
+        position: 'fixed',
+        left: x,
+        top: y,
+        background: 'var(--bg-surface)',
+        border: '1px solid var(--border-subtle)',
+        borderRadius: 'var(--radius-md)',
+        boxShadow: '0 4px 12px rgba(0, 0, 0, 0.5)',
+        padding: '4px 0',
+        minWidth: '200px',
+        zIndex: 1000,
+        fontSize: 'var(--font-size-sm)',
+        color: 'var(--text-primary)',
+      }}
+      onClick={(e) => e.stopPropagation()}
+    >
+      <div 
+        style={{ padding: '8px 16px', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'space-between', position: 'relative' }}
+        onMouseEnter={() => setShowStyleSubMenu(true)}
+        onMouseLeave={() => setShowStyleSubMenu(false)}
+      >
+        <span>字幕スタイル ▶</span>
+        <span style={{ color: 'var(--text-muted)' }}>
+          {isOverride ? '上書き中' : 'デフォルト'}
+        </span>
+        
+        {showStyleSubMenu && (
+          <div style={{
+            position: 'absolute',
+            top: 0,
+            left: '100%',
+            background: 'var(--bg-surface)',
+            border: '1px solid var(--border-subtle)',
+            borderRadius: 'var(--radius-md)',
+            boxShadow: '0 4px 12px rgba(0, 0, 0, 0.5)',
+            padding: '4px 0',
+            minWidth: '200px',
+            zIndex: 1001,
+          }}>
+            <div 
+              style={{ padding: '8px 16px', cursor: 'pointer', color: !isOverride ? 'var(--accent-primary)' : 'inherit' }}
+              onClick={() => handleApplyPreset(null)}
+            >
+              {!isOverride && '✓ '}デフォルト(話者の設定)
+            </div>
+            <div style={{ height: '1px', background: 'var(--border-subtle)', margin: '4px 0' }} />
+            {stylePresets.map(p => (
+              <div
+                key={p.id}
+                style={{ padding: '8px 16px', cursor: 'pointer' }}
+                onClick={() => handleApplyPreset(p.id)}
+              >
+                {p.name}
+              </div>
+            ))}
+          </div>
+        )}
       </div>
     </div>
   );

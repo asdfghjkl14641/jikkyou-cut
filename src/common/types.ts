@@ -135,6 +135,12 @@ export type SpeakerPreset = {
   updatedAt: number;
 };
 
+export type StylePreset = {
+  id: string;            // nanoid
+  name: string;          // "強調", "ささやき", "叫び", "ナレーション" 等
+  style: Omit<SpeakerStyle, 'speakerId' | 'speakerName'>;  // フォント・色・縁・影・位置
+};
+
 // Deprecated: kept for migration only. Will be removed in future.
 export type SubtitleStyle = {
   id: string; // nanoid
@@ -153,6 +159,7 @@ export type SubtitleSettings = {
   enabled: boolean; // master ON/OFF for the subtitle feature
   presets: SpeakerPreset[];
   activePresetId: string | null;
+  stylePresets: StylePreset[]; // テンション別スタイル
   // Kept for backward compatibility during migration
   activeStyleId?: string;
   styles?: SubtitleStyle[];

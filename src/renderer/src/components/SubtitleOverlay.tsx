@@ -1,6 +1,7 @@
 import React, { useMemo } from 'react';
 import { useEditorStore } from '../store/editorStore';
 import type { SpeakerStyle } from '../../../common/types';
+import { resolveSubtitleStyle } from '../../../common/subtitleResolution';
 import styles from './SubtitleOverlay.module.css';
 
 function subtitleTextStyle(style: SpeakerStyle): React.CSSProperties {
@@ -50,10 +51,7 @@ const SubtitleOverlay: React.FC = () => {
   );
   if (!activePreset) return null;
   
-  let activeStyle = activePreset.speakerStyles.find(s => s.speakerId === currentCue.speaker);
-  if (!activeStyle) {
-    activeStyle = activePreset.speakerStyles.find(s => s.speakerId === 'default');
-  }
+  const activeStyle = resolveSubtitleStyle(currentCue, activePreset);
   if (!activeStyle) return null;
   
   return (
