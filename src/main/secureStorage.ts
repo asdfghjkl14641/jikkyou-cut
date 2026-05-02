@@ -83,56 +83,66 @@ const youtubeKeysPath = () => path.join(app.getPath('userData'), 'youtubeApiKeys
 const YT_KEYS_JSON_MAX_BYTES = 100_000;
 
 export async function saveYoutubeApiKeys(keys: string[]): Promise<void> {
+  console.log('[SS-DEBUG] saveYoutubeApiKeys ENTRY: received', keys.length, 'keys, raw-trim-lengths:', keys.map((k) => k.trim().length));
   // Trim + dedupe + drop empties. Set preserves first-seen order so the
   // user's intended ordering survives.
   const cleaned = Array.from(new Set(keys.map((k) => k.trim()).filter((k) => k.length > 0)));
-  console.log(
-    `[secureStorage] saveYoutubeApiKeys: received=${keys.length} cleaned=${cleaned.length}`,
-  );
+  console.log('[SS-DEBUG] saveYoutubeApiKeys: after trim+dedupe+filter, cleaned.length:', cleaned.length);
   if (cleaned.length === 0) {
     await deleteAt(youtubeKeysPath());
-    console.log('[secureStorage] saveYoutubeApiKeys: cleared (empty input)');
+    console.log('[SS-DEBUG] saveYoutubeApiKeys: cleared (empty input) → file deleted');
     return;
   }
   const json = JSON.stringify(cleaned);
-  console.log(`[secureStorage] saveYoutubeApiKeys: JSON length=${json.length} chars`);
+  console.log('[SS-DEBUG] saveYoutubeApiKeys: JSON.stringify length:', json.length, 'chars');
   if (json.length > YT_KEYS_JSON_MAX_BYTES) {
+    console.warn('[SS-DEBUG] saveYoutubeApiKeys: payload too large, throwing');
     throw new Error(
       `YouTube API keys payload too large: ${json.length} chars (max ${YT_KEYS_JSON_MAX_BYTES})`,
     );
   }
+  console.log('[SS-DEBUG] saveYoutubeApiKeys: calling saveAt() (encrypt + write)...');
   await saveAt(youtubeKeysPath(), json);
-  // Sanity check what landed on disk — confirms encryption + write
-  // both succeeded, surfaces "X went in but Y came out" mismatches.
   try {
     const stat = await fs.stat(youtubeKeysPath());
-    console.log(
-      `[secureStorage] saveYoutubeApiKeys: written ${stat.size} bytes for ${cleaned.length} keys`,
-    );
-  } catch {
-    /* ignore — primary write already succeeded */
+    console.log('[SS-DEBUG] saveYoutubeApiKeys: file written, size:', stat.size, 'bytes for', cleaned.length, 'keys');
+  } catch (err) {
+    console.warn('[SS-DEBUG] saveYoutubeApiKeys: stat failed (primary write succeeded):', err);
+  }
+  // Read-back integrity check — decrypt + parse what we just wrote and
+  // compare counts. If this diverges from cleaned.length, the bug is
+  // in storage; if it matches, the bug is downstream of save.
+  try {
+    const readBack = await loadYoutubeApiKeys();
+    console.log('[SS-DEBUG] saveYoutubeApiKeys: read-back count:', readBack.length, '(expected', cleaned.length, ')');
+    if (readBack.length !== cleaned.length) {
+      console.warn('[SS-DEBUG] saveYoutubeApiKeys: ❌ READ-BACK MISMATCH — wrote', cleaned.length, 'but loaded', readBack.length);
+    }
+  } catch (err) {
+    console.warn('[SS-DEBUG] saveYoutubeApiKeys: read-back failed:', err);
   }
 }
 
 export async function loadYoutubeApiKeys(): Promise<string[]> {
+  console.log('[SS-DEBUG] loadYoutubeApiKeys ENTRY');
   const raw = await loadAt(youtubeKeysPath());
   if (!raw) {
-    console.log('[secureStorage] loadYoutubeApiKeys: file missing → []');
+    console.log('[SS-DEBUG] loadYoutubeApiKeys: file missing → []');
     return [];
   }
+  console.log('[SS-DEBUG] loadYoutubeApiKeys: decrypted raw JSON length:', raw.length, 'chars');
   try {
     const parsed = JSON.parse(raw) as unknown;
     if (!Array.isArray(parsed)) {
-      console.warn(
-        '[secureStorage] loadYoutubeApiKeys: parsed but not array → []',
-      );
+      console.warn('[SS-DEBUG] loadYoutubeApiKeys: parsed but not array → []');
       return [];
     }
+    console.log('[SS-DEBUG] loadYoutubeApiKeys: parsed array length:', parsed.length);
     const out = parsed.filter((k): k is string => typeof k === 'string' && k.length > 0);
-    console.log(`[secureStorage] loadYoutubeApiKeys: loaded ${out.length} keys (raw JSON ${raw.length} chars)`);
+    console.log('[SS-DEBUG] loadYoutubeApiKeys: filter survivors:', out.length, '(raw array had', parsed.length, ')');
     return out;
   } catch (err) {
-    console.warn('[secureStorage] loadYoutubeApiKeys: JSON parse failed:', err);
+    console.warn('[SS-DEBUG] loadYoutubeApiKeys: JSON parse failed:', err);
     return [];
   }
 }

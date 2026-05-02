@@ -305,6 +305,17 @@ function YoutubeKeysSection() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  // Render-time log. Fires every render so we can correlate state
+  // values with what the user sees on screen. Per the 3rd-pass debug
+  // protocol — if the count diverges from intuition, this is where we
+  // catch it.
+  console.log(
+    '[YT-DEBUG] render: editing:', editing,
+    'keyCount:', keyCount,
+    'draft.length:', draft.length,
+    'busy:', busy,
+  );
+
   // Initial load + 5-second poll for live quota visibility.
   useEffect(() => {
     let alive = true;
@@ -333,14 +344,26 @@ function YoutubeKeysSection() {
   // The IPC `getKeys` returns plaintext keys (deliberate relaxation;
   // see common/types.ts comment).
   useEffect(() => {
-    if (!editing) return;
+    console.log('[YT-DEBUG] useEffect[editing] fired, editing:', editing);
+    if (!editing) {
+      console.log('[YT-DEBUG] useEffect[editing] early-return (not in edit mode)');
+      return;
+    }
     let alive = true;
+    console.log('[YT-DEBUG] useEffect[editing] calling getKeys()...');
     void window.api.youtubeApiKeys.getKeys().then((keys) => {
-      if (!alive) return;
-      console.log(`[ApiManagement] edit mode opened, loaded ${keys.length} existing keys into draft`);
+      if (!alive) {
+        console.log('[YT-DEBUG] useEffect[editing] resolved but alive=false, dropping');
+        return;
+      }
+      console.log('[YT-DEBUG] useEffect[editing] getKeys returned, keys.length:', keys.length);
+      const seed = keys.length > 0 ? keys : [''];
+      console.log('[YT-DEBUG] useEffect[editing] setDraft seeding with', seed.length, 'rows');
       // Seed with existing keys; if none, start with one blank row so
       // the editor always has at least one input visible.
-      setDraft(keys.length > 0 ? keys : ['']);
+      setDraft(seed);
+    }).catch((err) => {
+      console.warn('[YT-DEBUG] useEffect[editing] getKeys failed:', err);
     });
     return () => { alive = false; };
   }, [editing]);
@@ -349,26 +372,31 @@ function YoutubeKeysSection() {
   const totalCap = keyCount * YT_DAILY_QUOTA_PER_KEY;
 
   const handleSave = async () => {
+    console.log('[YT-DEBUG] handleSave called');
+    console.log(
+      '[YT-DEBUG] handleSave: draft.length:', draft.length,
+      'each-trim-length:', draft.map((k) => k.trim().length),
+    );
     setError(null);
     const cleaned = draft.map((k) => k.trim()).filter((k) => k.length > 0);
+    console.log('[YT-DEBUG] handleSave: after trim+filter, cleaned.length:', cleaned.length);
     if (cleaned.length === 0) {
+      console.log('[YT-DEBUG] handleSave: cleaned is empty → showing error, NOT calling setKeys');
       setError('少なくとも 1 つのキーを入力してください');
       return;
     }
-    // Diagnostic log so we can correlate with [secureStorage] entries
-    // when investigating "key count drops on reload" reports. We only
-    // log counts, not the keys themselves.
-    console.log(`[ApiManagement] saving ${cleaned.length} YouTube keys (draft rows: ${draft.length})`);
     setBusy(true);
     try {
+      console.log('[YT-DEBUG] handleSave: invoking IPC setKeys with', cleaned.length, 'keys');
       await window.api.youtubeApiKeys.setKeys(cleaned);
+      console.log('[YT-DEBUG] handleSave: IPC setKeys returned, calling getKeyCount...');
       const reloadCount = await window.api.youtubeApiKeys.getKeyCount();
-      console.log(`[ApiManagement] save complete; getKeyCount=${reloadCount}`);
+      console.log('[YT-DEBUG] handleSave: getKeyCount returned', reloadCount);
       setDraft(['']);
       setEditing(false);
       setKeyCount(reloadCount);
     } catch (err) {
-      console.warn('[ApiManagement] save failed:', err);
+      console.warn('[YT-DEBUG] handleSave failed:', err);
       setError(err instanceof Error ? err.message : String(err));
     } finally {
       setBusy(false);
@@ -401,9 +429,10 @@ function YoutubeKeysSection() {
             type="button"
             className={styles.smallButton}
             onClick={() => {
+              console.log('[YT-DEBUG] toggle button clicked, current editing:', editing, 'keyCount:', keyCount);
               setEditing((v) => {
                 const next = !v;
-                console.log(`[ApiManagement] YT edit toggle: ${v} → ${next}, current keyCount=${keyCount}`);
+                console.log('[YT-DEBUG] toggle: setEditing functional update', v, '→', next);
                 return next;
               });
             }}
@@ -463,13 +492,20 @@ function YoutubeKeysSection() {
                   type="password"
                   className={styles.input}
                   value={key}
-                  onChange={(e) =>
+                  onChange={(e) => {
+                    const v = e.target.value;
+                    console.log('[YT-DEBUG] input onChange index:', i, 'valueLength:', v.length);
                     setDraft((prev) => {
                       const next = [...prev];
-                      next[i] = e.target.value;
+                      next[i] = v;
+                      console.log(
+                        '[YT-DEBUG] input onChange setDraft: prev.length:', prev.length,
+                        'next.length:', next.length,
+                        'next-trim-lengths:', next.map((k) => k.trim().length),
+                      );
                       return next;
-                    })
-                  }
+                    });
+                  }}
                   placeholder={`キー ${i + 1}`}
                   spellCheck={false}
                   autoComplete="off"
@@ -478,7 +514,14 @@ function YoutubeKeysSection() {
                 <button
                   type="button"
                   className={styles.smallButton}
-                  onClick={() => setDraft((prev) => prev.filter((_, idx) => idx !== i))}
+                  onClick={() => {
+                    console.log('[YT-DEBUG] remove-row clicked, index:', i, 'current draft.length:', draft.length);
+                    setDraft((prev) => {
+                      const next = prev.filter((_, idx) => idx !== i);
+                      console.log('[YT-DEBUG] remove-row setDraft: prev.length:', prev.length, '→ next.length:', next.length);
+                      return next;
+                    });
+                  }}
                   disabled={busy || draft.length === 1}
                   title="この行を削除"
                 >
@@ -491,16 +534,21 @@ function YoutubeKeysSection() {
             <button
               type="button"
               className={styles.smallButton}
-              onClick={() =>
+              onClick={() => {
+                console.log('[YT-DEBUG] add-row button clicked, current draft.length:', draft.length, 'MAX:', MAX_YT_KEYS);
                 setDraft((prev) => {
                   if (prev.length >= MAX_YT_KEYS) {
-                    console.log(`[ApiManagement] YT add row blocked: at cap ${MAX_YT_KEYS}`);
+                    console.log('[YT-DEBUG] add-row BLOCKED at cap', MAX_YT_KEYS);
                     return prev;
                   }
-                  console.log(`[ApiManagement] YT add row: ${prev.length} → ${prev.length + 1}`);
-                  return [...prev, ''];
-                })
-              }
+                  const next = [...prev, ''];
+                  console.log(
+                    '[YT-DEBUG] add-row setDraft: prev.length:', prev.length,
+                    '→ next.length:', next.length,
+                  );
+                  return next;
+                });
+              }}
               disabled={busy || draft.length >= MAX_YT_KEYS}
             >
               <Plus size={12} />

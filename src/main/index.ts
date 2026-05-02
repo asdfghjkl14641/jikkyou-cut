@@ -230,14 +230,26 @@ function registerIpcHandlers() {
 
   // YouTube Data API key BYOK (multi-slot for quota rotation).
   ipcMain.handle('youtubeApiKeys:hasKeys', () => secureStorage.hasYoutubeApiKeys());
-  ipcMain.handle('youtubeApiKeys:getKeyCount', () => secureStorage.countYoutubeApiKeys());
+  ipcMain.handle('youtubeApiKeys:getKeyCount', async () => {
+    const c = await secureStorage.countYoutubeApiKeys();
+    console.log('[IPC-DEBUG] youtubeApiKeys:getKeyCount returning', c);
+    return c;
+  });
   // getKeys returns plaintext keys to renderer — see comment in
   // common/types.ts for the rationale. Used by the multi-key editor
   // to seed its draft with existing keys.
-  ipcMain.handle('youtubeApiKeys:getKeys', () => secureStorage.loadYoutubeApiKeys());
+  ipcMain.handle('youtubeApiKeys:getKeys', async () => {
+    console.log('[IPC-DEBUG] youtubeApiKeys:getKeys ENTRY');
+    const keys = await secureStorage.loadYoutubeApiKeys();
+    console.log('[IPC-DEBUG] youtubeApiKeys:getKeys returning', keys.length, 'keys');
+    return keys;
+  });
   ipcMain.handle('youtubeApiKeys:setKeys', async (_e, keys: string[]) => {
+    console.log('[IPC-DEBUG] youtubeApiKeys:setKeys ENTRY: received', Array.isArray(keys) ? keys.length : 'NOT-ARRAY', 'keys');
     if (!Array.isArray(keys)) throw new Error('keys must be string[]');
+    console.log('[IPC-DEBUG] youtubeApiKeys:setKeys: trim-lengths:', keys.map((k) => (typeof k === 'string' ? k.trim().length : 'NOT-STRING')));
     await secureStorage.saveYoutubeApiKeys(keys);
+    console.log('[IPC-DEBUG] youtubeApiKeys:setKeys: secureStorage.saveYoutubeApiKeys returned');
   });
   ipcMain.handle('youtubeApiKeys:clear', () => secureStorage.clearYoutubeApiKeys());
 
