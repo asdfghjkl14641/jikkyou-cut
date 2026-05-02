@@ -1,119 +1,113 @@
 # 次セッションへの引き継ぎ (NEXT_SESSION_HANDOFF)
 
 ## 凍結時刻
-2026-05-03 11:30 — uploaders テーブル分離 + creators 純化(migration 001)完了。データモデル整備済み。**データ収集の有効化はユーザの操作待ち**。
+2026-05-03 12:00 — データ収集の最終クリーンアップ(NULL group 解消 + reseed 自動化)+ 運用 Runbook 整備完了。**本格運用開始の準備が完全に整った**。あとはユーザの「有効化する」操作待ち。
 
 ## ⚠️ 次セッションの Claude Code が最初に読むこと
 
 `CLAUDE.md` 冒頭の「アプリ起動時の絶対ルール」を厳守:
 - ✅ `npm run dev` / `npm run dev:fresh` を使う
-- ❌ `npm run start` は禁止(古いビルドを実行する)
-- `npm install` 後は `npx @electron/rebuild -f -w better-sqlite3` を必ず叩く
+- ❌ `npm run start` 禁止(古いビルド掴む)
+- `npm install` 後は `npx @electron/rebuild -f -w better-sqlite3`
 
 ## リポジトリ状態
-- HEAD: `280ad6c`(feat(data-collection): uploaders テーブル分離 + creators 純化)
-- 直前: `03960ef`(docs: better-sqlite3 ロード失敗の調査結果)
+- HEAD: `cd30fda`(fix(data-collection): NULL group の seed creator を毎起動 reseed で正常化)
+- 直前: `604465d`(docs: uploaders 分離 migration 001 反映)
 - docs commit 後 clean
 
 ## 直前の状況サマリ
 
-直前タスクの DB 診断で creators が「seed 75 + 切り抜き投稿者 250 = 325」と確定していた件を、**データモデル分離で根本修正**。
+直前タスクで完了した uploaders 分離(migration 001)後の **3 件の最終クリーンアップ**:
 
-### 新スキーマ(2 テーブル分離)
+### 修正 1: NULL group 2 件を reseed で恒久解決
 
-| テーブル | 内容 | 件数 |
+**真因**:per-creator hit 経路で旧式 3 引数 `upsertCreator(name, channelId, isTarget)` が group 引数なしで INSERT したケース(creators.json は 75 ある状態で DB 行が無い時に発生)。今は uploaders 分離後で 3 引数経路は撤廃済みだが、**過去のデータに 2 件残ってた**:
+
+| name | 期待 group | 実際 |
 |---|---|---|
-| `creators` | seed 配信者のみ(`is_target=1`)+ `creator_group` で分類 | 75 |
-| `uploaders`(NEW) | 切り抜き動画の投稿チャンネル(channel_id / video_count キャッシュ) | 252 |
-| `videos.creator_id` | per-creator 検索由来の動画のみ非 null | 3 |
-| `videos.uploader_id`(NEW 列) | 全動画に紐付け | 347 |
+| ぶゅりる | streamer | NULL |
+| 剣持刀也 | nijisanji | NULL |
 
-### Migration 001 の挙動
+**解決**:`seedCreators.ts` に `reseedGroupsForExistingCreators()` 追加、`seedOrUpdateCreators` の早期 return を撤去して **毎起動必ず reseed を実行**。SEED_CREATORS を source-of-truth として `UPDATE creators SET creator_group=? WHERE name=? AND (creator_group IS NULL OR creator_group != ?) AND is_target=1` を全 75 件に対して実行。冪等(既に sync 済みなら no-op)。
 
-`src/main/dataCollection/migrations.ts` の `runMigrations()` を `app.whenReady` から `seedOrUpdateCreators` の前に呼ぶ。
-
-- `PRAGMA user_version` で冪等性管理(target=1)
-- 実行前:WAL checkpoint(TRUNCATE) → タイムスタンプ付き .bak 作成
-- 単一トランザクションで:
-  1. uploaders + indexes 作成 + videos.uploader_id 列追加
-  2. videos.channel_name の DISTINCT を uploaders へ一括投入
-  3. is_target=0 creators で videos に出てこない孤児も移送
-  4. videos.uploader_id を channel_name JOIN で backfill
-  5. videos.creator_id を NULL(is_target=0 由来分)
-  6. is_target=0 creators を DELETE
-  7. uploaders.video_count を再集計
-
-### 収集ロジック修正
-
-`_collectBatch`(index.ts):
-- broad-search 由来の `upsertCreator(channelTitle, ...)` 経路を **撤廃**
-- 各 video について `upsertUploader(channelId, channelName)` で uploader 登録 + `bumpUploaderVideoCount` で video_count 加算
-- per-creator hint ありの video のみ `getCreatorIdByName` で creator_id 解決(broad は creator_id = NULL)
-
-### UI 表示
-
-`DataCollectionSettings` のステータスパネル:
+実機 hot-reload で実際に 2 件 update された記録が collection.log に残ってる:
 ```
-動画                  : 347
-配信者(seed)        :  75
-切り抜きチャンネル    : 252
-本日のクォータ        : 33,000 / 500,000
-自動収集              : 🔴 無効  [有効化する]
-状態                  : ⏸ 待機中
+2026-05-02T13:05:57Z [INFO] reseed group: "剣持刀也" → nijisanji
+2026-05-02T13:05:57Z [INFO] reseed group: "ぶゅりる" → streamer
+2026-05-02T13:05:57Z [INFO] reseed: corrected creator_group on 2 existing creator(s)
 ```
 
-### 実機検証結果(Python sqlite3 で直接確認)
-
+post-state(Python で確認):
 ```
-user_version: 1
-creators total: 75
-creators by is_target: [(1, 75)]    ← 全て is_target=1
-creators by group: hololive=15, neoporte=5, nijisanji=19, streamer=19, vspo=15, NULL=2
-uploaders total: 252                 ← 全て channel_id 解決済み
-videos uploader_id NOT NULL: 347     ← 全動画 OK
-videos creator_id NOT NULL: 3        ← per-creator 由来のみ
-videos total: 347                    ← データ消失なし
+null_group: 0
+by_group: {nijisanji: 20, hololive: 15, vspo: 15, neoporte: 5, streamer: 20}
 ```
 
-バックアップ:
-- `data-collection.db.bak.20260502T123359`(migration 自動生成、UTC ts)
-- `data-collection.db.bak.20260502T212737`(着手前の手動 backup、JST ts)
+全 75 件 group 整合済み ✅。
 
-## 主要変更ファイル(直近 = `280ad6c`)
+### 修正 2: diagnose Q3b + Q15-Q17 拡張
 
-- `src/main/dataCollection/migrations.ts`(新規、`runMigrations()` + migration 001)
-- `src/main/dataCollection/database.ts`(`upsertUploader` / `bumpUploaderVideoCount` / `getCreatorIdByName` 追加、`VideoUpsert.uploader_id` 列、`getStats` 拡張)
-- `src/main/dataCollection/index.ts`(`_collectBatch` の broad-search auto-add を撤廃、uploader 登録に切替)
-- `src/main/dataCollection/diagnose.ts`(Q10-Q14 追加 — uploaders / video link / user_version)
-- `src/main/index.ts`(`runMigrations()` を `app.whenReady` の seed step 前に呼ぶ)
-- `src/common/types.ts`(`uploaderCount` を IPC 戻り値に追加)
-- `src/renderer/src/components/DataCollectionSettings.tsx`(「配信者(seed)」/「切り抜きチャンネル」表示)
+| ID | 内容 |
+|---|---|
+| Q3b | NULL group の creator 名一覧(reseed 後は 0 件想定) |
+| Q15 | 直近 1h 以内に追加された videos の振り分け(creator_id / uploader_id 個別 count) |
+| Q16 | 直近 1h で新規追加された uploaders 件数 |
+| Q17 | 直近 1h で新規追加された creators 件数(0 期待、>0 で `⚠ AUTO-ADD REGRESSION SUSPECTED`) |
+
+**ユーザが「1 回だけ取得」を押した後、デバッグメニュー → DB 診断 を押せば一目で auto-add 回帰検出可能**。
+
+### 修正 3: 運用 Runbook (`docs/DATA_COLLECTION_OPS.md`)
+
+新規ファイル。本格運用開始前 / トラブル時の対処を網羅:
+- 開始前チェックリスト(キー登録 / 配信者 75 / DB 診断結果 / バックアップ)
+- 開始手順
+- 監視ポイント表(指標と健全 / 異常値の判別)
+- トラブル対処 6 種(クォータ枯渇 / better-sqlite3 / creators 増加 / 配信者ヒットなし / 新規 0 件 / yt-dlp 失敗)
+- バックアップ / ロールバック手順
+- マイグレーション履歴
+
+## 主要変更ファイル(直近 = `cd30fda`)
+
+- `src/main/dataCollection/seedCreators.ts` — `reseedGroupsForExistingCreators()` 追加、`seedOrUpdateCreators` の早期 return 撤去
+- `src/main/dataCollection/diagnose.ts` — Q3b + Q15-Q17 追加
+- `docs/DATA_COLLECTION_OPS.md`(新規)
+
+## 動作確認(実機ベース)
+
+### ✅ 済
+- 全 75 件 group 整合(Python で確認、null=0)
+- reseed の冪等性(2 回目以降は no-op、ログに何も出ない)
+- migrate 001 + reseed 連携(seedOrUpdateCreators の最後で reseed 実行)
+- TypeCheck + build clean
+- dev サーバ起動成功(`bn389ctzj`、port 3001)
+
+### ⏳ ユーザに依頼中
+- メニュー「**デバッグ → DB 診断(データ収集)**」を押下 → 全 14+ クエリの結果を確認
+- API 管理 → データ収集タブ → 「**1 回だけ取得**」を押す → 1 サイクル走らせる
+- 完了後にもう一度「DB 診断」 → Q15(videos with uploader > 0、with creator はゼロ近辺)+ Q16(>0)+ Q17(=0)を確認
+- 問題なければ「**有効化する**」で本格運用開始
 
 ## 既知の地雷・注意点
 
-- **`creators` の NULL group 2 件**:`creator_group` が NULL の creator が 2 つ存在(本来 nijisanji 20 / streamer 20 のはずが 19 / 19 + NULL 2)。原因不明、別タスクで調査 — Settings UI の手動 add 由来か、name の表記揺れで seed match に失敗してる可能性。Phase 2 集計には影響なし(group filter で is_target=1 → 73 + uncategorised 2 として扱える)
-- **migration の rollback**:現状はコードでは戻せない。`.bak.<timestamp>` を `.db` にリネームで手動復元可。dev サーバを止めてからやる必要あり
-- **デバッグメニュー残置**:`fca786a` で投入した「デバッグ → DB 診断」は引き続き利用可能。Phase 2 着手後に撤去予定
-- **uploader と creator のクロス参照**:配信者本人がアップロードした切り抜きの場合、creator も uploader も同じ人。現状はそれぞれ独立行で持つ(`creators.channel_id` と `uploaders.channel_id` が一致するケースは Phase 2 でクロス分析時に検出)
-- **per-creator 由来の動画が 3 件と少ない**:今までの batch run で per-creator search 経由で取れた video が 3 件しかない、という意味。これは **元 DB の状態**で、broad search 経由が大半だったため。今後 batch を回せば per-creator 由来も増える
+- **uploaders 分離 + reseed の組み合わせ**:`_collectBatch` は uploader / creator 振り分けが分離済み + 起動時 reseed が integrity を維持。auto-add 回帰の経路は物理的に閉じてる
+- **reseed の頻度**:現状毎起動。SEED_CREATORS 75 件 × UPDATE 1 文 = 75 回の prepared statement 実行。SQLite では数 ms。問題なし
+- **Q17 ⚠ 警告**:1 サイクル後に「DB 診断」を押した時点で creators が増えてれば即 ⚠ が出る。出たら `_collectBatch` のリグレッションを疑う
+- **デバッグメニュー残置**:Phase 2 着手後 / 安定運用確認後に撤去予定。Runbook にも記載
+- **過去の手動バックアップ**:`data-collection.db.bak.20260502T123359` (migration 自動)+ `data-collection.db.bak.20260502T212737` (タスク開始前手動)を保持
 
 ## 次タスク候補
 
-1. **【ユーザ操作】**:アプリ起動 → Settings → 切り抜きデータ収集 → 「**有効化する**」を押す → 1 週間放置
-2. 1 サイクル後に「DB 診断」を再度実行して、**新規収集分が uploaders に正しく入るか**確認(broad-search 由来なのに creators に入る回帰がないこと)
-3. `creators` の NULL group 2 件の調査(seed 名を確認 + Settings UI で group 補完するか、自動 backfill するか)
-4. **Phase 2(蓄積データ分析)**:
-   - グループ別(にじさんじ / ホロ / vspo / neoporte / ストリーマー)再生数分布
-   - 上位 uploader が伸ばす動画の特徴(タイトルパターン / サムネ)
-   - per-creator × per-uploader のクロス分析
-5. デバッグメニュー + diagnose.ts の最終撤去(Phase 2 着手後)
+1. **【ユーザ操作 1】**:アプリ → API 管理 → デバッグ → DB 診断 押下 → ターミナル出力チェック(Q3b NULL group=0 / Q14 user_version=1 が確認できれば OK)
+2. **【ユーザ操作 2】**:API 管理 → データ収集 → 「1 回だけ取得」→ 完了待ち → もう一度 DB 診断 → Q15-Q17 で振り分け正常 + Q17=0 確認
+3. **【ユーザ操作 3】**:問題なければ「有効化する」で本格運用開始 → 1 週間放置
+4. 1 週間後:Phase 2(蓄積データ分析)着手判断
+5. 安定運用が確認できたら デバッグメニュー + diagnose.ts を撤去
 
 ## みのる(USER)への報告用
 
-- データモデル分離 ✅
-  - 配信者(seed): **75 人**(なくならず保持)
-  - 切り抜きチャンネル: **252 個**(新テーブルへ自動移送)
-  - 動画: **347 件**(全部 uploader 紐付け済み、データ消失なし)
-- バックアップ自動生成 + 手動 backup 両方確保
-- UI に「切り抜きチャンネル」表示追加(配信者 75 と分離して見える)
-- **次の一手**:Settings → 切り抜きデータ収集 → 「**有効化する**」を押して 1 週間放置 → Phase 2 着手判断
+- **NULL group 2 件解消** ✅(ぶゅりる→streamer、剣持刀也→nijisanji)
+- 全 **75 人 group 整合済み**(にじ 20 / ホロ 15 / ぶいすぽ 15 / ネオポルテ 5 / ストリーマー 20)
+- **毎起動 reseed** で SEED_CREATORS を source-of-truth として DB を自動整合(冪等、no-op fastpath)
+- **diagnose Q15-Q17 で auto-add 回帰の自動検出** が可能に(Q17=0 期待、>0 で警告)
+- **運用 Runbook** を `docs/DATA_COLLECTION_OPS.md` に整備(チェックリスト / 監視 / トラブル対処)
+- **次の一手**:アプリ → デバッグ → DB 診断 押下で全項目確認 → 「1 回だけ取得」で動作テスト → 問題なければ「**有効化する**」で本格運用開始

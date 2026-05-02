@@ -15,6 +15,33 @@
 
 ---
 
+## 2026-05-03 12:00 - データ収集の最終検証 + 運用 Runbook 整備
+
+- 誰が: Claude Code
+- 何を: 直前 migration 後に発覚した NULL group 2 件(ぶゅりる→streamer / 剣持刀也→nijisanji)を毎起動の reseed で恒久解決、新規収集サイクル時の auto-add 回帰検出用に diagnose Q15-Q17 拡張、本格運用前のチェックリスト + 監視ポイント + トラブル対処を `docs/DATA_COLLECTION_OPS.md` に Runbook 化
+- NULL group の真因(コード読みベース、collection.log で確証):batch の per-creator hit 経路で旧式 `upsertCreator(name, channelId, isTarget)` 3 引数版が group 引数なしで INSERT したケース。creators.json は 75 ある状態で DB 行が無いとき(`seedOrUpdateCreators` は creators.json を見て「sync 済み」判定で skip → DB に行を作らない)、batch が動くと per-creator hit から INSERT が走り、group=NULL で DB 行が出来る。今は uploaders 分離 migration 後で 3 引数版経路は撤廃済みだが、過去のデータが残っていたので reseed が必要だった
+- 修正:
+  - `seedCreators.ts` に `reseedGroupsForExistingCreators()` 追加 — `UPDATE creators SET creator_group = ? WHERE name = ? AND (creator_group IS NULL OR creator_group != ?) AND is_target = 1` を SEED_CREATORS の全エントリに対して実行(冪等)
+  - `seedOrUpdateCreators` の早期 return を撤去、reseed を **毎起動必ず実行**。SEED_CREATORS を source-of-truth として DB を整合させる
+  - `diagnose.ts` に Q3b(NULL group creator 名一覧)+ Q15(直近 1h videos 振り分け)+ Q16(直近 1h 新規 uploaders)+ Q17(直近 1h 新規 creators、0 期待・非 0 で `⚠ AUTO-ADD REGRESSION SUSPECTED`)
+- 検証(実機 hot-reload で reseed 実行):
+  - collection.log に `reseed group: "剣持刀也" → nijisanji` / `reseed group: "ぶゅりる" → streamer` / `reseed: corrected creator_group on 2 existing creator(s)` 確認
+  - 続けて dev 起動 → reseed no-op(冪等性確認)
+  - Python で post-state:`null_group: 0` / nijisanji=20 / streamer=20 で全 75 揃った
+- 運用 Runbook(`docs/DATA_COLLECTION_OPS.md`):
+  - 開始前チェックリスト(キー登録 / 配信者リスト / DB 診断結果 / バックアップ確認)
+  - 開始手順(API 管理 → データ収集 → 有効化する)
+  - 監視ポイント表(クォータ消費 / uploaders 増加 / creators 75 固定 / ERROR 件数 / Q3b NULL group)
+  - トラブル対処(A. クォータ枯渇 / B. better-sqlite3 / C. creators 増加 / D. 配信者ヒットなし / E. 新規 0 / F. yt-dlp 失敗)
+  - バックアップ / ロールバック手順
+  - マイグレーション履歴
+- 開放されている設計判断:
+  - 自動 reseed の頻度(現状毎起動 = 高頻度すぎるかも、必要なら起動数回に 1 回に絞る)
+  - 本物の運用ダッシュボード(現状はコンソール console.log + UI 数値のみ)
+  - デバッグメニュー + diagnose.ts の最終撤去タイミング(Phase 2 着手 = 安定運用後)
+- 影響: `seedCreators.ts`(reseedGroupsForExistingCreators + early-return 撤去)、`diagnose.ts`(Q3b + Q15-Q17)、`docs/DATA_COLLECTION_OPS.md`(新規)
+- コミット: `cd30fda`(code)、後続で docs commit
+
 ## 2026-05-03 11:30 - データモデル根本修正: uploaders テーブル分離 + creators 純化(migration 001)
 
 - 誰が: Claude Code

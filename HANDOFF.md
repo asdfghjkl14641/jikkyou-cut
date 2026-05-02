@@ -306,3 +306,15 @@ type EditorState = {
 - **データ収集はデフォルト無効** (2026-05-03 06:30): `AppConfig.dataCollectionEnabled` が永続マスタースイッチで、デフォルト `false`。アプリ起動時の自動開始はこの flag が `true` の時のみ。ユーザが「API 管理 / 切り抜きデータ収集 → 有効化する」を明示的に押さない限りバックグラウンドで何も走らない設計(検索クエリ戦略未確定でクォータを浪費しないため)。**`isPaused` / `isRunning` はセッション内のモードに過ぎず、再起動を跨ぐ ON/OFF はこの flag を見る**。
 - **配信者リストは差分マージで投入** (2026-05-03 08:30): `seedOrUpdateCreators()` が 75 人(にじ 20 / ホロ 15 / ぶいすぽ 15 / ネオポルテ 5 / ストリーマー 20)を起動時に差分追加する。**既存名は触らず保持**(channelId / 順序保持、null group のみ backfill)、新規名のみ append。ユーザが Settings UI で手動追加 / 削除した結果も尊重。channelId は各バッチ先頭で `searchChannelByName` により未解決のみ解決(no-op fastpath、初回のみ +35 × 100u)。`creators.creator_group` は `'nijisanji' \| 'hololive' \| 'vspo' \| 'neoporte' \| 'streamer' \| null`。per-creator クエリは「切り抜き / 神回 / 名場面」の 3 角化。**サイクル間隔は 2 時間**(75 × 3 = 22.5K/サイクル + 周辺で ~23.75K → 12 サイクル/日 = 285K で 50 キー × 500K/日 予算に余裕)。creator の全 3 クエリで 0 件なら collection.log に警告(neoporte 等の流動箱の表記揺れ検出用)。
 - **creators / uploaders 2 テーブル分離** (2026-05-03 11:30): migration 001 で `creators` を seed 配信者専用(`is_target=1`)に純化、切り抜き投稿チャンネルは新 `uploaders` テーブルへ。`videos.creator_id` は per-creator 検索由来のみ非 null、`videos.uploader_id` は全動画に紐付け。Phase 2 のグループ別集計と「どの切り抜きチャンネルが伸びてる動画を出しとるか」分析を独立に行える。マイグレーションは `src/main/dataCollection/migrations.ts` の `PRAGMA user_version` ベースで冪等、実行前に WAL checkpoint + 自動 `.bak` 生成(`data-collection.db.bak.YYMMDDTHHMMSS`)。**ロールバックしたい場合は dev サーバ停止 → アプリ閉じ → `.bak.<timestamp>` を `.db` にリネームで復元可能**。
+- **seed 75 人の group は毎起動 reseed で sync** (2026-05-03 12:00): `seedCreators.ts` の `reseedGroupsForExistingCreators()` が `app.whenReady` 起動時の seed step 末尾で実行。SEED_CREATORS を source-of-truth として DB の `creator_group` を強制整合(`UPDATE creators SET creator_group=? WHERE name=? AND (creator_group IS NULL OR creator_group != ?) AND is_target=1`)。冪等(既に sync 済みなら no-op)。過去に「DB 行が無い状態で per-creator hit 由来の旧式 3 引数 `upsertCreator` が NULL group で INSERT した」副作用が 2 件残ってたのを恒久解決。
+
+## 10. 関連ドキュメント
+
+- `docs/DATA_COLLECTION_DESIGN.md` — データ収集 Phase 1 の設計書(スキーマ / 検索クエリ戦略 / クォータ計算 / マイグレーション履歴)
+- `docs/DATA_COLLECTION_OPS.md` — データ収集の運用 Runbook(開始前チェック / 監視ポイント / トラブル対処 / バックアップ・ロールバック)
+- `docs/COMMENT_ANALYSIS_DESIGN.md` — コメント分析画面 MVP の設計書
+- `docs/PROGRESSIVE_DL_SPIKE_REPORT.md` — プログレッシブ DL 検証レポート(Phase A/B 判断材料)
+- `CLAUDE.md` — Claude 向け開発方針(冒頭の **`npm run dev` 必須**ルールを最優先)
+- `DECISIONS.md` — 直近の意思決定ログ(時系列、新しいものが上)
+- `TODO.md` — 残タスク + 完了済み履歴
+- `NEXT_SESSION_HANDOFF.md` — セッション間引き継ぎ(直前の状態 + 次の一手)
