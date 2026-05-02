@@ -15,6 +15,28 @@
 
 ---
 
+## 2026-05-02 17:30 - 操作系整理(左右クリック分離) + ピーク詳細廃止 → 常駐ライブコメントビュー
+
+- 誰が: Claude Code(Antigravity から託された仕様の実装)
+- 何を:
+  - **左クリック / 右ドラッグの分離**: 波形の左クリック単発=シーク、左ドラッグ=ライブシーク(マウスに追従)、右ドラッグ=区間選択 → リリース時に自動で `addClipSegment`、右クリック単発=何もしない(`onContextMenu` で `preventDefault`)。旧「総 5px 閾値で click vs drag を判定」ロジックを「button=0 / button=2 で intent を分けて、それぞれにステートマシン」へ刷新
+  - **`PeakDetailPanel` 廃止**: ファイル削除。ピーククリックで開く詳細パネル + 「この区間を編集範囲に設定」ボタン + 「この区間を切り抜きに追加」ボタン + AI 要約スロット + カテゴリ内訳をすべて廃止。`selectedPeak` state、関連の Esc 処理、`onPeakClick` callback も除去
+  - **`LiveCommentFeed` 新設**: ClipSelectView 右側に常駐するコメントフィード。動画全体の chat replay を時系列で表示、`currentSec` に追従してオートスクロール(現在位置を viewport 中央)、再生位置 ±5 秒のコメントは強調表示、過去はうっすら、未来はそのまま、現在位置に細い赤の左ボーダー、コメントクリックでそのコメント時刻にシーク
+  - **仮想スクロール独自実装**: `react-window` 等の依存追加なし。`ROW_HEIGHT=60px` 固定 + 上下スペーサ div + 可視領域 + `BUFFER_ROWS=6` で 100 行まで描画。数千件のチャットでも常時 ~30 DOM ノードしか出ない
+  - **オートスクロール vs 手動スクロール**: `scrollTo({behavior:'auto'})` 直前に `lastProgrammaticScrollTop` を記録、`onScroll` で実 scrollTop と比較して 4px 以内なら無視 / それ以外なら autoScroll OFF。手動 OFF 時は「現在位置に戻る」フローティングボタンで再開
+  - **キーワードハイライト**: コメント内の reaction-keyword に薄い色付き下線(背景色は使わず)、SORTED_KEYWORDS で長語先優先
+  - **`CommentAnalysis.allMessages: ChatMessage[]` 追加**: バケット集計前の time-sorted 全 chat。renderer で binary search できるよう main の `analyze()` 側で defensive sort してから返す
+  - **`MIN_SEGMENT_SEC` を 1 → 5 秒に**: 右ドラッグでうっかり超短い区間が出来ないよう底上げ
+  - **ボタン重複の解消**: 「この区間を編集範囲に設定」(`PeakDetailPanel` 内)を完全廃止、`addClipSegment` の呼び出し元は右ドラッグだけに集約
+- 理由: 操作系が左クリックに集中して「シークしたいだけなのにパネルが出る」「区間バー上をクリックしてもシークが効かない」等の混乱があった。右パネルは「ピーク区間特化の詳細展開」より「再生位置追従の流しビュー」の方が量産編集に向く(切り抜き作業中、絶えず流れるコメントを見ながら判断する)。ボタン重複は動線分散の元
+- 開放されている設計判断:
+  - LiveCommentFeed のフィルタ機能(カテゴリ別表示、検索)
+  - 区間バー上の AI タイトル表示
+  - 仮想スクロールのライブラリ採用(現状は独自実装)
+  - 左ドラッグライブシークのフレームレート抑制(`<video>.currentTime` 書き込みを 60 fps から 30 fps へ throttle、現状は無制限)
+- 影響: src/common/types.ts (`allMessages` 追加)、src/main/commentAnalysis/scoring.ts (`analyze()` で defensive sort + 返却)、src/renderer/src/components/CommentAnalysisGraph.{tsx,module.css}(マウスステートマシン刷新 + warningToast)、src/renderer/src/components/CommentAnalysisGraph.mock.ts (`allMessages: []`)、src/renderer/src/components/ClipSelectView.{tsx,module.css}(2-column / `selectedPeak` 削除)、src/renderer/src/components/PeakDetailPanel.{tsx,module.css}(削除)、src/renderer/src/components/LiveCommentFeed.{tsx,module.css}(新規)
+- コミット: (未定)
+
 ## 2026-05-02 16:00 - 複数区間選択 + 感情 9 カテゴリ拡張 + 区間色塗り + アイキャッチ枠
 
 - 誰が: Claude Code(Antigravity から託された仕様の実装)

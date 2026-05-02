@@ -291,6 +291,13 @@ export type CommentAnalysis = {
   // Stage 1 result: per-bucket raw aggregates. Score samples are derived
   // from these in the renderer with the user-controlled W.
   buckets: RawBucket[];
+  // Pre-flattened, time-sorted list of every chat message in the video.
+  // Mirrors what's in `buckets[i].messages` joined together — kept here
+  // so the LiveCommentFeed can binary-search by time without re-walking
+  // buckets on every currentSec tick. Same array reference as the
+  // bucket entries: messages aren't duplicated, both views point at the
+  // same ChatMessage objects.
+  allMessages: ChatMessage[];
   // Source-of-truth flags so the UI can show "視聴者データなし" badges
   // when playboard didn't return anything, and so the renderer can
   // switch the scoring weights accordingly.

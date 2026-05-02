@@ -3,14 +3,13 @@ import { ChevronLeft, Check } from 'lucide-react';
 import { useEditorStore, MAX_CLIP_SEGMENTS } from '../store/editorStore';
 import VideoPlayer from './VideoPlayer';
 import CommentAnalysisGraph from './CommentAnalysisGraph';
-import PeakDetailPanel from './PeakDetailPanel';
 import WindowSizeSlider from './WindowSizeSlider';
 import ClipSegmentsList from './ClipSegmentsList';
+import LiveCommentFeed from './LiveCommentFeed';
 import { generateMockAnalysis } from './CommentAnalysisGraph.mock';
 import type {
   CommentAnalysis,
   CommentAnalysisProgress,
-  ScoreSample,
   ClipSegment,
   ReactionCategory,
 } from '../../../common/types';
@@ -33,6 +32,7 @@ export default function ClipSelectView() {
   const filePath = useEditorStore((s) => s.filePath);
   const sourceUrl = useEditorStore((s) => s.sourceUrl);
   const durationSec = useEditorStore((s) => s.durationSec);
+  const currentSec = useEditorStore((s) => s.currentSec);
   const setDuration = useEditorStore((s) => s.setDuration);
   const setCurrentSec = useEditorStore((s) => s.setCurrentSec);
   const clearFile = useEditorStore((s) => s.clearFile);
@@ -50,7 +50,6 @@ export default function ClipSelectView() {
   const updateEyecatch = useEditorStore((s) => s.updateEyecatch);
 
   const [selectedSegmentId, setSelectedSegmentId] = useState<string | null>(null);
-  const [selectedPeak, setSelectedPeak] = useState<ScoreSample | null>(null);
   const [analysisState, setAnalysisState] = useState<AnalysisState>({ kind: 'idle' });
 
   const mockAnalysis = useMemo<CommentAnalysis>(() => {
@@ -106,35 +105,11 @@ export default function ClipSelectView() {
 
   const handleEdit = useCallback(() => {
     if (clipSegments.length >= 1) {
-      // For now, set the editor's working range to the *first* segment so
-      // the existing edit-phase code keeps working. Multi-segment edit
-      // integration is a follow-up task — segments + eyecatches are
-      // already in the store ready to be picked up there.
       setPhase('edit');
     }
   }, [clipSegments.length, setPhase]);
 
   const handleAddFromDrag = useCallback((args: {
-    startSec: number;
-    endSec: number;
-    dominantCategory: ReactionCategory | null;
-  }) => {
-    const result = addClipSegment({
-      startSec: args.startSec,
-      endSec: args.endSec,
-      title: null,
-      dominantCategory: args.dominantCategory,
-    });
-    if (!result.ok) {
-      if (result.reason === 'limit') {
-        window.alert(`区間は最大 ${MAX_CLIP_SEGMENTS} 個までです。`);
-      }
-      // duplicate is silent — drag-add can hit it if the user accidentally
-      // re-drags an existing segment, no need to warn.
-    }
-  }, [addClipSegment]);
-
-  const handleAddFromPeak = useCallback((args: {
     startSec: number;
     endSec: number;
     dominantCategory: ReactionCategory | null;
@@ -156,21 +131,18 @@ export default function ClipSelectView() {
 
   const videoRef = React.useRef<any>(null);
 
-  const handleSeekInternal = (sec: number) => {
+  const handleSeekInternal = useCallback((sec: number) => {
     videoRef.current?.seekTo(sec);
-  };
+  }, []);
 
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
-      // Ignore typing in inputs/contenteditable so the list editor isn't disrupted.
       const target = e.target as HTMLElement | null;
       if (target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable)) {
         return;
       }
       if (e.key === 'Escape') {
-        if (selectedPeak) {
-          setSelectedPeak(null);
-        } else if (selectedSegmentId) {
+        if (selectedSegmentId) {
           setSelectedSegmentId(null);
         }
       } else if ((e.key === 'Delete' || e.key === 'Backspace') && selectedSegmentId) {
@@ -180,7 +152,7 @@ export default function ClipSelectView() {
     };
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [selectedPeak, selectedSegmentId, removeClipSegment]);
+  }, [selectedSegmentId, removeClipSegment]);
 
   if (!filePath) return null;
 
@@ -231,7 +203,6 @@ export default function ClipSelectView() {
                 windowSec={analysisWindowSec}
                 segments={clipSegments}
                 onSeek={handleSeekInternal}
-                onPeakClick={setSelectedPeak}
                 onAddSegmentRequested={handleAddFromDrag}
                 onMutateSegment={handleMutateSegment}
                 onRemoveSegment={(id) => { removeClipSegment(id); setSelectedSegmentId(null); }}
@@ -268,14 +239,13 @@ export default function ClipSelectView() {
           </div>
         </div>
 
-        {selectedPeak && (
-          <PeakDetailPanel
-            sample={selectedPeak}
-            analysis={graphAnalysis}
-            onClose={() => setSelectedPeak(null)}
-            onAddSegment={handleAddFromPeak}
+        <aside className={styles.sidePanel}>
+          <LiveCommentFeed
+            messages={graphAnalysis.allMessages}
+            currentSec={currentSec}
+            onCommentClick={handleSeekInternal}
           />
-        )}
+        </aside>
       </main>
     </div>
   );

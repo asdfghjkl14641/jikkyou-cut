@@ -124,6 +124,31 @@
   background: rgba(255, 255, 255, 0.3);
 }
 
+/* Transient toast over the waveform — shown when a right-drag-add is
+   rejected (overlap / duplicate / limit). Self-clears after ~2s. */
+.warningToast {
+  position: absolute;
+  top: 8px;
+  left: 50%;
+  transform: translateX(-50%);
+  background: rgba(239, 68, 68, 0.92);
+  color: white;
+  font-size: var(--font-size-xs);
+  font-weight: var(--font-weight-medium);
+  padding: 4px 12px;
+  border-radius: var(--radius-sm);
+  z-index: 9;
+  pointer-events: none;
+  box-shadow: var(--shadow-md);
+  white-space: nowrap;
+  animation: jcut-warning-fade var(--transition-fast) ease-out;
+}
+
+@keyframes jcut-warning-fade {
+  from { opacity: 0; transform: translate(-50%, -4px); }
+  to { opacity: 1; transform: translate(-50%, 0); }
+}
+
 /* Hint label that appears next to a fresh drag selection inviting the
    user to commit it as a new clipSegment. */
 .dragAddHint {

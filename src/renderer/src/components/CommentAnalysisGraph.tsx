@@ -1,5 +1,5 @@
 import React, { useCallback, useMemo, useRef, useState, type MouseEvent } from 'react';
-import { Plus, Trash2 } from 'lucide-react';
+import { Trash2 } from 'lucide-react';
 import { useEditorStore } from '../store/editorStore';
 import { ScoreSample, CommentAnalysis, ClipSegment } from '../../../common/types';
 import { ReactionCategory } from '../../../common/commentAnalysis/keywords';
@@ -12,15 +12,15 @@ type Props = {
   // Selected clip segments — drawn as overlay bars on the waveform and
   // hit-tested for drag/resize.
   segments: ClipSegment[];
+  // Single source of truth for "go to this time". Called for click-to-
+  // seek, live-seek (drag with left button), and segment selection
+  // bookkeeping. The component itself doesn't touch <video>.
   onSeek?: (sec: number) => void;
-  onPeakClick?: (sample: ScoreSample) => void;
-  // Fired when the user drags a selection on the waveform AND clicks
-  // the "add this segment" hint that appears at the end of the drag.
-  // Receives a fully-formed `Omit<ClipSegment, 'id'>` ready for the
-  // store's addClipSegment.
+  // Right-drag → segment auto-add. Returns the store outcome so the
+  // graph can show a transient warning toast for limit/duplicate.
   onAddSegmentRequested?: (
     args: { startSec: number; endSec: number; dominantCategory: ReactionCategory | null },
-  ) => void;
+  ) => { ok: true; id: string } | { ok: false; reason: 'limit' | 'duplicate' };
   onMutateSegment?: (id: string, patch: Partial<Omit<ClipSegment, 'id'>>) => void;
   onRemoveSegment?: (id: string) => void;
   onSelectSegment?: (id: string) => void;
@@ -63,13 +63,10 @@ const CATEGORY_COLORS: Record<ReactionCategory, string> = {
   other: 'var(--reaction-other)',
 };
 
-// Group consecutive samples that share the same dominantCategory into
-// fill-segments. `null` (no dominant) gets its own segments and renders
-// without a colour tint — the white gradient still shows through.
 type FillSegment = {
   category: ReactionCategory | null;
   startIdx: number;
-  endIdx: number; // inclusive
+  endIdx: number;
 };
 
 function groupByCategory(samples: ScoreSample[]): FillSegment[] {
@@ -88,23 +85,27 @@ function groupByCategory(samples: ScoreSample[]): FillSegment[] {
   return out;
 }
 
-// 'pending' is the just-pressed state: we haven't decided whether the
-// user wants a click (seek), a drag-range (new segment), or a segment
-// move/resize until they actually move the mouse far enough. mouseup
-// from `pending` always fires a click → seek so that tapping anywhere
-// on the waveform — including the existing segment overlay bars —
-// jumps the playhead. Without this, clicking on a colored segment bar
-// would fall through to segment-move and the seek never fires.
+// Three discrete drag intents, all decided at mousedown time based on
+// `e.button`:
+//   * 'left-pending' → click-vs-live-seek (left button; promotes to
+//      'left-live' on movement, fires plain seek on mouseup-without-move)
+//   * 'segment-pending' → may promote to segment-move/resize/* once the
+//      user drags ≥ 5 px. Plain click on a segment bar still seeks (so
+//      the bars never block playhead jumps).
+//   * 'right-select' → right-button drag, builds a range that auto-adds
+//      a clip segment on release (≥ MIN_SEGMENT_SEC width).
+//
+// 'left-pending' demotes its hit-test only when the press lands on a
+// segment bar — that's how we keep "click on bar → seek" working.
 type DragMode =
-  | { kind: 'pending'; downSec: number; downClientX: number; downClientY: number; pendingHit: { id: string; mode: 'left' | 'right' | 'middle' } | null }
-  | { kind: 'select'; startSec: number; currentSec: number }
+  | { kind: 'left-pending'; downSec: number; downClientX: number; downClientY: number; pendingHit: { id: string; mode: 'left' | 'right' | 'middle' } | null }
+  | { kind: 'left-live'; }
   | { kind: 'segment-move'; id: string; offsetSec: number; originStartSec: number; originEndSec: number; spanSec: number }
   | { kind: 'segment-resize-left'; id: string; originStartSec: number; originEndSec: number }
-  | { kind: 'segment-resize-right'; id: string; originStartSec: number; originEndSec: number };
+  | { kind: 'segment-resize-right'; id: string; originStartSec: number; originEndSec: number }
+  | { kind: 'right-select'; startSec: number; currentSec: number };
 
-const MIN_SEGMENT_SEC = 1;
-// Pixel threshold to promote `pending` into a real drag. 5 px matches
-// the previous select-vs-click threshold.
+const MIN_SEGMENT_SEC = 5;
 const DRAG_THRESHOLD_PX = 5;
 
 export default function CommentAnalysisGraph({
@@ -112,7 +113,6 @@ export default function CommentAnalysisGraph({
   windowSec,
   segments,
   onSeek,
-  onPeakClick,
   onAddSegmentRequested,
   onMutateSegment,
   onRemoveSegment,
@@ -123,9 +123,16 @@ export default function CommentAnalysisGraph({
   const containerRef = useRef<HTMLDivElement>(null);
   const [hoverSample, setHoverSample] = useState<{ sample: ScoreSample; x: number } | null>(null);
   const [drag, setDrag] = useState<DragMode | null>(null);
-  // Holds a finished drag-select range until the user clicks "add" or
-  // dismisses (mousedown elsewhere). Distinct from in-flight `drag`.
-  const [pendingSelection, setPendingSelection] = useState<{ startSec: number; endSec: number } | null>(null);
+  // Transient warning shown over the waveform when right-drag-add fails
+  // (limit / duplicate). Self-clears after a couple of seconds.
+  const [warning, setWarning] = useState<string | null>(null);
+  const warningTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const showWarning = useCallback((msg: string) => {
+    setWarning(msg);
+    if (warningTimerRef.current) clearTimeout(warningTimerRef.current);
+    warningTimerRef.current = setTimeout(() => setWarning(null), 2200);
+  }, []);
 
   const durationSec = analysis.videoDurationSec;
 
@@ -157,9 +164,6 @@ export default function CommentAnalysisGraph({
     return samples[clamped] ?? null;
   }, [samples, analysis.bucketSizeSec]);
 
-  // Convert a sample index into chart x (0..100) using the window-centre
-  // anchor. Identical to the formula used last task in the rolling
-  // refactor — kept for reuse across fill / hover / overlay drawing.
   const sampleX = useCallback((idx: number): number => {
     const s = samples[idx];
     if (!s || durationSec <= 0) return 0;
@@ -173,7 +177,6 @@ export default function CommentAnalysisGraph({
     return (1 - s.total) * 100;
   }, [samples]);
 
-  // Continuous (white) stroke path for the waveform line.
   const strokePath = useMemo(() => {
     if (samples.length < 3) return '';
     const x0 = sampleX(0);
@@ -193,12 +196,8 @@ export default function CommentAnalysisGraph({
     return d;
   }, [samples, sampleX, sampleY]);
 
-  // Fill segments by dominantCategory. Each is rendered as a sub-path
-  // closed against the baseline (y=100). We skip segments shorter than
-  // 2 samples since they can't form a curve.
   const fillSegments = useMemo(() => groupByCategory(samples), [samples]);
 
-  // Pre-compute path strings + gradient stops for each fill segment.
   const fillSegmentRender = useMemo(() => {
     return fillSegments.map((seg, idx) => {
       const points: { x: number; y: number }[] = [];
@@ -208,9 +207,6 @@ export default function CommentAnalysisGraph({
       if (points.length === 0) return null;
       const first = points[0]!;
       const last = points[points.length - 1]!;
-      // Build a quadratic-curve sub-path within this segment, then close
-      // back to baseline. The fade-in/out is handled by the gradient,
-      // not the geometry — paths run hard-edge to the segment bounds.
       let d = `M ${first.x},${first.y}`;
       for (let i = 0; i < points.length - 1; i += 1) {
         const p0 = points[i]!;
@@ -224,9 +220,6 @@ export default function CommentAnalysisGraph({
         key: `seg-${idx}`,
         d,
         category: seg.category,
-        // Userspace gradient: anchor stops directly to the segment's x
-        // span so the fade matches the geometry regardless of viewBox
-        // scaling.
         gradientId: `fill-grad-${idx}`,
         x1: first.x,
         x2: last.x,
@@ -234,17 +227,10 @@ export default function CommentAnalysisGraph({
     }).filter((x): x is NonNullable<typeof x> => x !== null);
   }, [fillSegments, sampleX, sampleY]);
 
-  // ----- Mouse handlers --------------------------------------------------
-  // The graphArea owns mousedown/move/up. Drag mode is determined by
-  // hit-test against existing segments at mousedown time.
-
   const hitTestSegment = useCallback((timeSec: number): { id: string; mode: 'left' | 'right' | 'middle' } | null => {
     if (durationSec <= 0) return null;
     const rect = containerRef.current?.getBoundingClientRect();
     if (!rect) return null;
-    // 6-pixel handle in time units — keeps grab regions wide enough at
-    // typical container widths without leaking into adjacent segments
-    // for narrow ones.
     const handleSec = (6 / rect.width) * durationSec;
     for (const s of segments) {
       if (timeSec < s.startSec - handleSec || timeSec > s.endSec + handleSec) continue;
@@ -255,20 +241,33 @@ export default function CommentAnalysisGraph({
     return null;
   }, [segments, durationSec]);
 
+  const handleContextMenu = (e: MouseEvent<HTMLDivElement>) => {
+    // Suppress the native menu so right-button drag can be repurposed
+    // for range selection. Without this, the user gets a stray context
+    // menu the moment they release the right button.
+    e.preventDefault();
+  };
+
   const handleMouseDown = (e: MouseEvent<HTMLDivElement>) => {
     const rect = containerRef.current?.getBoundingClientRect();
     if (!rect) return;
     const x = e.clientX - rect.left;
     const time = getTimeAtX(x);
 
-    setPendingSelection(null);
+    if (e.button === 2) {
+      // Right button → range drag for segment selection.
+      e.preventDefault();
+      setDrag({ kind: 'right-select', startSec: time, currentSec: time });
+      return;
+    }
+    if (e.button !== 0) return;
 
-    // Always start in `pending`. Promotion to select / segment-* happens
-    // in mousemove once we know whether the user is dragging. Clicks
-    // (no movement) always end in seek/peak via the mouseup handler.
+    // Left button → start in pending. Promote to live-seek (drag) or
+    // segment-* drag (if hit) once the user moves; release without
+    // movement seeks via mouseup.
     const hit = hitTestSegment(time);
     setDrag({
-      kind: 'pending',
+      kind: 'left-pending',
       downSec: time,
       downClientX: e.clientX,
       downClientY: e.clientY,
@@ -282,12 +281,10 @@ export default function CommentAnalysisGraph({
     const x = e.clientX - rect.left;
     const time = getTimeAtX(x);
 
-    // Promote pending → real drag once the user moves past the threshold.
-    if (drag?.kind === 'pending') {
+    if (drag?.kind === 'left-pending') {
       const dx = Math.abs(e.clientX - drag.downClientX);
       const dy = Math.abs(e.clientY - drag.downClientY);
       if (dx + dy < DRAG_THRESHOLD_PX) {
-        // Still might be a click — update hover but don't commit to drag yet.
         const sample = sampleAt(time);
         if (sample) {
           const sampleCentre = sample.timeSec + windowSec / 2;
@@ -320,11 +317,18 @@ export default function CommentAnalysisGraph({
           return;
         }
       }
-      setDrag({ kind: 'select', startSec: drag.downSec, currentSec: time });
+      // No segment hit → promote to live-seek.
+      onSeek?.(time);
+      setDrag({ kind: 'left-live' });
       return;
     }
 
-    if (drag?.kind === 'select') {
+    if (drag?.kind === 'left-live') {
+      onSeek?.(time);
+      return;
+    }
+
+    if (drag?.kind === 'right-select') {
       setDrag({ ...drag, currentSec: time });
     } else if (drag?.kind === 'segment-move') {
       const sortedOthers = segments
@@ -333,8 +337,6 @@ export default function CommentAnalysisGraph({
         .sort((a, b) => a.start - b.start);
       let nextStart = time - drag.offsetSec;
       let nextEnd = nextStart + drag.spanSec;
-      // Clamp to [0, duration] then to neighbours so the bar can't
-      // overrun adjacent segments.
       if (nextStart < 0) { nextStart = 0; nextEnd = drag.spanSec; }
       if (nextEnd > durationSec) { nextEnd = durationSec; nextStart = nextEnd - drag.spanSec; }
       for (const o of sortedOthers) {
@@ -358,8 +360,8 @@ export default function CommentAnalysisGraph({
       onMutateSegment?.(drag.id, { endSec: newEnd });
     }
 
-    // Hover sample updates while not actively dragging a segment.
-    if (!drag || drag.kind === 'select') {
+    // Hover updates while idle or right-selecting.
+    if (!drag || drag.kind === 'right-select') {
       const sample = sampleAt(time);
       if (sample) {
         const sampleCentre = sample.timeSec + windowSec / 2;
@@ -379,67 +381,52 @@ export default function CommentAnalysisGraph({
     const x = e.clientX - rect.left;
     const time = getTimeAtX(x);
 
-    if (drag.kind === 'pending') {
-      // Mouse never moved past threshold → user clicked. Always seek
-      // (or open the peak detail panel if the click landed on a peak),
-      // regardless of whether the click was on a segment overlay bar.
-      // This is the fix for "clicking on the waveform doesn't seek".
-      const sample = sampleAt(drag.downSec);
-      if (sample && sample.total >= 0.5) onPeakClick?.(sample);
-      else onSeek?.(drag.downSec);
-      // If the click landed on an existing segment bar, also select it
-      // so Delete-key removal and the highlight on the list panel pick
-      // up the right entry.
+    if (drag.kind === 'left-pending') {
+      // Plain click → seek. Always — even when the click landed on an
+      // existing segment overlay bar.
+      onSeek?.(drag.downSec);
       if (drag.pendingHit) onSelectSegment?.(drag.pendingHit.id);
-      setPendingSelection(null);
-    } else if (drag.kind === 'select') {
+    } else if (drag.kind === 'right-select') {
       const start = Math.min(drag.startSec, time);
       const end = Math.max(drag.startSec, time);
-      if (end - start >= MIN_SEGMENT_SEC) {
-        setPendingSelection({ startSec: start, endSec: end });
+      if (end - start < MIN_SEGMENT_SEC) {
+        // Too short — discard silently. Right-click without drag also
+        // ends here and is effectively a no-op (matches spec: "右クリ
+        // ック単発: 何もしない").
+      } else {
+        // Reject overlap with any existing segment so the new bar
+        // doesn't immediately collapse against its neighbour.
+        const overlap = segments.some((s) => s.startSec < end && s.endSec > start);
+        if (overlap) {
+          showWarning('既存区間と重複しています');
+        } else {
+          const centreSample = sampleAt((start + end) / 2);
+          const result = onAddSegmentRequested?.({
+            startSec: start,
+            endSec: end,
+            dominantCategory: centreSample?.dominantCategory ?? null,
+          });
+          if (result && !result.ok) {
+            if (result.reason === 'limit') showWarning('区間は最大 20 個までです');
+            else if (result.reason === 'duplicate') showWarning('同じ範囲の区間が既に存在します');
+          }
+        }
       }
     }
-    // segment-move / segment-resize-* end with no-op — onMutateSegment
-    // has already been called incrementally during mousemove.
     setDrag(null);
   };
 
   const handleMouseLeave = () => {
-    // Cancel pending click (cursor left without committing) and abandon
-    // in-flight select drag. Segment-* drags persist — Chromium keeps
-    // firing mousemove with button held even when the pointer leaves the
-    // element, so the move/resize logic stays valid until mouseup.
-    if (drag?.kind === 'pending' || drag?.kind === 'select') {
+    if (drag?.kind === 'left-pending' || drag?.kind === 'right-select' || drag?.kind === 'left-live') {
       setDrag(null);
     }
     setHoverSample(null);
   };
 
-  const inflightSelection = drag?.kind === 'select' ? {
+  const inflightRange = drag?.kind === 'right-select' ? {
     start: Math.min(drag.startSec, drag.currentSec),
     end: Math.max(drag.startSec, drag.currentSec),
   } : null;
-
-  const overlayRange = inflightSelection ?? pendingSelection
-    ? (inflightSelection ?? (pendingSelection ? { start: pendingSelection.startSec, end: pendingSelection.endSec } : null))
-    : null;
-
-  const handleConfirmSelection = () => {
-    if (!pendingSelection) return;
-    // Pick a dominant category from the sample at the centre of the
-    // selection so the new segment bar gets a colour matching what the
-    // user just looked at.
-    const centre = (pendingSelection.startSec + pendingSelection.endSec) / 2;
-    const centreSample = sampleAt(centre);
-    onAddSegmentRequested?.({
-      startSec: pendingSelection.startSec,
-      endSec: pendingSelection.endSec,
-      dominantCategory: centreSample?.dominantCategory ?? null,
-    });
-    setPendingSelection(null);
-  };
-
-  const handleDismissSelection = () => setPendingSelection(null);
 
   return (
     <div className={styles.container}>
@@ -450,6 +437,7 @@ export default function CommentAnalysisGraph({
         onMouseMove={handleMouseMove}
         onMouseUp={handleMouseUp}
         onMouseLeave={handleMouseLeave}
+        onContextMenu={handleContextMenu}
       >
         <svg className={styles.svgWaveform} viewBox="0 0 100 100" preserveAspectRatio="none">
           <defs>
@@ -470,10 +458,6 @@ export default function CommentAnalysisGraph({
                   x2={seg.x2}
                   y2={0}
                 >
-                  {/* Edge fade (10%) prevents visible seams between
-                      neighbouring fill segments. The 0.12 opacity in
-                      the middle keeps the colour subtle so the white
-                      stroke stays the dominant visual. */}
                   <stop offset="0%" stopColor={CATEGORY_COLORS[seg.category]} stopOpacity="0" />
                   <stop offset="10%" stopColor={CATEGORY_COLORS[seg.category]} stopOpacity="0.12" />
                   <stop offset="90%" stopColor={CATEGORY_COLORS[seg.category]} stopOpacity="0.12" />
@@ -483,9 +467,6 @@ export default function CommentAnalysisGraph({
             })}
           </defs>
 
-          {/* Neutral baseline fill — visible behind the per-category
-              fills and through them at low opacity. Keeps the wave from
-              looking too colour-washed when many segments are bright. */}
           {strokePath && <path d={`${strokePath} L 100,100 L 0,100 Z`} className={styles.waveformFill} />}
 
           {fillSegmentRender.map((seg) =>
@@ -502,37 +483,17 @@ export default function CommentAnalysisGraph({
           <path d={strokePath} className={styles.waveformPath} />
         </svg>
 
-        {/* Drag-select overlay (in-flight or pending confirmation) */}
-        {overlayRange && (
+        {/* In-flight right-drag selection overlay */}
+        {inflightRange && (
           <div
             className={styles.selectionOverlay}
             style={{
-              left: `${(overlayRange.start / durationSec) * 100}%`,
-              width: `${((overlayRange.end - overlayRange.start) / durationSec) * 100}%`,
+              left: `${(inflightRange.start / durationSec) * 100}%`,
+              width: `${((inflightRange.end - inflightRange.start) / durationSec) * 100}%`,
             }}
           >
             <div className={styles.selectionBorder} style={{ left: 0 }} />
             <div className={styles.selectionBorder} style={{ right: 0 }} />
-          </div>
-        )}
-
-        {/* "Add this as a segment" hint after a finished drag-select */}
-        {pendingSelection && (
-          <div
-            className={styles.dragAddHint}
-            style={{ left: `${(pendingSelection.endSec / durationSec) * 100}%` }}
-            onMouseDown={(e) => e.stopPropagation()}
-            onClick={handleConfirmSelection}
-            title={`${formatHMS(pendingSelection.startSec)} — ${formatHMS(pendingSelection.endSec)} を区間として追加`}
-          >
-            <Plus size={12} />
-            この区間を追加
-            <button
-              type="button"
-              onClick={(ev) => { ev.stopPropagation(); handleDismissSelection(); }}
-              style={{ background: 'transparent', border: 'none', color: 'inherit', cursor: 'pointer', padding: 0, marginLeft: 4 }}
-              title="キャンセル"
-            >×</button>
           </div>
         )}
 
@@ -550,10 +511,6 @@ export default function CommentAnalysisGraph({
               }}
               title={`${i + 1}. ${formatHMS(seg.startSec)} 〜 ${formatHMS(seg.endSec)}${seg.title ? ' — ' + seg.title : ''}`}
             >
-              {/* Resize handles are visual cues for the user; the
-                  parent's hitTestSegment already detects the same
-                  edges purely by time-distance, so we don't need to
-                  stop propagation. */}
               <div className={`${styles.segmentResizeHandle} ${styles.segmentResizeHandleLeft}`} />
               <span className={styles.segmentNumber}>{i + 1}</span>
               {selectedSegmentId === seg.id && onRemoveSegment && (
@@ -576,14 +533,13 @@ export default function CommentAnalysisGraph({
           );
         })}
 
-        {/* Hover line + tooltip (only when not in any drag state) */}
-        {hoverSample && (drag === null || drag.kind === 'pending') && (
+        {hoverSample && (drag === null || drag.kind === 'left-pending' || drag.kind === 'right-select') && (
           <div className={styles.hoverLine} style={{ left: hoverSample.x }} />
         )}
 
         <div className={styles.cursor} style={{ left: `${currentPercent}%` }} />
 
-        {hoverSample && (drag === null || drag.kind === 'pending') && (
+        {hoverSample && (drag === null || drag.kind === 'left-pending') && (
           <div
             className={styles.tooltip}
             style={{
@@ -617,6 +573,10 @@ export default function CommentAnalysisGraph({
               </div>
             </div>
           </div>
+        )}
+
+        {warning && (
+          <div className={styles.warningToast}>{warning}</div>
         )}
       </div>
     </div>

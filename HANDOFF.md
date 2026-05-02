@@ -41,6 +41,7 @@ Electron + React + TypeScript 製。**現在は配布前の "自分用ツール"
 - **コメント分析グラフ(UI MVP)**: 完了 (モックデータ表示 + ドラッグ選択)
 - **コメント分析 rolling window スコア + W スライダー**: 完了 (5 要素 / 30 秒〜5 分可変 / Stage 1+2 分離)
 - **複数区間選択 + 感情 9 カテゴリ + アイキャッチ枠**: 完了 (clipSegments[] 最大 20 / 区間バー drag / ClipSegmentsList / eyecatches 自動同期。AI タイトル生成とアイキャッチ実体動画化は次タスク)
+- **操作系整理 + ライブコメントビュー**: 完了 (波形は左=シーク・右ドラッグ=区間追加、PeakDetailPanel 廃止、LiveCommentFeed 常駐)
 
 ### 次フェーズ
 - **進行中**: コメント分析画面 (バックエンド実装待ち) — 詳細は `docs/COMMENT_ANALYSIS_DESIGN.md`
@@ -134,9 +135,9 @@ jikkyou-cut/
             │   ├── useSettings.ts
             │   └── useTranscription.ts
             └── components/
-                ├── ClipSelectView.tsx          # フェーズ2: 切り抜き範囲選択画面
-                ├── PeakDetailPanel.tsx         # フェーズ2: ピーク詳細(コメント一覧 + 切り抜き追加)
-                ├── CommentAnalysisGraph.tsx    # YouTube Most replayed 風盛り上がりグラフ + 区間バー描画
+                ├── ClipSelectView.tsx          # フェーズ2: 切り抜き範囲選択画面(2-column 配置)
+                ├── CommentAnalysisGraph.tsx    # 盛り上がりグラフ(左クリック=シーク、右ドラッグ=区間追加)
+                ├── LiveCommentFeed.tsx         # フェーズ2 右パネル: 常駐ライブコメント(独自仮想スクロール)
                 ├── ClipSegmentsList.tsx        # フェーズ2: 切り抜き区間カード一覧 + アイキャッチ行
                 ├── WindowSizeSlider.tsx        # フェーズ2: rolling window 幅(W)スライダー
                 ├── DropZone.tsx                # フェーズ1: ファイル DnD + URL 入力

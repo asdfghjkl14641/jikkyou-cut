@@ -111,10 +111,16 @@ export function analyze(args: {
   const buckets = bucketize(args);
   const hasViewerStats =
     args.viewers.source === 'playboard' && args.viewers.samples.length > 0;
+  // Stable time-sorted view for the LiveCommentFeed. Sort defensively
+  // even though chat replay arrives chronologically — yt-dlp's JSONL
+  // can occasionally emit out-of-order entries when the source has
+  // late-arriving moderator actions.
+  const allMessages = [...args.messages].sort((a, b) => a.timeSec - b.timeSec);
   return {
     videoDurationSec: args.durationSec,
     bucketSizeSec: BUCKET_SIZE_SEC,
     buckets,
+    allMessages,
     hasViewerStats,
     chatMessageCount: args.messages.length,
     generatedAt: new Date().toISOString(),

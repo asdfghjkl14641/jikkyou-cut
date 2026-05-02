@@ -1,0 +1,165 @@
+.container {
+  display: flex;
+  flex-direction: column;
+  background: var(--bg-surface);
+  border-left: 1px solid var(--border-subtle);
+  height: 100%;
+  min-height: 0;
+  flex-shrink: 0;
+}
+
+.header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: var(--space-3) var(--space-4);
+  border-bottom: 1px solid var(--border-subtle);
+  flex-shrink: 0;
+}
+
+.headerLeft {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.headerIcon {
+  color: var(--text-secondary);
+}
+
+.headerTitle {
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-medium);
+  color: var(--text-primary);
+}
+
+.headerCount {
+  font-size: var(--font-size-xs);
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.autoScrollToggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 11px;
+  color: var(--text-muted);
+  cursor: pointer;
+  user-select: none;
+}
+
+.autoScrollToggle input {
+  margin: 0;
+  cursor: pointer;
+}
+
+.emptyState {
+  padding: var(--space-6) var(--space-4);
+  text-align: center;
+  color: var(--text-muted);
+  font-size: var(--font-size-sm);
+  line-height: 1.5;
+}
+
+.scrollArea {
+  flex: 1;
+  overflow-y: auto;
+  position: relative;
+  scroll-behavior: auto;
+  /* Cheap GPU layer so the row render churn during scroll doesn't
+     repaint the surrounding panels. */
+  contain: strict;
+}
+
+.row {
+  display: grid;
+  grid-template-columns: 56px auto 1fr;
+  align-items: center;
+  gap: 8px;
+  padding: 0 var(--space-3);
+  font-size: 12px;
+  line-height: 1.35;
+  cursor: pointer;
+  border-left: 3px solid transparent;
+  transition: background var(--transition-fast);
+  /* Two-line clamp on text to keep ROW_HEIGHT honest. */
+  overflow: hidden;
+}
+
+.row:hover {
+  background: rgba(255, 255, 255, 0.02);
+}
+
+.rowCurrent {
+  background: rgba(99, 102, 241, 0.08);
+  border-left-color: var(--accent-danger);
+}
+
+.rowPast {
+  opacity: 0.55;
+}
+
+.rowFuture {
+  opacity: 0.85;
+}
+
+.rowTime {
+  font-variant-numeric: tabular-nums;
+  color: var(--text-muted);
+  font-size: 11px;
+  text-align: right;
+}
+
+.rowAuthor {
+  color: var(--text-secondary);
+  font-size: 11px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 100px;
+}
+
+.rowText {
+  color: var(--text-primary);
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  word-break: break-word;
+}
+
+/* Keyword underline. We avoid bg-color tinting (was tested in
+   PeakDetailPanel and felt noisy here) and use a coloured underline
+   only — readable but not visually loud at this row density. */
+.kw {
+  border-bottom: 1px solid;
+  padding-bottom: 0;
+}
+
+.jumpToCurrent {
+  position: sticky;
+  bottom: 8px;
+  align-self: center;
+  margin: 0 auto;
+  background: var(--accent-primary);
+  color: white;
+  border: none;
+  border-radius: 999px;
+  padding: 4px 12px;
+  font-size: 11px;
+  font-weight: var(--font-weight-medium);
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  box-shadow: var(--shadow-md);
+  z-index: 5;
+  /* Keep the button reachable even when the scroll area is short. */
+  width: max-content;
+}
+
+.jumpToCurrent:hover {
+  background: var(--accent-primary-hover);
+}

@@ -22,7 +22,8 @@
   - [x] 波線色を背景レイヤー化(hover/drag 時のみ強調)
   - [x] **rolling window スコア + W スライダー UI**(5 要素:平均コメ密度・平均キーワード・持続率・ピーク強度・視聴者維持率、Stage 1=main bucketize / Stage 2=renderer rolling)
   - [x] **複数区間選択 + 感情 9 カテゴリ + 区間色塗り + アイキャッチ枠**(clipSegments[] 最大 20 / dominantCategory 別 path 描画 / Eyecatch 自動同期 / 区間バー drag resize+move / ClipSegmentsList で順序入替 + タイトル編集)
-  - [ ] **次**: AI 要約(Claude Haiku)で区間タイトル自動生成 + 詳細パネル要約
+  - [x] **操作系整理 + 常駐ライブコメントビュー**(波形は左=シーク・右ドラッグ=区間追加、PeakDetailPanel 廃止、LiveCommentFeed 新設で chat 全件を再生位置追従・自動スクロール表示、仮想スクロール独自実装)
+  - [ ] **次**: AI 要約(Claude Haiku)で区間タイトル自動生成
   - [ ] アイキャッチの実体動画化(FFmpeg で黒画面 + テキスト合成)
   - [ ] 自動候補抽出ボタン(上位 N 区間を一括追加)
   - [ ] スコア重み調整 UI(現状ハードコード)
@@ -96,6 +97,7 @@
 
 ### 2026-05-02
 
+- 操作系整理(左右クリック分離)+ ピーク詳細廃止 → 常駐ライブコメントビュー — 波形の左クリック = シーク、左ドラッグ = ライブシーク、右ドラッグ = 区間追加(リリース時に自動 add)、右クリック単発 = no-op(`onContextMenu` 抑制)。`PeakDetailPanel` 削除、ClipSelectView 右側に `LiveCommentFeed`(常駐、独自仮想スクロール、現在位置追従、コメントクリックでシーク、キーワードを薄い色付き下線でハイライト)。`CommentAnalysis.allMessages` 追加で全 chat を再生位置基準に binary search できるように。「この区間を編集範囲に設定」ボタン廃止 → ヘッダの「この区間を編集」一本に統一
 - 複数区間選択 + 感情 9 カテゴリ + 区間色塗り + アイキャッチ枠 — 旧 `clipRange` 単区間を撤廃して `clipSegments[]`(最大 20)+ 自動同期する `eyecatches[]` に作り直し。感情カテゴリを 5→9 へ拡張(death/victory/scream/flag 追加、ゲーム実況の死亡フラグ・GG・察し等を語彙化)。波形には dominantCategory 別の薄い色塗り(両端フェード gradient で seam 隠し、白線は固定)+ 区間オーバーレイバー(端ドラッグ resize / 中央 move / 隣接 clamp)。区間カードのドラッグ順序入替・タイトル inline 編集・アイキャッチ skip toggle を持つ `ClipSegmentsList` を新設。`PeakDetailPanel` は「設定」から「追加」へ動線変更、連続追加 OK
 - コメント分析: rolling window スコアに作り直し + W スライダー UI 追加 — 旧「5 秒バケット瞬間スコア」を「W 分続いた盛り上がり」へ。5 要素(平均コメ密度・平均キーワード・持続率・ピーク強度・視聴者維持率)、W=30 秒〜5 分(30 秒ステップ、初期値 2 分)。Stage 1(`bucketize`、main 1 回)と Stage 2(`computeRollingScores`、renderer 都度)に分解、スライダー操作時の体感ラグを排除。`RawBucket` 型新設、`ScoreSample` 構造刷新、`CommentAnalysis.samples` 廃止 → `buckets[]` 保持。視聴者は維持率(min/max)1 軸へ統一(growth rate 廃止)。`src/common/types.ts` / `src/main/commentAnalysis/scoring.ts` / `src/renderer/src/lib/rollingScore.ts`(新規)/ `src/renderer/src/components/{WindowSizeSlider,CommentAnalysisGraph,ClipSelectView,PeakDetailPanel}` / `src/renderer/src/store/editorStore.ts`
 - 緊急修正: ClipSelectView の `onDuration`/`onCurrentTime` 未配線 — 3 症状(`<video>` コントロール消失 + 再生ボタンで末尾に飛ぶ + 分析グラフ真っ黒)の共通根本。`durationSec` が clip-select 中ずっと null のままで、preview-skip ロジックが `decidePreviewSkip='end'` を返したり、mock fallback が samples=0 を生成していた。`1678746`(ClipSelectView 新設)時点からの抜け漏れ、`1533d31`(実分析)で表面化。副次的に mediaProtocol と commentAnalysis にログ追加

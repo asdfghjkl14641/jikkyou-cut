@@ -27,6 +27,7 @@ export const generateMockAnalysis = (
       videoDurationSec: 0,
       bucketSizeSec,
       buckets: [],
+      allMessages: [],
       hasViewerStats: false,
       chatMessageCount: 0,
       generatedAt: new Date().toISOString(),
@@ -76,6 +77,7 @@ export const generateMockAnalysis = (
     videoDurationSec: durationSec,
     bucketSizeSec,
     buckets,
+    allMessages: [], // mock has no chat messages — feed shows empty state
     hasViewerStats: false,
     chatMessageCount: 0,
     generatedAt: new Date().toISOString(),
