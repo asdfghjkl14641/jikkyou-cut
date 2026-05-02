@@ -40,7 +40,7 @@
   - "save = replace" セマンティクスを "save = append" に変える(現状は replace、編集 UI で対応)
 - 影響: src/common/types.ts(`youtubeApiKeys.getKeys` 追加 + UI 用途のコメント)、src/main/index.ts(IPC ハンドラ追加)、src/preload/index.ts、src/renderer/src/components/ApiManagementView.tsx(`useEffect([editing])` で seed + diagnostic logs)
 - ⚠️ 実機検証はユーザ環境で必要(5 個保存 → 再起動 → 5 個復元、+ ボタンで行が増える)
-- コミット: (未定)
+- コミット: `240dc50`
 
 ## 2026-05-03 03:00 - API 管理画面 3 修正(キー上限 50 / 保存バグ修正 / 収集開始停止)
 
