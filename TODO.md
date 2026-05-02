@@ -100,6 +100,8 @@
 
 ### 2026-05-02
 
+- 動画音声不再生バグの根本修正 — yt-dlp の format selector を 3 → 5 段に拡張、merger postprocessor で `-c:v copy -c:a aac -b:a 192k -movflags +faststart` を強制(Opus-in-MP4 を AAC に再エンコ、`<video>` の audio drop を解消)。VideoPlayer に audioTracks defensive enable + 診断ログ(`webkitAudioDecodedByteCount` を canplay/loadedmetadata で dump)。`b8eb4b6` の muted/volume 対策と合わせて root-cause 修正完了。**既存 DL ファイルは再 DL 必須**
+- LiveCommentFeed 行密度再調整(40 → 32 px) — ROW_HEIGHT 32、padding 3/10、font 12px、line-height 1.3、時刻列 44px。Part A 後の実機確認でまだスカスカ感
 - AI タイトル要約(Anthropic Claude Haiku 4.5 統合) — `secureStorage` を Gladia/Anthropic 2 スロット化、`aiSummary.ts` を新設(3 並列 + 429/5xx リトライ + per-request 30 秒タイムアウト + AbortController キャンセル)、`userData/comment-analysis/<key>-summaries.json` キャッシュ(2 桁丸めキーで sub-frame ドリフト吸収)、Settings UI を Gladia/Anthropic 2 セクション化、ClipSegmentsList に「AI でタイトル生成」ボタン + 進捗表示。1-token validation ping で キー検証。プロンプトは「15 文字以内のキャッチータイトル、ネタバレ歓迎」。区間→bucket-message slicing は ClipSelectView 側
 - 操作感改善(左クリック即時シーク + ホバー圧縮 + コメント行コンパクト化 + 区間バー右クリックメニュー)— mousedown 時点で即発火 + RAF coalesce、ツールチップを 4 行 → 1 行(`時刻 · スコア · 件数`)、ROW_HEIGHT 60→40 + author 列削除、`SegmentContextMenu` 新規(削除 / タイトル編集 → 編集はリストの inline 編集を発火 + scrollIntoView)
 - 操作系整理(左右クリック分離)+ ピーク詳細廃止 → 常駐ライブコメントビュー — 波形の左クリック = シーク、左ドラッグ = ライブシーク、右ドラッグ = 区間追加(リリース時に自動 add)、右クリック単発 = no-op(`onContextMenu` 抑制)。`PeakDetailPanel` 削除、ClipSelectView 右側に `LiveCommentFeed`(常駐、独自仮想スクロール、現在位置追従、コメントクリックでシーク、キーワードを薄い色付き下線でハイライト)。`CommentAnalysis.allMessages` 追加で全 chat を再生位置基準に binary search できるように。「この区間を編集範囲に設定」ボタン廃止 → ヘッダの「この区間を編集」一本に統一

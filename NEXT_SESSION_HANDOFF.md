@@ -1,89 +1,100 @@
 # 次セッションへの引き継ぎ (NEXT_SESSION_HANDOFF)
 
 ## 凍結時刻
-2026-05-02 19:00
+2026-05-02 20:30
 
 ## リポジトリ状態
-- HEAD: 直近コミット直後(Part A 操作感改善 + Part B AI タイトル要約)
-- Working Tree: 残 Antigravity WIP の `urlDownload.ts` ログ 1 行のみ未コミット
+- HEAD: 直近コミット直後(LiveCommentFeed 行密度再調整 + 動画音声バグ修正)
+- Working Tree: 残 Antigravity WIP の `urlDownload.ts` ログ 1 行のみ未コミット — と思っていたが、本タスクで `urlDownload.ts` を大幅に触ったので **その WIP は今回のコミットに巻き込まれて消化済み**
 
 ## 直前の状況サマリ
 
-ClipSelectView の操作感を 4 件まとめて改善し、続けて AI タイトル要約(Anthropic Claude Haiku 4.5)Phase 2 を完成させました。
+実機検証で挙がった 2 件:
+1. LiveCommentFeed の行が **まだスカスカ**(40 px でも 9 行しか入らん)
+2. URL DL した動画の **音声が出ない**(`b8eb4b6` の muted/volume 対策後も)
 
-### Part A — 操作感改善
+を解消しました。
 
-1. **左クリック即時シーク**: `mousedown` 時点で **即発火** + `mousemove` でライブシーク追従。RAF coalesce で連続発火を抑制。移動閾値 5→3 px、segment-pending / right-pending にだけ移動閾値が残る
-2. **ホバーツールチップ圧縮**: 4 行 → 1 行(`時刻 · スコア · コメ数`)、font-size 11px、カーソルから 12/12 px オフセット、150 ms 遅延でフリッカー抑制
-3. **コメント行コンパクト化**: ROW_HEIGHT 60→40、ユーザ名列削除(時刻 + 本文の 2 列)
-4. **区間バー右クリックメニュー**: `SegmentContextMenu` 新規。「タイトル編集」「この区間を削除」。タイトル編集は ClipSegmentsList の inline 編集を `editTitleRequestId` 経由で発火 + scrollIntoView
+### Part 1 — LiveCommentFeed 行密度再調整 (`7538df0`)
 
-### Part B — AI タイトル要約
+`ROW_HEIGHT` 40 → 32 px、padding 6/12 → 3/10、font 13 → 12、line-height 1.4 → 1.3、時刻列 48 → 44 px。1 画面 ~15 行(~1.5-2 倍密度)。仮想スクロール計算は `ROW_HEIGHT` 1 か所参照なので連動。
 
-1. **Anthropic BYOK**: `secureStorage` を Gladia / Anthropic 2 スロット化。Settings UI に「Anthropic APIキー(AI タイトル生成用)」セクション追加(独立 入力 + 検証 + 保存 + 削除)。1-token validation ping(`max_tokens: 5`)で実 API 接続を確認してから保存
-2. **`aiSummary.ts`(新規)**: Claude Haiku 4.5 で各 ClipSegment のキャッチータイトル生成。3 並列 + 429/5xx で 3 回まで 2/4/6 秒バックオフ + per-request 30 秒タイムアウト + AbortController で `cancelAll()`。出力は `cleanTitle()` で「タイトル:」echo・引用符・句点を strip
-3. **キャッシュ**: `userData/comment-analysis/<videoKey>-summaries.json`、key は `${startSec}-${endSec}-${msgCount}`(2 桁丸めで sub-frame ドリフト吸収)
-4. **ClipSegmentsList の AI 生成ボタン**: Sparkles アイコン + 全削除ボタンの隣。実行中は `生成中… 3/12` 進捗表示、キー未設定時 disabled + tooltip 案内、エラー時は inline 赤メッセージ
-5. **タイトル反映**: 結果を `updateClipSegment(id, { title })` で store へ書き込み、即時 UI 反映
+### Part 2 — 動画音声不再生バグの根本修正
 
-## 主要変更ファイル
+#### 真因の仮説と対応
 
-### Part A
-- `src/renderer/src/components/CommentAnalysisGraph.{tsx,module.css}` — マウスステートマシン作り直し + tooltipCompact + RAF coalesce
-- `src/renderer/src/components/LiveCommentFeed.{tsx,module.css}` — ROW_HEIGHT 40 + author 列削除
-- `src/renderer/src/components/ClipSegmentsList.tsx` — `editTitleRequestId` prop + scroll-into-view
-- `src/renderer/src/components/ClipSelectView.tsx` — コンテキストメニュー orchestration
-- `src/renderer/src/components/SegmentContextMenu.{tsx,module.css}`(新規)
+| 仮説 | 内容 | 対応 |
+|---|---|---|
+| **A** | yt-dlp が音声を捨ててる(format selector mismatch) | format selector を 3 → 5 段拡張、`/anything+anything` 中間段を追加 |
+| **B** | 音声 codec が Chromium 非対応(Opus-in-MP4 が `<video>` で silent drop) | merger に `-c:a aac -b:a 192k` を強制、AVC1 + Opus でも必ず AAC に再エンコ |
+| C | media:// プロトコルが音声 chunk を返せない | mediaProtocol を再監査して問題なし、無修正 |
+| **D** | 既存 DL ファイルが古い | 該当する。**再 DL 必須**を docs に明記 |
 
-### Part B
-- `src/main/secureStorage.ts` — 2 スロット化(Gladia / Anthropic)
-- `src/main/aiSummary.ts`(新規) — 並列実行 + リトライ + キャッシュ + 1-token validation
-- `src/main/index.ts` — `anthropicApiKey:*` + `aiSummary:*` IPC ハンドラ追加
-- `src/preload/index.ts` — Anthropic 系 + `aiSummary` namespace を window.api に expose
-- `src/common/types.ts` — `AiSummary*` 型 + `IpcApi` 拡張
-- `src/renderer/src/hooks/useSettings.ts` — Anthropic accessors(validate / set / clear)
-- `src/renderer/src/components/SettingsDialog.tsx` — 2 セクション化(Gladia / Anthropic)
-- `src/renderer/src/components/ClipSegmentsList.{tsx,module.css}` — AI ボタン + 進捗 + エラー表示
-- `src/renderer/src/components/ClipSelectView.tsx` — orchestrator + segments→messages slicing
-- `src/renderer/src/App.tsx` — Settings ダイアログへの props bridge
+A + B が本命 → 今回の修正のメインターゲット。
 
-## 最初のアクション順
+#### 主要変更
 
-1. **実機動作確認**(私はサンドボックスから動かせないので必須):
-   - 左クリック → mousedown 直後にシーク発火(指でリズム叩いてラグ感じない)
-   - 左ドラッグ → ライブシークが滑らか
-   - 区間バー上クリック → 即シーク + 動かなければ select、ドラッグなら resize/move
-   - 波形ホバー → 1 行ツールチップ + 150 ms 遅延 + カーソルから少しオフセット
-   - コメント行 → ROW_HEIGHT 40 + ユーザ名なし、4000 件で fps 落ちず
-   - 区間バー右クリック → メニュー、「削除」「タイトル編集」両方動作
-   - Settings → Anthropic キー入力 → 検証成功フィードバック → 保存
-   - AI でタイトル生成 → 進捗バー → 各区間にタイトル反映
-   - 同じ区間で再度生成 → キャッシュ即返り(API 呼ばれない、ms 単位)
-   - ネット切断 / 不正キー / レート制限 → エラーメッセージ + UI ハングしない
-2. **アイキャッチの実体動画化(次タスク)**: FFmpeg `drawtext` フィルタで黒画面 + テキスト合成。`Eyecatch.text` を入力に短い動画(`durationSec` 秒)を生成、書き出し時の concat に挟む
-3. **編集画面での `clipSegments` 適用**: 現状は `setPhase('edit')` だけで動画レンジは未連動。VideoPlayer の preview-skip ロジックを clipSegments の補集合(削除すべき範囲)で動かす拡張が必要
+**`src/main/urlDownload.ts`**:
+- format selector 5 段化:`avc1+m4a / avc1+anything / anything+anything / best[ext=mp4] / best`
+- `--postprocessor-args 'Merger:-c:v copy -c:a aac -b:a 192k -movflags +faststart'`:merger 経路で音声を **無条件で AAC 192kbps に再エンコ** + `+faststart` で moov を頭に
+- `--print before_dl:JCUT_FMT vfmt=... vcodec=... acodec=... ext=...`:選ばれたフォーマット ID を起動時に stdout 出力。`[url-download] yt-dlp resolved formats: JCUT_FMT vfmt=137 vcodec=avc1.640028 acodec=mp4a.40.2 ext=mp4` のように出る。`acodec=none` なら format が video-only に落ちた証拠
+
+**`src/renderer/src/components/VideoPlayer.tsx`**:
+- `onLoadedMetadata` で `v.audioTracks[*].enabled = true`(全 track defensive enable、alternate-language が default disable される稀ケース対策)
+- `onLoadedMetadata` + `onCanPlay` で `webkitAudioDecodedByteCount` / `audioTracks.length` / `muted` / `volume` を console.log。「decode 0 のまま」なら codec 問題、「>0 だが無音」なら出力デバイス問題と切り分けできる
+
+**`src/main/mediaProtocol.ts`**:無修正。Range 対応はコード再読で問題なしと確認、仮説 C は無実証で対象外
+
+## ⚠️ 私のサンドボックスからは検証不可
+
+ユーザ側の `.mp4` ファイルにも DevTools にもアクセスできないため、`ffprobe` 結果と `webkitAudioDecodedByteCount` の実測値は **次セッションでユーザが確認** する必要がある。コード修正は仮説に基づいた defensive な変更を入れたが、**実音聴取を確認するまで「直った」とは言えない**。
+
+### 次セッション最初に走らせるべきコマンド
+
+1. **既存 DL ファイル(古い 6.mp4 等)を ffprobe**:
+   ```sh
+   ffprobe -v error -show_streams -show_format <既存の.mp4>
+   ```
+   `codec_type=audio` 行が **無い** か、ある場合 `codec_name` が `opus` / `vorbis` / `flac` 等なら仮説 A/B が当たり
+
+2. **新規 DL を試す**(本修正の直接検証):
+   - dev server 起動 → URL 入力 → DL
+   - electron-vite ターミナルで `[url-download] yt-dlp resolved formats: JCUT_FMT ...` 行を確認
+   - 完了後に出来たファイルを `ffprobe` で再確認、`codec_name=aac` が出るはず
+   - DevTools Console で `[video-audio] loadedmetadata` / `[video-audio] canplay` ログを確認、`audioDecodedByteCount` が `> 0` なら decode 動いてる
+   - 実音聴取で確認
+
+3. **ローカル MP4(コントロール)**: 元から AAC な MP4 をドロップ → 音が出れば「media:// 経路に問題なし」の strong evidence
 
 ## 既知の地雷・注意点
 
-- **AI 生成のキャッシュキー**: 2 桁丸め `${start.toFixed(2)}-${end.toFixed(2)}-${msgCount}`。境界を 0.01 秒以下動かしてもキャッシュヒットする一方、コメント数が変わるとミスする(W=120 から 121 に動かしただけでも buckets の境界が変わって msgCount が 1 増減する可能性あり)。仕様としては OK だが、実機検証時に「おや、再生成された」と感じたら msgCount のせいかも
-- **Anthropic API キー削除の挙動**: Settings から削除しても、ClipSelectView の `hasAnthropicApiKey` 状態は次回マウント時にしか refresh されない(useEffect が依存なし)。AI 生成ボタンが「キー未設定」に切り替わるのが少し遅れる可能性。ClipSelectView で見える window 内では問題ないが、Settings → 編集 → 戻る で再生成したら気にすべき
-- **AI 生成中の AbortController**: ClipSelectView がアンマウントされても fetch は走り続ける。新しい動画ファイルを開いた瞬間にキャンセルしたい場合は cleanup 関数で `window.api.aiSummary.cancel()` を呼ぶべきだが、今回は実装してない(プロトタイプ範囲)
-- **80 件サンプリング**: コメントが極端に多い区間で `stride = total/80` で均等抽出。もし 1 区間で 1000 件超のコメントが瞬間的に集まる動画の場合、サンプリング精度が荒くなって AI タイトルが大味になる可能性
+- **再 DL 必須**: `b8eb4b6` 以前 / 本修正以前の DL ファイルは AAC 強制を経ていないので音声出ない可能性。新規 DL で検証
+- **`webkitAudioDecodedByteCount` は Chromium 専用**: 標準 API ではない、type assertion で扱っている。Electron 33 (Chromium 130 系) では動くが将来削除のリスクあり
+- **`audioTracks` API も同様に experimental**: Chromium が default-disable する稀ケースの defensive 用途、normal mp4 ではそもそも 1 track しかないので no-op
+- **192 kbps AAC は固定値**: 設定 UI で品質選択できるようにしてもいい(将来検討)
+- **ローカル動画の音声には影響なし**: 本修正は yt-dlp 出力にのみ作用。ローカルファイルは元の AAC をそのまま使う
+
+## 主要変更ファイル
+
+- `src/main/urlDownload.ts` — format selector 5 段化 + AAC merger postprocessor + JCUT_FMT diagnostic print
+- `src/renderer/src/components/VideoPlayer.tsx` — audioTracks defensive enable + canplay/loadedmetadata 診断ログ
+- `src/renderer/src/components/LiveCommentFeed.{tsx,module.css}` — ROW_HEIGHT 32 + 行内詰め(Part 1)
+
+## 最初のアクション順
+
+1. **音声再生の実機検証**(上記の 3 コマンド)
+2. ログから真因確定 → もし新規 DL でも音声出ない場合は仮説 C(mediaProtocol)を再検討
+3. 動作確認 OK なら次タスクへ:
+   - アイキャッチの実体動画化(FFmpeg `drawtext`)
+   - 編集画面 (`edit` フェーズ) で `clipSegments` を実際の動画範囲絞り込みに使う
 
 ## みのる(USER)への報告用
 
-### Part A 改善まとめ
-- **左クリックが即シーク**:Anthropic キーは Settings の新しい欄に入れてください
-- **ホバーが邪魔じゃなくなった**:時刻 · スコア · 件数 だけの 1 行
-- **コメント欄が詰まった**:ROW_HEIGHT 60→40、ユーザ名なし
-- **区間バーを右クリック**でメニュー(削除 / タイトル編集)
-
-### Part B AI タイトル
-- Settings の「Anthropic APIキー」欄に登録 → ClipSegmentsList 上部の「AI でタイトル生成」ボタンで全区間一括生成
-- 生成結果は各区間カードの `title` 欄に直接入る、手で再編集も可
-- 同じ境界の区間は 2 回目以降キャッシュから即返る(API コスト発生しない)
-- モデルは Claude Haiku 4.5(廉価帯)、20 区間で数円のコスト感
-
-### 次タスク候補
-- アイキャッチの実体動画化
-- 編集画面での clipSegments 適用(動画範囲絞り込み)
+- LiveCommentFeed が **約 1.5-2 倍密度**(行高 32 px、1 画面 ~15 行)
+- 音声バグは **仮説 A+B(yt-dlp 音声フォーマット問題)** 想定で修正:
+  - format selector 拡張(中間段追加)
+  - merger で AAC 192 kbps に強制再エンコ + faststart で seek も速い
+  - 音声トラックを画面ロード時に全部 enabled に(defensive)
+  - decode 状況を console.log で出力(`audioDecodedByteCount`)
+- **既存の DL ファイル(古い 6.mp4 等)は音声出ない可能性、再 DL してください**
+- 新規 DL してログ確認お願いします。`acodec=none` が出てたらフォーマット選択の問題、`webkitAudioDecodedByteCount=0` のままなら codec / decoder の問題、と切り分けできるようにしてあります

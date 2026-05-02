@@ -15,6 +15,28 @@
 
 ---
 
+## 2026-05-02 20:30 - 動画音声不再生バグの根本修正(yt-dlp 出力での音声強制 AAC 化 + audioTracks defensive enable)
+
+- 誰が: Claude Code
+- 何を:
+  - **`urlDownload.ts` の format selector を 3 段 → 5 段に拡張**: 旧 `avc1+m4a / best-mp4 / anything` の `/anything` 分岐に流れた動画は Opus-in-MP4 になりがちで、Chromium の `<video>` が **video は再生するが audio を silently drop** していた。新 selector は `avc1+m4a` → `avc1+anything` → `anything+anything` → `best-mp4` → `best` の順に降りていき、最初の 3 段のいずれかにヒットすれば後続の merger が必ず動く
+  - **`--postprocessor-args 'Merger:-c:v copy -c:a aac -b:a 192k -movflags +faststart'`**: merger が走る経路では音声を **無条件で AAC 192kbps に再エンコード**(視覚上の品質劣化はゼロ、AAC↔AAC の場合も remux→transcode 1 回で十分軽量)。`+faststart` で moov atom を頭に移し、media:// Range 経由の seek も先頭から効くように
+  - **`--print before_dl:JCUT_FMT vfmt=... vcodec=... acodec=... ext=...`**: yt-dlp が実際に選んだフォーマット ID を起動時に stdout へ。`acodec=none` が出たら format selector が video-only に落ちた証拠
+  - **`VideoPlayer.tsx`** の `onLoadedMetadata` で `v.audioTracks[*].enabled = true` を全 track に適用(ブラウザが alternate-language を default disable する稀なケース対策)
+  - **`onLoadedMetadata` + `onCanPlay`** で `webkitAudioDecodedByteCount` / `audioTracks.length` を console に dump。「decode 0 のまま」なら codec 問題、「>0 だが無音」なら出力デバイス問題、と切り分けできる diagnostic
+- 理由: `b8eb4b6` で `muted=false` / `volume=0→1` の defensive reset を入れたが直らず、複数の hypothesis を並列に潰した:
+  - **本命(仮説 A+B)**: yt-dlp の出力 mp4 に Opus 音声が入っていた可能性。AVC1 + Opus-in-MP4 は Chromium で「video plays, audio mute」になる既知挙動。merger で AAC 強制再エンコしておけば確実に再生可能になる
+  - 仮説 C(media:// Range)は mediaProtocol コードを再監査して問題なしと確認、修正対象外
+  - 仮説 D(既存 DL ファイルが古い)は事実上必ず該当する。新規 DL のみ修正対象
+- **既存 DL ファイルへの注意**: `b8eb4b6` 以前 / この修正以前にダウンロード済みのファイルは音声強制 AAC を経ていない。**再 DL 必須**
+- 開放されている設計判断:
+  - audioTracks API は HTMLVideoElement の experimental field、Electron 33 (Chromium 130 系) では動くが将来削除のリスクあり。type assertion で扱っているのはそのため
+  - 192 kbps の AAC は固定値。設定 UI で品質選択を出してもよい(将来検討)
+  - 仮説 C (mediaProtocol) は無実証で「触らない」判断。もし新規 DL でも再現したらここを再検討
+- 影響: src/main/urlDownload.ts (format selector + postprocessor + 診断 print)、src/renderer/src/components/VideoPlayer.tsx (audioTracks enable + canplay/loadedmetadata diagnostic logs)
+- ⚠️ 実機検証はユーザ環境で必要(私のサンドボックスから ffprobe / DevTools へアクセス不可)
+- コミット: (未定)
+
 ## 2026-05-02 19:30 - LiveCommentFeed の行密度を再調整(40 → 32 px)
 
 - 誰が: Claude Code

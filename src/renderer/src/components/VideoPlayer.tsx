@@ -261,6 +261,53 @@ const VideoPlayer = forwardRef<VideoPlayerHandle, Props>(function VideoPlayer(
     // file swap.
     if (v.muted) v.muted = false;
     if (v.volume === 0) v.volume = 1;
+
+    // Defensive: enable every audioTrack the container exposes. Chromium
+    // sometimes leaves alternate-language tracks disabled by default,
+    // and we've also seen audio-track-zero come up `enabled=false` on
+    // certain mp4s where ffmpeg merged a non-AAC audio stream. Walking
+    // the list here covers both cases at zero cost.
+    const tracks = (v as HTMLVideoElement & {
+      audioTracks?: { length: number; [i: number]: { enabled: boolean } };
+    }).audioTracks;
+    if (tracks && typeof tracks.length === 'number') {
+      for (let i = 0; i < tracks.length; i += 1) {
+        const t = tracks[i];
+        if (t && !t.enabled) t.enabled = true;
+      }
+    }
+
+    // Diagnostic so we can see in DevTools whether the file actually
+    // carries audio at all. Decoded byte count is the smoking gun: 0
+    // throughout playback ⇒ codec/decoder problem; >0 but no sound ⇒
+    // output-routing / volume problem.
+    const audioByteCount = (v as HTMLVideoElement & {
+      webkitAudioDecodedByteCount?: number;
+    }).webkitAudioDecodedByteCount;
+    console.log('[video-audio] loadedmetadata', {
+      muted: v.muted,
+      volume: v.volume,
+      audioTracksLength: tracks?.length ?? null,
+      audioDecodedByteCount: audioByteCount ?? null,
+      readyState: v.readyState,
+      duration: d,
+    });
+  };
+
+  // Fire once when playback first becomes possible — at this point
+  // Chromium has parsed enough of the container to know whether audio
+  // is decodable. `webkitAudioDecodedByteCount` jumping to >0 here is
+  // the positive signal we want.
+  const handleCanPlay = () => {
+    const v = videoRef.current;
+    if (!v) return;
+    const audioByteCount = (v as HTMLVideoElement & {
+      webkitAudioDecodedByteCount?: number;
+    }).webkitAudioDecodedByteCount;
+    console.log('[video-audio] canplay', {
+      audioDecodedByteCount: audioByteCount ?? null,
+      readyState: v.readyState,
+    });
   };
 
   return (
@@ -290,6 +337,7 @@ const VideoPlayer = forwardRef<VideoPlayerHandle, Props>(function VideoPlayer(
           onEnded={handlePauseOrEnded}
           onSeeked={handleSeeked}
           onLoadedMetadata={handleLoadedMetadata}
+          onCanPlay={handleCanPlay}
         />
         <SubtitleOverlay />
       </div>
