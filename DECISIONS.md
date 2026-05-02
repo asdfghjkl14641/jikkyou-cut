@@ -38,7 +38,7 @@
   - Stage 1 と renderer rollingScore の二重実装解消(common/ 配下に共通化)
 - 影響: src/common/types.ts(`AutoExtractStartArgs/Progress/Result` 追加 + IpcApi 拡張)、src/main/commentAnalysis/peakDetection.ts(新規)、src/main/aiSummary.ts(`callAnthropicRaw` + `refineCandidatesWithAI` + `autoExtractClipCandidates`)、src/main/index.ts(IPC ハンドラ)、src/preload/index.ts(`aiSummary.autoExtract` + `onAutoExtractProgress`)、src/renderer/src/components/ClipSelectView.{tsx,module.css}(ヘッダボタン + count select + 進捗 modal)
 - ⚠️ 実機検証はユーザ側で必要(Anthropic API キー保存 → 実 DL 動画でボタン押下 → 抽出結果の質を主観評価)
-- コミット: (未定)
+- コミット: `a0af61a`(本体)+ `441ed04`(直後修正:波形ホバーラインの cursor 追従)
 
 ## 2026-05-02 21:30 - 動画音声不再生バグの **真の** 根本原因を特定・修正(audio fragment 不完全 DL → silent 切断)
 
