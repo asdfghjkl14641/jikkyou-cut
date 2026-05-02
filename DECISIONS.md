@@ -39,7 +39,7 @@
   - 単一キー編集を別モーダルで開く案(現状は inline 展開、画面遷移は減らす方向)
 - 影響: src/main/menu.ts(トップレベル項目追加)、src/main/dataCollection/{logger.ts, logReader.ts}(新規)、src/main/dataCollection/{index.ts, youtubeApi.ts, ytDlpExtractor.ts, database.ts}(リファクタ)、src/main/index.ts(IPC + import)、src/preload/index.ts、src/common/types.ts、src/renderer/src/components/{ApiManagementDialog,CollectionLogViewer,SettingsDialog,DataCollectionSettings}.{tsx,module.css}、src/renderer/src/App.tsx
 - ⚠️ 実機検証はユーザ環境で必要(メニュー出現確認 / API キー登録 / ログビューアの実データ表示 / ファイルを開くボタン)
-- コミット: (未定)
+- コミット: `ead5db5`
 
 ## 2026-05-02 23:30 - 切り抜き動画データ収集パイプライン Phase 1(蓄積基盤)
 
