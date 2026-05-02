@@ -37,7 +37,7 @@
   - スコア重み調整 UI(現状ハードコード)
 - 副次効果: keywords.ts のカテゴリ化 / ReactionCategory 型追加が `7f41a02` 時点で uncommitted な WIP 依存だったが、本コミットでようやく一緒に repo に乗る
 - 影響: src/common/types.ts (ClipSegment / Eyecatch / ReactionCategory 再 export)、src/common/commentAnalysis/keywords.ts (9 cat / 65+ pattern / sort + escape)、src/main/commentAnalysis/scoring.ts (ZERO 9 cat)、src/renderer/src/lib/rollingScore.ts (9 cat)、src/renderer/src/components/CommentAnalysisGraph.{tsx,module.css}(per-cat fill + 区間バー + drag handlers)、src/renderer/src/components/ClipSegmentsList.{tsx,module.css}(新規)、src/renderer/src/components/ClipSelectView.{tsx,module.css}(統合)、src/renderer/src/components/PeakDetailPanel.tsx(addClipSegment 化)、src/renderer/src/components/CommentAnalysisGraph.mock.ts(9 cat)、src/renderer/src/store/editorStore.ts (clipSegments / eyecatches + actions)、src/renderer/src/styles.css(4 色追加)
-- コミット: (未定)
+- コミット: `dfadf31`(本体)+ `b8eb4b6`(直後修正:波形クリックで即シーク + 音声デフォルトリセット)
 
 ## 2026-05-02 14:30 - コメント分析を rolling window スコアに作り直し + W スライダー UI 追加
 
