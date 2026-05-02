@@ -10,6 +10,7 @@ import { fetchVideoDetails, parseIsoDuration, refreshKeys, searchVideos } from '
 import { extractVideoData } from './ytDlpExtractor';
 import { BROAD_QUERIES, SEARCH_DEFAULTS, buildPerCreatorQuery } from './searchQueries';
 import { loadCreatorList } from './creatorList';
+import { logError, logInfo, logWarn } from './logger';
 
 // Background data-collection orchestrator. Single instance per main
 // process. Auto-starts ~5 s after `start()` is called (giving the rest
@@ -39,7 +40,7 @@ class DataCollectionManager {
     if (this.state === 'running') return;
     const hasKeys = await hasYoutubeApiKeys();
     if (!hasKeys) {
-      console.log('[data-collection] no YouTube API keys configured — skipping auto-start');
+      logInfo('no YouTube API keys configured — skipping auto-start');
       return;
     }
     this.state = 'running';
@@ -94,7 +95,7 @@ class DataCollectionManager {
   private async runOneBatch(): Promise<void> {
     if (this.currentBatch) return this.currentBatch;
     const batch = this._collectBatch().catch((err) => {
-      console.warn('[data-collection] batch error:', err);
+      logError(`batch error: ${err instanceof Error ? err.message : String(err)}`);
     });
     this.currentBatch = batch as Promise<void>;
     try {
@@ -106,7 +107,7 @@ class DataCollectionManager {
 
   private async _collectBatch(): Promise<void> {
     const startedAt = Date.now();
-    console.log('[data-collection] batch start');
+    logInfo('batch start');
 
     // Step 1: search to build a candidate ID pool.
     const candidateIds = new Set<string>();
@@ -117,12 +118,14 @@ class DataCollectionManager {
     const creators = await loadCreatorList();
     for (const c of creators) {
       if (this.cancelRequested) return;
-      const items = await searchVideos(buildPerCreatorQuery(c.name), {
+      const q = buildPerCreatorQuery(c.name);
+      const items = await searchVideos(q, {
         maxResults: SEARCH_DEFAULTS.maxResultsPerQuery,
         order: SEARCH_DEFAULTS.order,
         regionCode: SEARCH_DEFAULTS.regionCode,
         relevanceLanguage: SEARCH_DEFAULTS.relevanceLanguage,
       });
+      logInfo(`search per-creator "${q}" → ${items.length} items`);
       for (const it of items) {
         if (!candidateIds.has(it.videoId)) {
           candidateIds.add(it.videoId);
@@ -140,6 +143,7 @@ class DataCollectionManager {
         regionCode: SEARCH_DEFAULTS.regionCode,
         relevanceLanguage: SEARCH_DEFAULTS.relevanceLanguage,
       });
+      logInfo(`search broad "${q}" → ${items.length} items`);
       for (const it of items) {
         if (!candidateIds.has(it.videoId)) {
           candidateIds.add(it.videoId);
@@ -155,9 +159,7 @@ class DataCollectionManager {
       if (!videoExists(id)) newIds.push(id);
       if (newIds.length >= MAX_VIDEOS_PER_BATCH) break;
     }
-    console.log(
-      `[data-collection] candidates=${candidateIds.size}, new=${newIds.length}`,
-    );
+    logInfo(`candidates=${candidateIds.size}, new=${newIds.length}`);
 
     // Step 3: enrich via videos.list to fill in stats.
     const details = await fetchVideoDetails(newIds);
@@ -200,6 +202,10 @@ class DataCollectionManager {
         formatYtDlpUploadDate(extracted.meta.upload_date) ||
         null;
 
+      if (extracted.peaks.length === 0 && (!extracted.meta.heatmap || extracted.meta.heatmap.length === 0)) {
+        logInfo(`no heatmap available for ${id} (saving meta only)`);
+      }
+
       try {
         upsertVideoFull({
           video: {
@@ -235,7 +241,7 @@ class DataCollectionManager {
         });
         saved += 1;
       } catch (err) {
-        console.warn(`[data-collection] DB upsert failed for ${id}:`, err);
+        logError(`DB upsert failed for ${id}: ${err instanceof Error ? err.message : String(err)}`);
         failures += 1;
       }
 
@@ -243,14 +249,12 @@ class DataCollectionManager {
     }
 
     const elapsedSec = ((Date.now() - startedAt) / 1000).toFixed(1);
-    console.log(
-      `[data-collection] batch done in ${elapsedSec}s — saved=${saved}, failures=${failures}`,
-    );
+    logInfo(`batch done in ${elapsedSec}s — saved=${saved}, failures=${failures}`);
 
     // If we hit a hard wall (nothing saved + many failures), back off
     // longer before the next cycle.
     if (saved === 0 && failures >= 5) {
-      console.warn('[data-collection] zero saves with failures — long cooldown');
+      logWarn('zero saves with failures — long cooldown');
       await sleep(NETWORK_RETRY_COOLDOWN_MS);
     }
   }

@@ -1,17 +1,16 @@
 import { useEffect, useState } from 'react';
-import { Plus, X, Database, Play, Pause } from 'lucide-react';
+import { X, Database, Play, Pause } from 'lucide-react';
 import styles from './SettingsDialog.module.css';
 
-// Settings dialog block for the Phase 1 data-collection pipeline:
-//   * YouTube Data API keys (BYOK, multi, max 10)
-//   * Per-creator targeting list
-//   * Collection-status panel (read-only, polled)
+// Hosted under SettingsDialog. As of the API-management refactor,
+// YouTube API key entry has moved to ApiManagementDialog. This block
+// keeps:
+//   * The collection-status panel (read-only, polled)
+//   * The per-creator targeting list (add / remove)
 //
-// Hosted in SettingsDialog as a third major section. The component
-// owns its own state — parent doesn't need to plumb anything beyond
-// rendering it.
-
-const MAX_KEYS = 10;
+// Manual trigger / pause still live here so users adjusting their
+// creator list can immediately fire a collection without leaving the
+// Settings dialog.
 
 type Stats = {
   videoCount: number;
@@ -24,26 +23,13 @@ type Stats = {
 type CreatorEntry = { name: string; channelId: string | null };
 
 export default function DataCollectionSettings() {
-  // ---- API keys ------------------------------------------------------------
-  // We don't read existing keys back (renderer never sees plaintext).
-  // Instead we keep a count + edit buffer of fresh inputs. Save replaces
-  // the whole set on disk.
   const [keyCount, setKeyCount] = useState(0);
-  const [keyDraft, setKeyDraft] = useState<string[]>(['']);
-  const [keyError, setKeyError] = useState<string | null>(null);
-  const [keysSaving, setKeysSaving] = useState(false);
-
-  // ---- Creator list --------------------------------------------------------
   const [creators, setCreators] = useState<CreatorEntry[]>([]);
   const [newCreatorName, setNewCreatorName] = useState('');
   const [creatorError, setCreatorError] = useState<string | null>(null);
-
-  // ---- Stats ---------------------------------------------------------------
   const [stats, setStats] = useState<Stats | null>(null);
   const [busy, setBusy] = useState(false);
 
-  // Initial load + 5-second poll for stats. The polled call is cheap
-  // (one SQLite COUNT(*) plus a SUM) so this isn't a perf concern.
   useEffect(() => {
     let alive = true;
     const refresh = async () => {
@@ -69,56 +55,6 @@ export default function DataCollectionSettings() {
     };
   }, []);
 
-  // ---- API key handlers ----------------------------------------------------
-
-  const updateKeyDraftAt = (i: number, value: string) => {
-    setKeyDraft((prev) => {
-      const next = [...prev];
-      next[i] = value;
-      return next;
-    });
-  };
-
-  const addKeyRow = () => {
-    setKeyDraft((prev) => (prev.length >= MAX_KEYS ? prev : [...prev, '']));
-  };
-
-  const removeKeyRow = (i: number) => {
-    setKeyDraft((prev) => prev.filter((_, idx) => idx !== i));
-  };
-
-  const handleSaveKeys = async () => {
-    setKeyError(null);
-    const cleaned = keyDraft.map((k) => k.trim()).filter((k) => k.length > 0);
-    if (cleaned.length === 0) {
-      setKeyError('少なくとも 1 つのキーを入力してください');
-      return;
-    }
-    setKeysSaving(true);
-    try {
-      await window.api.youtubeApiKeys.setKeys(cleaned);
-      setKeyDraft(['']);
-      const c = await window.api.youtubeApiKeys.getKeyCount();
-      setKeyCount(c);
-    } catch (err) {
-      setKeyError(err instanceof Error ? err.message : String(err));
-    } finally {
-      setKeysSaving(false);
-    }
-  };
-
-  const handleClearKeys = async () => {
-    setKeysSaving(true);
-    try {
-      await window.api.youtubeApiKeys.clear();
-      setKeyCount(0);
-    } finally {
-      setKeysSaving(false);
-    }
-  };
-
-  // ---- Creator handlers ----------------------------------------------------
-
   const handleAddCreator = async () => {
     setCreatorError(null);
     const name = newCreatorName.trim();
@@ -142,14 +78,10 @@ export default function DataCollectionSettings() {
     setCreators(await window.api.creators.list());
   };
 
-  // ---- Manager controls ----------------------------------------------------
-
   const handleTriggerNow = async () => {
     setBusy(true);
     try {
       await window.api.dataCollection.triggerNow();
-      // Stats refresh happens via the 5 s poll; users see the count
-      // tick up once the batch is done (1-3 minutes typically).
     } finally {
       setBusy(false);
     }
@@ -181,15 +113,14 @@ export default function DataCollectionSettings() {
     <div className={styles.section}>
       <div className={styles.label} style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
         <Database size={16} />
-        <span>切り抜きデータ収集(Phase 1 蓄積基盤)</span>
+        <span>切り抜きデータ収集(Phase 1 蓄積)</span>
       </div>
 
-      {/* Status panel (read-only) */}
       <div className={styles.help} style={{ marginTop: 0 }}>
-        切り抜き動画の伸びパターンを学習するためのバックグラウンド収集です。
-        YouTube Data API キーを登録すると、5 秒後に自動で起動して 1 時間ごとにバッチ実行されます。
+        切り抜き動画の伸びパターンを学習するためのバックグラウンド収集。API キーは「API 管理」画面で登録します。
       </div>
 
+      {/* Status panel */}
       <div
         style={{
           background: 'rgba(99, 102, 241, 0.06)',
@@ -220,7 +151,7 @@ export default function DataCollectionSettings() {
         <div>
           <span style={{ color: 'var(--text-muted)' }}>状態</span>:&nbsp;
           <span style={{ color: stats?.isRunning ? 'var(--accent-success)' : 'var(--text-muted)' }}>
-            {stats?.isRunning ? '実行中' : '停止中'}
+            {stats?.isRunning ? '実行中' : keyCount === 0 ? '未起動(API キー未登録)' : '停止中'}
           </span>
         </div>
         <div style={{ gridColumn: '1 / -1' }}>
@@ -235,7 +166,7 @@ export default function DataCollectionSettings() {
           className={styles.saveButton}
           onClick={handleTriggerNow}
           disabled={busy || keyCount === 0}
-          title={keyCount === 0 ? '先に API キーを登録してください' : '今すぐ 1 バッチ実行'}
+          title={keyCount === 0 ? '先に API 管理画面で YouTube キーを登録してください' : '今すぐ 1 バッチ実行'}
           style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}
         >
           <Play size={12} />
@@ -252,69 +183,6 @@ export default function DataCollectionSettings() {
           {stats?.isRunning ? '一時停止' : '再開'}
         </button>
       </div>
-
-      {/* API keys */}
-      <div className={styles.label} style={{ marginTop: 16 }}>
-        YouTube Data API キー(現在 {keyCount} 件登録済み、最大 {MAX_KEYS} 個)
-      </div>
-      <div className={styles.help}>
-        Google Cloud Console で発行(YouTube Data API v3 を有効化)。1 キーあたり 1 日 10,000 unit の上限のため、複数キーで分散すると収集量が増えます。
-      </div>
-      {keyDraft.map((key, i) => (
-        <div key={i} className={styles.row} style={{ marginTop: 6 }}>
-          <input
-            type="password"
-            className={styles.input}
-            value={key}
-            onChange={(e) => updateKeyDraftAt(i, e.target.value)}
-            placeholder={`キー ${i + 1}`}
-            spellCheck={false}
-            autoComplete="off"
-            disabled={keysSaving}
-          />
-          <button
-            type="button"
-            className={styles.cancelButton}
-            onClick={() => removeKeyRow(i)}
-            disabled={keysSaving || keyDraft.length === 1}
-            style={{ marginLeft: 4, padding: '4px 8px' }}
-            title="この行を削除"
-          >
-            <X size={12} />
-          </button>
-        </div>
-      ))}
-      <div style={{ display: 'flex', gap: 8, marginTop: 8 }}>
-        <button
-          type="button"
-          className={styles.cancelButton}
-          onClick={addKeyRow}
-          disabled={keysSaving || keyDraft.length >= MAX_KEYS}
-          style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}
-        >
-          <Plus size={12} />
-          キーを追加
-        </button>
-        <button
-          type="button"
-          className={styles.saveButton}
-          onClick={handleSaveKeys}
-          disabled={keysSaving || keyDraft.every((k) => !k.trim())}
-        >
-          {keysSaving ? '保存中...' : '全て保存'}
-        </button>
-        {keyCount > 0 && (
-          <button
-            type="button"
-            className={styles.cancelButton}
-            onClick={handleClearKeys}
-            disabled={keysSaving}
-          >
-            登録済みを全削除
-          </button>
-        )}
-      </div>
-      {keyError && <div className={styles.error}>{keyError}</div>}
 
       {/* Creator list */}
       <div className={styles.label} style={{ marginTop: 16 }}>

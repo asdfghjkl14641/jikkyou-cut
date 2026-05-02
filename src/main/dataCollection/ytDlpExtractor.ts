@@ -2,6 +2,7 @@ import { app } from 'electron';
 import { spawn } from 'node:child_process';
 import path from 'node:path';
 import { promises as fs } from 'node:fs';
+import { logWarn } from './logger';
 
 // Pulls metadata + heatmap + chapters + thumbnail from a single yt-dlp
 // invocation. Used by the data-collection pipeline; not the same path
@@ -155,10 +156,8 @@ export async function extractVideoData(args: {
       if (code !== 0) {
         // Common: video deleted / region-blocked. We log and let the
         // caller record this as a failed-to-collect entry.
-        console.warn(
-          `[data-collection] yt-dlp failed for ${args.url} (code=${code}):`,
-          stderr.slice(0, 300),
-        );
+        const reason = stderr.split(/\r?\n/).find((l) => l.trim().length > 0)?.slice(0, 200) ?? '';
+        logWarn(`yt-dlp failed for ${args.url} (code=${code}): ${reason}`);
         resolve(null);
         return;
       }
@@ -167,9 +166,7 @@ export async function extractVideoData(args: {
         .map(parseDataLine)
         .find((m): m is ExtractedVideoMeta => m != null) ?? null;
       if (!meta) {
-        console.warn(
-          `[data-collection] no JCUT_DATA line in yt-dlp output for ${args.url}`,
-        );
+        logWarn(`no JCUT_DATA line in yt-dlp output for ${args.url}`);
         resolve(null);
         return;
       }
@@ -209,7 +206,7 @@ export async function extractVideoData(args: {
       });
     });
     proc.on('error', (err) => {
-      console.warn(`[data-collection] yt-dlp spawn failed:`, err);
+      logWarn(`yt-dlp spawn failed: ${err.message}`);
       resolve(null);
     });
   });

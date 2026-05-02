@@ -412,6 +412,7 @@ export type IpcApi = {
   onMenuOpenFile: (cb: () => void) => () => void;
   onMenuOpenSettings: (cb: () => void) => () => void;
   onMenuOpenOperations: (cb: () => void) => () => void;
+  onMenuOpenApiManagement: (cb: () => void) => () => void;
 
   // settings (non-secret)
   getSettings: () => Promise<AppConfig>;
@@ -520,5 +521,18 @@ export type IpcApi = {
     list: () => Promise<Array<{ name: string; channelId: string | null }>>;
     add: (name: string, channelId: string | null) => Promise<void>;
     remove: (name: string) => Promise<void>;
+  };
+
+  // Collection log viewer.
+  collectionLog: {
+    read: (limit?: number) => Promise<Array<{
+      timestamp: string;
+      level: 'info' | 'warn' | 'error';
+      message: string;
+    }>>;
+    openInExplorer: () => Promise<void>;
+    // Per-key quota for the API management dialog. Empty array for
+    // keys that haven't been used today.
+    getQuotaPerKey: () => Promise<Array<{ keyIndex: number; unitsUsed: number }>>;
   };
 };

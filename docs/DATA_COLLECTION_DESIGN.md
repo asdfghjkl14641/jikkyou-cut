@@ -106,6 +106,39 @@ heatmap が `NA`(古い動画 / プライベート / ストリームアーカイ
 | ネットワークエラー | 単発失敗は warn して次へ。連続失敗なら 5 分クールダウン |
 | DB ロック | better-sqlite3 のトランザクションで自動 retry |
 
+## ログフォーマット
+
+`userData/data-collection/collection.log`(append-only):
+
+```
+2026-05-02T12:34:56.789Z [INFO]  batch start
+2026-05-02T12:35:15.123Z [WARN]  yt-dlp failed: video unavailable (videoId=abc123)
+2026-05-02T12:35:30.456Z [ERROR] API quota exceeded for key 3
+```
+
+- ISO 8601 UTC タイムスタンプ + `[LEVEL]`(7 文字 padding)+ メッセージ
+- `logger.ts` の `logInfo` / `logWarn` / `logError` で出力。コンソールエコーも残る
+- 単一 promise chain で append を sequence(Windows での torn line 防止)
+- `logReader.ts` が末尾 N 行を読み出してパース、canonical 以外の legacy line は INFO で吸収
+
+## API 管理画面
+
+メニュー「API 管理」(`Ctrl+Shift+A`)→ `ApiManagementDialog`。タブ式で 2 ページ:
+
+### タブ 1: API キー
+- **Gladia** / **Anthropic** / **YouTube** の 3 セクション
+- 各セクションに `登録済み / 未登録` 表示 + Edit ボタン(inline 展開)+ Delete ボタン(`window.confirm` で誤操作防止)
+- YouTube のみ:per-key クォータバー(5 秒間隔 polling)、複数キー入力(最大 10 個)
+
+### タブ 2: 収集ログ
+- フィルタボタン(All / INFO / WARN / ERROR)+ 件数バッジ
+- 自動更新トグル(5 秒間隔)+ 手動更新ボタン
+- 「ファイルを開く」ボタン:`shell.openPath` で OS 既定エディタ
+- 仮想スクロール(ROW_HEIGHT 26、BUFFER_ROWS 12)で 5000+ 行でも軽量
+- stick-to-bottom 挙動(20px 以内なら新規追記に追従、上にスクロールすると追従停止)
+
+`SettingsDialog` から API キー部分は完全削除。代わりに「API 管理画面を開く」ハンドオフボタンのみ。
+
 ## ライフサイクル
 
 - **start**: `app.whenReady()` 内で `dataCollectionManager.start()`。API キー未設定なら no-op

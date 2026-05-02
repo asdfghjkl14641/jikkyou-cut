@@ -266,6 +266,19 @@ export function getTotalQuotaUsedToday(): number {
   return row.total;
 }
 
+// Per-key breakdown for the API management UI. Returns one entry per
+// key index seen today; rows for keys that haven't been used today
+// don't appear (caller fills with zero if needed).
+export function getQuotaPerKeyToday(): Array<{ keyIndex: number; unitsUsed: number }> {
+  const rows = openDb()
+    .prepare(
+      'SELECT api_key_index AS keyIndex, units_used AS unitsUsed ' +
+      'FROM api_quota_log WHERE date = ? ORDER BY api_key_index ASC',
+    )
+    .all(todayStr()) as Array<{ keyIndex: number; unitsUsed: number }>;
+  return rows;
+}
+
 // ---- Stats for Settings UI -------------------------------------------------
 
 export type CollectionStats = {

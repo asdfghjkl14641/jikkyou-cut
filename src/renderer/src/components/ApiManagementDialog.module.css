@@ -1,0 +1,329 @@
+.dialog {
+  background: var(--bg-surface);
+  color: var(--text-primary);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-lg);
+  padding: 0;
+  width: min(720px, 90vw);
+  max-height: 85vh;
+  display: flex;
+  flex-direction: column;
+}
+
+.dialog::backdrop {
+  background: rgba(0, 0, 0, 0.55);
+}
+
+.header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: var(--space-3) var(--space-4);
+  border-bottom: 1px solid var(--border-subtle);
+  flex-shrink: 0;
+}
+
+.title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: var(--font-size-md);
+  font-weight: var(--font-weight-bold);
+  margin: 0;
+}
+
+.closeButton {
+  background: transparent;
+  border: none;
+  color: var(--text-muted);
+  cursor: pointer;
+  padding: 4px;
+  border-radius: var(--radius-sm);
+  display: inline-flex;
+}
+
+.closeButton:hover {
+  background: rgba(255, 255, 255, 0.06);
+  color: var(--text-primary);
+}
+
+.tabs {
+  display: flex;
+  gap: 0;
+  padding: 0 var(--space-4);
+  border-bottom: 1px solid var(--border-subtle);
+  flex-shrink: 0;
+}
+
+.tab {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  background: transparent;
+  border: none;
+  border-bottom: 2px solid transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+  padding: 10px 14px;
+  font-size: var(--font-size-sm);
+  transition: all var(--transition-fast);
+  /* Negative margin so the active border lines up with the bottom of
+     the tabs row (overlapping the parent's border-bottom). */
+  margin-bottom: -1px;
+}
+
+.tab:hover {
+  color: var(--text-secondary);
+}
+
+.tabActive {
+  color: var(--accent-primary);
+  border-bottom-color: var(--accent-primary);
+}
+
+.body {
+  flex: 1;
+  overflow-y: auto;
+  padding: var(--space-4);
+  min-height: 0;
+}
+
+.keysTab {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+/* ---- Single-key + multi-key shared shell --------------------------------- */
+
+.keySection {
+  background: rgba(255, 255, 255, 0.02);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  padding: var(--space-3);
+}
+
+.keySectionHeader {
+  display: grid;
+  grid-template-columns: 1fr auto auto;
+  align-items: center;
+  gap: var(--space-3);
+  margin-bottom: var(--space-2);
+}
+
+.keySectionTitle {
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-medium);
+  margin: 0;
+  color: var(--text-primary);
+}
+
+.keySectionStatus {
+  font-size: var(--font-size-xs);
+}
+
+.keySectionActions {
+  display: inline-flex;
+  gap: 4px;
+}
+
+.statusOk {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  color: var(--accent-success);
+}
+
+.statusMuted {
+  color: var(--text-muted);
+}
+
+.smallButton {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  background: transparent;
+  border: 1px solid var(--border-strong);
+  color: var(--text-secondary);
+  padding: 4px 10px;
+  font-size: var(--font-size-xs);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  transition: all var(--transition-fast);
+}
+
+.smallButton:hover:not(:disabled) {
+  background: rgba(255, 255, 255, 0.04);
+  color: var(--text-primary);
+  border-color: var(--text-secondary);
+}
+
+.smallButton:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.smallButtonDanger {
+  color: var(--accent-danger);
+  border-color: rgba(239, 68, 68, 0.4);
+}
+
+.smallButtonDanger:hover:not(:disabled) {
+  background: rgba(239, 68, 68, 0.08);
+  border-color: var(--accent-danger);
+}
+
+.editRow {
+  display: flex;
+  gap: 6px;
+  margin: var(--space-2) 0;
+}
+
+.input {
+  flex: 1;
+  background: rgba(0, 0, 0, 0.3);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  color: var(--text-primary);
+  padding: 6px 10px;
+  font-size: var(--font-size-sm);
+  outline: none;
+  font-family: inherit;
+}
+
+.input:focus {
+  border-color: var(--accent-primary);
+}
+
+.primaryButton {
+  background: var(--accent-primary);
+  color: white;
+  border: none;
+  padding: 6px 14px;
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-medium);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+}
+
+.primaryButton:hover:not(:disabled) {
+  background: var(--accent-primary-hover);
+}
+
+.primaryButton:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.help {
+  font-size: var(--font-size-xs);
+  color: var(--text-muted);
+  line-height: 1.5;
+  margin-top: 4px;
+}
+
+.help a {
+  color: var(--accent-primary);
+  text-decoration: none;
+}
+.help a:hover {
+  text-decoration: underline;
+}
+
+.error {
+  margin-top: 8px;
+  background: rgba(239, 68, 68, 0.08);
+  border-left: 2px solid var(--accent-danger);
+  border-radius: var(--radius-sm);
+  padding: 6px 10px;
+  color: var(--accent-danger);
+  font-size: var(--font-size-xs);
+}
+
+.successInline {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin-top: 6px;
+  font-size: var(--font-size-xs);
+  color: var(--accent-success);
+}
+
+/* ---- YouTube quota panel ------------------------------------------------- */
+
+.quotaPanel {
+  background: rgba(99, 102, 241, 0.06);
+  border: 1px solid rgba(99, 102, 241, 0.2);
+  border-radius: var(--radius-sm);
+  padding: 8px 12px;
+  margin: 8px 0;
+}
+
+.quotaSummary {
+  font-size: var(--font-size-xs);
+  color: var(--text-secondary);
+  margin-bottom: 8px;
+}
+
+.quotaTotal {
+  font-variant-numeric: tabular-nums;
+  font-weight: var(--font-weight-bold);
+  color: var(--text-primary);
+}
+
+.quotaBars {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.quotaBarRow {
+  display: grid;
+  grid-template-columns: 60px 1fr 110px;
+  align-items: center;
+  gap: 8px;
+  font-size: 11px;
+}
+
+.quotaBarLabel {
+  color: var(--text-muted);
+}
+
+.quotaBar {
+  height: 4px;
+  background: rgba(255, 255, 255, 0.06);
+  border-radius: 999px;
+  overflow: hidden;
+}
+
+.quotaBarFill {
+  height: 100%;
+  background: var(--accent-primary);
+  transition: width 200ms ease-out;
+}
+
+.quotaBarValue {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  color: var(--text-secondary);
+}
+
+/* ---- Multi-key editor ---------------------------------------------------- */
+
+.multiKeyEditor {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 8px 0;
+}
+
+.multiKeyRow {
+  display: flex;
+  gap: 6px;
+}
+
+.multiKeyActions {
+  display: flex;
+  gap: 8px;
+  margin-top: 4px;
+}

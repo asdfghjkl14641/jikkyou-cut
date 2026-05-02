@@ -33,6 +33,14 @@ export function buildMenu(getMainWindow: () => BrowserWindow | null) {
         },
       ],
     },
+    {
+      // Top-level entry (not a submenu) so it surfaces directly in the
+      // menu bar — matches the spec's request for prominence next to
+      // ファイル / 操作.
+      label: 'API 管理',
+      accelerator: 'CmdOrCtrl+Shift+A',
+      click: send('menu:openApiManagement'),
+    },
   ];
   Menu.setApplicationMenu(Menu.buildFromTemplate(template));
 }

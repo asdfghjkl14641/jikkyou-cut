@@ -1,4 +1,7 @@
 import { app, BrowserWindow, ipcMain, shell, nativeTheme } from 'electron';
+import { readCollectionLog } from './dataCollection/logReader';
+import { collectionLogPath } from './dataCollection/logger';
+import { getQuotaPerKeyToday } from './dataCollection/database';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 import { registerMediaScheme, handleMediaProtocol } from './mediaProtocol';
@@ -246,6 +249,15 @@ function registerIpcHandlers() {
   ipcMain.handle('dataCollection:triggerNow', () => dataCollectionManager.triggerNow());
   ipcMain.handle('dataCollection:pause', () => dataCollectionManager.pause());
   ipcMain.handle('dataCollection:resume', () => dataCollectionManager.resume());
+
+  // Collection log viewer.
+  ipcMain.handle('collectionLog:read', (_e, limit?: number) =>
+    readCollectionLog(typeof limit === 'number' ? limit : 5000),
+  );
+  ipcMain.handle('collectionLog:openInExplorer', () => {
+    void shell.openPath(collectionLogPath());
+  });
+  ipcMain.handle('collectionLog:getQuotaPerKey', () => getQuotaPerKeyToday());
 
   // 1-button auto-extract: peak detection → AI refine → title generation.
   // Owns its own progress channel ('aiSummary:autoExtractProgress') so the

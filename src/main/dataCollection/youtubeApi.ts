@@ -1,5 +1,6 @@
 import { loadYoutubeApiKeys } from '../secureStorage';
 import { getQuotaUsedToday, logQuotaUsage } from './database';
+import { logError, logInfo, logWarn } from './logger';
 
 // YouTube Data API v3 client + key rotation. Quota tracking lives in
 // the SQLite api_quota_log table (per key, per day) so a process
@@ -87,7 +88,7 @@ async function callApi<T>(
 ): Promise<T | null> {
   const pick = await rotator.pickKey(estimatedCost);
   if (!pick) {
-    console.warn('[data-collection] no API key with quota available');
+    logWarn('no API key with quota available — batch will produce 0 results');
     return null;
   }
   const url = `https://www.googleapis.com/youtube/v3/${pathAndQuery}&key=${encodeURIComponent(pick.key)}`;
@@ -100,7 +101,7 @@ async function callApi<T>(
     if (res.status === 403 || res.status === 401) {
       // 403 includes both "quota exceeded" and "key forbidden". Either
       // way, mute this key for the rest of the day.
-      console.warn(`[data-collection] key #${pick.index} disabled (HTTP ${res.status})`);
+      logError(`key #${pick.index} disabled (HTTP ${res.status} — quota or auth)`);
       rotator.markDailyDisabled(pick.index);
       // Charge half the cost as a punishment / approximation; YouTube
       // does subtract some quota for failed requests too.
@@ -108,13 +109,17 @@ async function callApi<T>(
       return null;
     }
     const body = await res.text().catch(() => '');
-    console.warn(`[data-collection] API HTTP ${res.status}:`, body.slice(0, 200));
+    logWarn(`API HTTP ${res.status}: ${body.slice(0, 200)}`);
     return null;
   } catch (err) {
-    console.warn('[data-collection] API call failed:', err);
+    logWarn(`API call failed: ${err instanceof Error ? err.message : String(err)}`);
     return null;
   }
 }
+
+// Suppress lint warning about logInfo not being used here yet — reserved
+// for future per-call success logs once we want that level of detail.
+void logInfo;
 
 // Removes the API key from any string before logging — defence-in-
 // depth in case the key leaks into an error path.

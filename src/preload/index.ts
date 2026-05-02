@@ -25,6 +25,7 @@ const api: IpcApi = {
   onMenuOpenFile: onChannel('menu:openFile'),
   onMenuOpenSettings: onChannel('menu:openSettings'),
   onMenuOpenOperations: onChannel('menu:openOperations'),
+  onMenuOpenApiManagement: onChannel('menu:openApiManagement'),
 
   getSettings: () => ipcRenderer.invoke('settings:get'),
   saveSettings: (partial) => ipcRenderer.invoke('settings:save', partial),
@@ -169,6 +170,12 @@ const api: IpcApi = {
     list: () => ipcRenderer.invoke('creators:list'),
     add: (name, channelId) => ipcRenderer.invoke('creators:add', name, channelId),
     remove: (name) => ipcRenderer.invoke('creators:remove', name),
+  },
+
+  collectionLog: {
+    read: (limit) => ipcRenderer.invoke('collectionLog:read', limit),
+    openInExplorer: () => ipcRenderer.invoke('collectionLog:openInExplorer'),
+    getQuotaPerKey: () => ipcRenderer.invoke('collectionLog:getQuotaPerKey'),
   },
 };
 

@@ -15,6 +15,32 @@
 
 ---
 
+## 2026-05-03 01:00 - 「API 管理」専用画面の新設(全 API キー統合 + ログビューア)
+
+- 誰が: Claude Code
+- 何を: トップメニューに「API 管理」+ `Ctrl+Shift+A` 追加。専用ダイアログ `ApiManagementDialog.tsx` を新設し、Gladia + Anthropic + YouTube(複数)の API キーを **タブ式で統合管理**。同ダイアログの 2 つ目のタブとして `CollectionLogViewer.tsx` を新設、データ収集ログを GUI 上で時系列表示・レベル別フィルタ・エラー赤色強調・5 秒間隔自動更新できる
+  - `src/main/dataCollection/logger.ts`(新規):`logInfo` / `logWarn` / `logError` を ISO 8601 `[LEVEL] message` 形式で `userData/data-collection/collection.log` に append、コンソールにもエコー。append は単一 promise chain で sequenced(Windows での torn line 防止)
+  - `src/main/dataCollection/logReader.ts`(新規):末尾 N 行読み出し + 正規表現パース。canonical フォーマット以外の legacy line は INFO で吸収
+  - `database.ts` に `getQuotaPerKeyToday()` 追加(API 管理 UI のキー別バー表示用)
+  - 既存の `console.log/warn` を 6 ファイル分すべて `logger` 経由にリファクタ(`dataCollection/index.ts` / `youtubeApi.ts` / `ytDlpExtractor.ts`)
+  - `menu.ts`:トップレベル「API 管理」項目(submenu なし、accelerator `CmdOrCtrl+Shift+A`)
+  - IPC:`collectionLog.{read, openInExplorer, getQuotaPerKey}` + `onMenuOpenApiManagement`
+  - `ApiManagementDialog.tsx`:タブ式(API キー / 収集ログ)、各 API は **Edit ボタンで inline 展開**(モーダル on モーダル避ける)、削除は `window.confirm` で誤操作防止、YouTube は per-key クォータバー(5 秒 polling)
+  - `CollectionLogViewer.tsx`:虚スクロール(ROW_HEIGHT 26 / BUFFER_ROWS 12)、All / INFO / WARN / ERROR フィルタ + 件数バッジ、自動更新トグル、stick-to-bottom(20px 以内なら追従、上にスクロールしたら止まる)、`shell.openPath` でファイルを OS エディタで開く
+  - `SettingsDialog.tsx` を簡素化:Gladia / Anthropic キー入力を完全削除、`DataCollectionSettings` の YouTube キー部分も削除(ApiManagementDialog に移植)。代わりに「API 管理画面を開く」ハンドオフボタン
+  - `DataCollectionSettings.tsx` は配信者リスト + ステータスパネル + 手動トリガーのみに整理
+  - `App.tsx`:`ApiManagementDialog` を新規 render、`onMenuOpenApiManagement` listener、`SettingsDialog` の props 簡素化(`onOpenApiManagement` 1 つのコールバックに集約)
+- 理由: API キー数が増えて Settings の中に埋もれてた + データ収集ログを毎回エディタで開くのが面倒。専用画面に集約 + アプリ内で完結する動線。配信を 1 週間放置して蓄積する前段階として、ログを GUI で追える状態に
+- 開放されている設計判断:
+  - ログのリアルタイム push(現状 5 秒 polling)
+  - ログのエクスポート機能(CSV / JSON)
+  - ログローテーション(現状は append-only、長期で 100MB 超想定)
+  - 自動キーローテーション以上の高度なキー管理
+  - 単一キー編集を別モーダルで開く案(現状は inline 展開、画面遷移は減らす方向)
+- 影響: src/main/menu.ts(トップレベル項目追加)、src/main/dataCollection/{logger.ts, logReader.ts}(新規)、src/main/dataCollection/{index.ts, youtubeApi.ts, ytDlpExtractor.ts, database.ts}(リファクタ)、src/main/index.ts(IPC + import)、src/preload/index.ts、src/common/types.ts、src/renderer/src/components/{ApiManagementDialog,CollectionLogViewer,SettingsDialog,DataCollectionSettings}.{tsx,module.css}、src/renderer/src/App.tsx
+- ⚠️ 実機検証はユーザ環境で必要(メニュー出現確認 / API キー登録 / ログビューアの実データ表示 / ファイルを開くボタン)
+- コミット: (未定)
+
 ## 2026-05-02 23:30 - 切り抜き動画データ収集パイプライン Phase 1(蓄積基盤)
 
 - 誰が: Claude Code

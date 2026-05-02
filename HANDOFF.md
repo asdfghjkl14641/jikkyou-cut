@@ -46,6 +46,7 @@ Electron + React + TypeScript 製。**現在は配布前の "自分用ツール"
 - **AI タイトル要約**: 完了 (Anthropic BYOK、Claude Haiku 4.5、3 並列 + キャッシュ、Settings UI と ClipSegmentsList ボタン)
 - **切り抜き候補の自動抽出**: 完了 (アルゴリズム peak 検出 + AI 精査 + タイトル生成を 1 ボタンで一気通貫、ClipSelectView ヘッダの ✨ ボタン)
 - **データ収集パイプライン Phase 1**: 完了 (better-sqlite3 + YouTube Data API + yt-dlp で切り抜き動画蓄積、Settings UI、1 時間ごとバックグラウンド収集)
+- **「API 管理」専用画面**: 完了 (メニューバー直配置 + Ctrl+Shift+A、Gladia/Anthropic/YouTube 統合、CollectionLogViewer で収集ログ GUI 表示)
 
 ### 次フェーズ
 - **進行中**: コメント分析画面 (バックエンド実装待ち) — 詳細は `docs/COMMENT_ANALYSIS_DESIGN.md`
@@ -120,11 +121,13 @@ jikkyou-cut/
     │   ├── commentAnalysis/   # コメント分析オーケストレータ + 実装(peakDetection.ts も含む)
     │   └── dataCollection/    # 切り抜き動画データ収集 Phase 1(SQLite + YouTube API + yt-dlp)
     │       ├── index.ts       # DataCollectionManager(バックグラウンド 1 時間ループ)
-    │       ├── database.ts    # better-sqlite3 ラッパ + スキーマ + upsert
+    │       ├── database.ts    # better-sqlite3 ラッパ + スキーマ + upsert + per-key クォータ
     │       ├── youtubeApi.ts  # search.list / videos.list + キーローテーション + クォータ管理
     │       ├── ytDlpExtractor.ts # heatmap + chapters + サムネ + 上位 3 ピーク抽出
     │       ├── searchQueries.ts  # ブロード検索クエリ + per-creator クエリ生成
-    │       └── creatorList.ts # userData/data-collection/creators.json の CRUD
+    │       ├── creatorList.ts # userData/data-collection/creators.json の CRUD
+    │       ├── logger.ts      # ISO 8601 [LEVEL] message 形式の append + console echo
+    │       └── logReader.ts   # collection.log の末尾 N 行読み出し + パース
     │       ├── index.ts       # analyze({chat→viewers→scoring})オーケストレータ
     │       ├── chatReplay.ts  # yt-dlp で live_chat / rechat を取得 + パース
     │       ├── viewerStats.ts # playboard.co スクレイピング(ヒューリスティック)
@@ -211,6 +214,7 @@ type EditorState = {
 - `youtubeApiKeys.{hasKeys, getKeyCount, setKeys, clear}` — YouTube Data API キー BYOK(複数、最大 10 個)。`userData/youtubeApiKeys.bin` に DPAPI 暗号化保存。**renderer には件数だけ返し、生キーは戻さない**(Gladia / Anthropic と同パターン)
 - `creators.{list, add, remove}` — 配信者ターゲットリスト。`userData/data-collection/creators.json` の JSON CRUD。Settings UI から編集 + 手動編集どちらも可能
 - `dataCollection.{getStats, triggerNow, pause, resume}` — Phase 1 蓄積パイプラインのコントロール。`getStats` は `{videoCount, creatorCount, quotaUsedToday, isRunning, lastCollectedAt}` を返す。`app.whenReady()` で `dataCollectionManager.start()` を呼ぶが、API キー未設定なら no-op。設定済みなら 5 秒後に最初のバッチ → 1 時間ごとに継続
+- `collectionLog.{read, openInExplorer, getQuotaPerKey}` — 収集ログビューア用。`read(limit)` で末尾 N 行(デフォルト 5000)を `LogEntry[]`(`{timestamp, level, message}`)で返す。`openInExplorer` は `shell.openPath` で OS デフォルトエディタ。`getQuotaPerKey` は per-key の今日の消費量を返す(API 管理画面のキー別バー用)
 
 ---
 

@@ -10,6 +10,7 @@ import VideoPlayer, {
 import ApiKeySetupBanner from './components/ApiKeySetupBanner';
 import RestoreBanner from './components/RestoreBanner';
 import SettingsDialog from './components/SettingsDialog';
+import ApiManagementDialog from './components/ApiManagementDialog';
 import { OperationsDialog } from './components/OperationsDialog';
 import TranscribeButton from './components/TranscribeButton';
 import EditableTranscriptList from './components/EditableTranscriptList';
@@ -54,6 +55,7 @@ export default function App() {
     clearAnthropicApiKey,
   } = useSettings();
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [apiMgmtOpen, setApiMgmtOpen] = useState(false);
   const [operationsOpen, setOperationsOpen] = useState(false);
   const [subtitleSettingsOpen, setSubtitleSettingsOpen] = useState(false);
   const [tosOpen, setTosOpen] = useState(false);
@@ -163,6 +165,11 @@ export default function App() {
 
   useEffect(
     () => window.api.onMenuOpenOperations?.(() => setOperationsOpen(true)),
+    [],
+  );
+
+  useEffect(
+    () => window.api.onMenuOpenApiManagement?.(() => setApiMgmtOpen(true)),
     [],
   );
   
@@ -380,15 +387,22 @@ export default function App() {
       {view && (
         <SettingsDialog
           open={settingsOpen}
-          hasApiKey={view.hasApiKey}
-          hasAnthropicApiKey={view.hasAnthropicApiKey}
           onClose={() => setSettingsOpen(false)}
-          onValidateApiKey={validateApiKey}
-          onSaveApiKey={setApiKey}
-          onClearApiKey={clearApiKey}
-          onValidateAnthropicApiKey={validateAnthropicApiKey}
-          onSaveAnthropicApiKey={setAnthropicApiKey}
-          onClearAnthropicApiKey={clearAnthropicApiKey}
+          onOpenApiManagement={() => setApiMgmtOpen(true)}
+        />
+      )}
+      {view && (
+        <ApiManagementDialog
+          open={apiMgmtOpen}
+          onClose={() => setApiMgmtOpen(false)}
+          hasGladia={view.hasApiKey}
+          hasAnthropic={view.hasAnthropicApiKey}
+          onValidateGladia={validateApiKey}
+          onSaveGladia={setApiKey}
+          onClearGladia={clearApiKey}
+          onValidateAnthropic={validateAnthropicApiKey}
+          onSaveAnthropic={setAnthropicApiKey}
+          onClearAnthropic={clearAnthropicApiKey}
         />
       )}
       <OperationsDialog
