@@ -58,6 +58,23 @@ export function diagnoseDataCollection(): void {
     // eslint-disable-next-line no-console
     console.log('[diag] Q3 by creator_group:', byGroup);
 
+    // Q3b: list NULL-group creator names for diagnosis. After
+    // reseedGroupsForExistingCreators runs, this should be empty for
+    // any name appearing in SEED_CREATORS. Stragglers (likely
+    // user-added via Settings UI) stay null until manually grouped.
+    const nullGroupNames = db.prepare(`
+      SELECT id, name, is_target, channel_id, created_at
+      FROM creators
+      WHERE creator_group IS NULL
+      ORDER BY id
+    `).all();
+    // eslint-disable-next-line no-console
+    console.log('[diag] Q3b NULL group creators:', nullGroupNames.length, 'rows');
+    for (const r of nullGroupNames as Array<{ id: number; name: string; is_target: number; channel_id: string | null; created_at: string }>) {
+      // eslint-disable-next-line no-console
+      console.log(`  id=${r.id} target=${r.is_target} name="${r.name}" channel_id=${r.channel_id ?? '(null)'} created=${r.created_at}`);
+    }
+
     // Q4: by is_target (seed=1, auto-add=0)
     const byTarget = db.prepare(`
       SELECT is_target, COUNT(*) AS cnt
@@ -182,9 +199,44 @@ export function diagnoseDataCollection(): void {
       const userVersion = db.pragma('user_version', { simple: true }) as number;
       // eslint-disable-next-line no-console
       console.log('[diag] Q14 user_version:', userVersion);
+
+      // Q15-Q17: recent-activity sanity checks. After "1 回だけ取得"
+      // these reveal whether the new batch correctly routes broad-
+      // search hits to uploaders (Q16 should grow) and NOT to
+      // creators (Q17 must stay 0 — any non-zero value means the
+      // broad-search auto-add regression is back).
+
+      const recentVideos = db.prepare(`
+        SELECT
+          SUM(CASE WHEN creator_id IS NOT NULL THEN 1 ELSE 0 END) AS with_creator,
+          SUM(CASE WHEN uploader_id IS NOT NULL THEN 1 ELSE 0 END) AS with_uploader,
+          COUNT(*) AS total
+        FROM videos
+        WHERE collected_at > datetime('now', '-1 hour')
+      `).get() as { with_creator: number | null; with_uploader: number | null; total: number };
+      // eslint-disable-next-line no-console
+      console.log(
+        '[diag] Q15 videos collected in last 1h:',
+        `total=${recentVideos.total}`,
+        `with_creator=${recentVideos.with_creator ?? 0}`,
+        `with_uploader=${recentVideos.with_uploader ?? 0}`,
+      );
+
+      const recentUploaders = db.prepare(`
+        SELECT COUNT(*) AS n FROM uploaders WHERE first_seen_at > datetime('now', '-1 hour')
+      `).get() as { n: number };
+      // eslint-disable-next-line no-console
+      console.log('[diag] Q16 new uploaders in last 1h:', recentUploaders.n);
+
+      const recentCreators = db.prepare(`
+        SELECT COUNT(*) AS n FROM creators WHERE created_at > datetime('now', '-1 hour')
+      `).get() as { n: number };
+      const regression = recentCreators.n > 0 ? ' ⚠ AUTO-ADD REGRESSION SUSPECTED' : '';
+      // eslint-disable-next-line no-console
+      console.log(`[diag] Q17 new creators in last 1h: ${recentCreators.n} (expected 0)${regression}`);
     } else {
       // eslint-disable-next-line no-console
-      console.log('[diag] Q10-Q14 skipped (uploaders table does not exist — migration 001 has not run)');
+      console.log('[diag] Q10-Q17 skipped (uploaders table does not exist — migration 001 has not run)');
     }
 
     // eslint-disable-next-line no-console

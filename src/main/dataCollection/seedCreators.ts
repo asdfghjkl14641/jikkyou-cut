@@ -1,5 +1,5 @@
 import { loadCreatorList, saveCreatorList, type CreatorEntry } from './creatorList';
-import { setCreatorGroupIfNull, upsertCreator } from './database';
+import { openDb, setCreatorGroupIfNull, upsertCreator } from './database';
 import { searchChannelByName } from './youtubeApi';
 import { logInfo, logWarn } from './logger';
 
@@ -130,12 +130,10 @@ export async function seedOrUpdateCreators(): Promise<void> {
   }
 
   const toAdd = SEED_CREATORS.filter((c) => !existingByName.has(c.name));
+
   if (toAdd.length === 0 && backfilled === 0) {
     logInfo(`creators already populated (${existing.length}) — no seed delta`);
-    return;
-  }
-
-  if (toAdd.length > 0) {
+  } else if (toAdd.length > 0) {
     logInfo(
       `seed delta: +${toAdd.length} new creators ` +
         `(was ${existing.length}, now ${existing.length + toAdd.length})` +
@@ -144,12 +142,55 @@ export async function seedOrUpdateCreators(): Promise<void> {
     for (const c of toAdd) {
       upsertCreator(c.name, c.channelId, true, c.group);
     }
-  } else {
+    const merged: CreatorEntry[] = [...existing, ...toAdd];
+    await saveCreatorList(merged);
+  } else if (backfilled > 0) {
     logInfo(`seed delta: backfilled group on ${backfilled} existing creators`);
+    await saveCreatorList(existing);
   }
 
-  const merged: CreatorEntry[] = [...existing, ...toAdd];
-  await saveCreatorList(merged);
+  // Last-mile DB consistency check — runs unconditionally each
+  // startup. Even if creators.json claims everything is in sync, the
+  // DB may have rows whose group drifted (e.g., a per-creator-search
+  // insert that ran the legacy 3-arg upsertCreator path before the
+  // seed step). This sweep forces every seed name's DB row to match
+  // the literal SEED_CREATORS group. No-op when already consistent.
+  const reseeded = reseedGroupsForExistingCreators();
+  if (reseeded > 0) {
+    logInfo(`reseed: corrected creator_group on ${reseeded} existing creator(s)`);
+  }
+}
+
+// Force-update creator_group for any existing DB row whose name
+// matches a SEED_CREATORS entry but whose group is null or differs
+// from the literal seed group. Returns number of rows changed. Safe
+// to call repeatedly (no-op when everything's already in sync).
+//
+// Why this exists: per-creator search hits previously called the
+// 3-arg `upsertCreator(name, channelId, isTarget)` path which left
+// `creator_group` at the column default (NULL) when the row had to be
+// inserted (= seed step hadn't yet populated the DB row, e.g. after
+// an inconsistent state between creators.json and the DB). This
+// sweep is the canonical source-of-truth alignment.
+export function reseedGroupsForExistingCreators(): number {
+  const conn = openDb();
+  const stmt = conn.prepare(
+    `UPDATE creators
+       SET creator_group = ?
+     WHERE name = ?
+       AND (creator_group IS NULL OR creator_group != ?)
+       AND is_target = 1`,
+  );
+  let total = 0;
+  for (const seed of SEED_CREATORS) {
+    if (!seed.group) continue;
+    const result = stmt.run(seed.group, seed.name, seed.group);
+    if (result.changes > 0) {
+      logInfo(`reseed group: "${seed.name}" → ${seed.group}`);
+      total += result.changes;
+    }
+  }
+  return total;
 }
 
 // Fill in `channelId` for any creator that is still null. Called at
