@@ -509,11 +509,17 @@ export type IpcApi = {
       // keys / not started). Used by the Settings UI to show
       // 🟢 実行中 / ⏸ 停止中 / ⚫ 未起動 separately.
       isPaused: boolean;
+      // Persisted master switch — survives app restart. Distinct
+      // from isRunning/isPaused (which are session-only). When
+      // false, auto-start at app launch is skipped.
+      isEnabled: boolean;
       lastCollectedAt: string | null;
     }>;
     triggerNow: () => Promise<void>;
     pause: () => Promise<void>;
     resume: () => Promise<void>;
+    isEnabled: () => Promise<boolean>;
+    setEnabled: (enabled: boolean) => Promise<void>;
   };
   youtubeApiKeys: {
     hasKeys: () => Promise<boolean>;

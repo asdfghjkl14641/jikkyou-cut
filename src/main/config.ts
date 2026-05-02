@@ -60,6 +60,11 @@ export async function loadConfig(): Promise<AppConfig> {
       lastDownloadUrl: typeof parsed['lastDownloadUrl'] === 'string'
         ? (parsed['lastDownloadUrl'] as string)
         : null,
+      // Pre-flag configs lack the field — fall back to false so existing
+      // installs do not silently begin consuming YouTube quota.
+      dataCollectionEnabled: typeof parsed['dataCollectionEnabled'] === 'boolean'
+        ? (parsed['dataCollectionEnabled'] as boolean)
+        : DEFAULT_CONFIG.dataCollectionEnabled,
     };
   } catch {
     return {
@@ -105,6 +110,10 @@ export async function saveConfig(
       partial.lastDownloadUrl !== undefined
         ? partial.lastDownloadUrl
         : current.lastDownloadUrl,
+    dataCollectionEnabled:
+      partial.dataCollectionEnabled !== undefined
+        ? partial.dataCollectionEnabled
+        : current.dataCollectionEnabled,
   };
   const p = getConfigPath();
   await fs.mkdir(path.dirname(p), { recursive: true });

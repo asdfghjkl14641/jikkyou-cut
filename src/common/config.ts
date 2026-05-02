@@ -34,6 +34,12 @@ export type AppConfig = {
   // next launch. Prototype-stage convenience — the user said they got tired
   // of pasting the same link repeatedly while testing.
   lastDownloadUrl: string | null;
+  // Background data-collection master switch. Persisted across restarts.
+  // Default `false` so installing the app does NOT start consuming
+  // YouTube quota until the user explicitly opts in via the Settings
+  // toggle — search-query strategy is still being decided when this
+  // flag was added.
+  dataCollectionEnabled: boolean;
 };
 
 export const DEFAULT_CONFIG: AppConfig = {
@@ -44,4 +50,5 @@ export const DEFAULT_CONFIG: AppConfig = {
   defaultDownloadDir: null,
   defaultDownloadQuality: 'best',
   lastDownloadUrl: null,
+  dataCollectionEnabled: false,
 };

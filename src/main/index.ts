@@ -249,10 +249,31 @@ function registerIpcHandlers() {
   ipcMain.handle('creators:remove', (_e, name: string) => creatorList.removeCreator(name));
 
   // Data-collection manager (background pipeline).
-  ipcMain.handle('dataCollection:getStats', () => dataCollectionManager.getStatsSnapshot());
+  ipcMain.handle('dataCollection:getStats', async () => {
+    const snap = dataCollectionManager.getStatsSnapshot();
+    const cfg = await loadConfig();
+    return { ...snap, isEnabled: cfg.dataCollectionEnabled };
+  });
   ipcMain.handle('dataCollection:triggerNow', () => dataCollectionManager.triggerNow());
   ipcMain.handle('dataCollection:pause', () => dataCollectionManager.pause());
   ipcMain.handle('dataCollection:resume', () => dataCollectionManager.resume());
+  ipcMain.handle('dataCollection:isEnabled', async () => {
+    const cfg = await loadConfig();
+    return cfg.dataCollectionEnabled;
+  });
+  ipcMain.handle('dataCollection:setEnabled', async (_e, enabled: boolean) => {
+    await saveConfig({ dataCollectionEnabled: enabled });
+    if (enabled) {
+      // Best-effort start. start() is a no-op if no API keys exist,
+      // so the toggle still works for users who haven't entered keys
+      // yet — they'll just see "未起動" until they configure keys.
+      await dataCollectionManager.start();
+    } else {
+      // Stop the in-flight cycle so the user's "off" intent takes
+      // effect immediately instead of after the current batch.
+      dataCollectionManager.pause();
+    }
+  });
 
   // Collection log viewer.
   ipcMain.handle('collectionLog:read', (_e, limit?: number) =>
@@ -277,18 +298,24 @@ function registerIpcHandlers() {
   );
 }
 
-app.whenReady().then(() => {
+app.whenReady().then(async () => {
   nativeTheme.themeSource = 'dark';
   handleMediaProtocol();
   buildMenu(() => mainWindow);
   registerIpcHandlers();
   createWindow();
 
-  // Background data-collection. start() is a no-op if no API keys are
-  // configured, so it's safe to call unconditionally. The manager
-  // delays the first batch by ~5 s internally so it doesn't compete
-  // with window-open / IPC-handler-registration / etc.
-  void dataCollectionManager.start();
+  // Background data-collection. Gated by the persisted master switch
+  // so a fresh install does NOT start consuming quota until the user
+  // explicitly opts in. The manager itself also no-ops without keys,
+  // but checking the flag here keeps logs honest about *why* nothing
+  // is running.
+  const cfg = await loadConfig();
+  if (cfg.dataCollectionEnabled) {
+    void dataCollectionManager.start();
+  } else {
+    console.log('[data-collection] auto-start skipped (dataCollectionEnabled=false)');
+  }
 
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow();

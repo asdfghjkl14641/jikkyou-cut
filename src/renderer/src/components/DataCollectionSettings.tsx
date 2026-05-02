@@ -18,6 +18,7 @@ type Stats = {
   quotaUsedToday: number;
   isRunning: boolean;
   isPaused: boolean;
+  isEnabled: boolean;
   lastCollectedAt: string | null;
 };
 
@@ -83,6 +84,29 @@ export default function DataCollectionSettings() {
     setBusy(true);
     try {
       await window.api.dataCollection.triggerNow();
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  // Persistent master switch — separate axis from pause/resume.
+  // Enabling shows a confirm so the user understands quota will start
+  // ticking; disabling needs no confirm (it's the safer direction).
+  const handleToggleEnabled = async () => {
+    if (!stats) return;
+    if (!stats.isEnabled) {
+      const ok = window.confirm(
+        'データ収集を有効化します。\n\n' +
+          'バックグラウンドで自動的に YouTube Data API を消費する収集が開始されます。\n' +
+          '検索クエリ戦略を確定してから有効化することを推奨します。\n\n' +
+          'よろしいですか?',
+      );
+      if (!ok) return;
+    }
+    setBusy(true);
+    try {
+      await window.api.dataCollection.setEnabled(!stats.isEnabled);
+      setStats(await window.api.dataCollection.getStats());
     } finally {
       setBusy(false);
     }
@@ -155,15 +179,25 @@ export default function DataCollectionSettings() {
           </span>
         </div>
         <div>
+          <span style={{ color: 'var(--text-muted)' }}>自動収集</span>:&nbsp;
+          {stats?.isEnabled ? (
+            <span style={{ color: 'var(--accent-success)' }}>🟢 有効</span>
+          ) : (
+            <span style={{ color: 'var(--accent-danger, #ef4444)' }}>🔴 無効</span>
+          )}
+        </div>
+        <div>
           <span style={{ color: 'var(--text-muted)' }}>状態</span>:&nbsp;
           {(() => {
-            // 3 visible states. isRunning / isPaused are mutually
-            // exclusive in the manager; the "no keys" idle case is
-            // distinguished from "user-paused via button" here.
-            if (stats?.isRunning) {
+            // Visible states. isEnabled is the persistent master switch;
+            // isRunning / isPaused live within an enabled session.
+            if (!stats?.isEnabled) {
+              return <span style={{ color: 'var(--text-muted)' }}>⚫ 停止中(自動収集無効)</span>;
+            }
+            if (stats.isRunning) {
               return <span style={{ color: 'var(--accent-success)' }}>🟢 実行中</span>;
             }
-            if (stats?.isPaused) {
+            if (stats.isPaused) {
               return <span style={{ color: 'var(--accent-warning)' }}>⏸ 一時停止中</span>;
             }
             if (keyCount === 0) {
@@ -178,37 +212,52 @@ export default function DataCollectionSettings() {
         </div>
       </div>
 
-      <div style={{ display: 'flex', gap: 8, marginTop: 8 }}>
+      <div style={{ display: 'flex', gap: 8, marginTop: 8, flexWrap: 'wrap' }}>
         <button
           type="button"
-          className={styles.saveButton}
+          className={stats?.isEnabled ? styles.cancelButton : styles.saveButton}
+          onClick={handleToggleEnabled}
+          disabled={busy || !stats}
+          title={
+            stats?.isEnabled
+              ? '自動収集を無効化(進行中バッチ停止 + 再起動後も自動開始しない)'
+              : '自動収集を有効化(バックグラウンドで定期収集を開始 + 再起動後も自動開始)'
+          }
+          style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}
+        >
+          {stats?.isEnabled ? <Pause size={12} /> : <Play size={12} />}
+          {stats?.isEnabled ? '無効化する' : '有効化する'}
+        </button>
+        <button
+          type="button"
+          className={styles.cancelButton}
           onClick={handleTriggerNow}
-          disabled={busy || keyCount === 0}
-          title={keyCount === 0 ? '先に API 管理画面で YouTube キーを登録してください' : '今すぐ 1 バッチ実行'}
+          disabled={busy || keyCount === 0 || !stats?.isEnabled}
+          title={
+            !stats?.isEnabled
+              ? 'データ収集を先に有効化してください'
+              : keyCount === 0
+              ? '先に API 管理画面で YouTube キーを登録してください'
+              : '今すぐ 1 バッチ実行'
+          }
           style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}
         >
           <Play size={12} />
           今すぐ実行
         </button>
-        <button
-          type="button"
-          className={styles.cancelButton}
-          onClick={handleToggleCollection}
-          disabled={busy || keyCount === 0}
-          title={
-            keyCount === 0
-              ? '先に API 管理画面で YouTube キーを登録してください'
-              : stats?.isRunning
-              ? 'バックグラウンド収集を一時停止'
-              : stats?.isPaused
-              ? 'バックグラウンド収集を再開'
-              : 'バックグラウンド収集を開始'
-          }
-          style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}
-        >
-          {stats?.isRunning ? <Pause size={12} /> : <Play size={12} />}
-          {stats?.isRunning ? '停止' : stats?.isPaused ? '再開' : '開始'}
-        </button>
+        {stats?.isEnabled && (stats.isRunning || stats.isPaused) && (
+          <button
+            type="button"
+            className={styles.cancelButton}
+            onClick={handleToggleCollection}
+            disabled={busy}
+            title={stats.isRunning ? '今のセッション内で一時停止' : '今のセッション内で再開'}
+            style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}
+          >
+            {stats.isRunning ? <Pause size={12} /> : <Play size={12} />}
+            {stats.isRunning ? '一時停止' : '再開'}
+          </button>
+        )}
       </div>
 
       {/* Creator list */}
