@@ -14,6 +14,13 @@
   --accent-success-hover: #34D399;
   --accent-warning: #F59E0B;
 
+  /* Reaction Categories */
+  --reaction-laugh: #f5d35a;
+  --reaction-surprise: #ff6b6b;
+  --reaction-emotion: #b88dff;
+  --reaction-praise: #5ec3ff;
+  --reaction-other: #94A3B8;
+
   /* Colors - Text */
   --text-primary: #F8FAFC;
   --text-secondary: #94A3B8;

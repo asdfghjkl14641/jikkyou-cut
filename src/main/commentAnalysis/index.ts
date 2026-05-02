@@ -5,13 +5,14 @@ import type {
 } from '../../common/types';
 import { fetchChatReplay, cancelChatReplay } from './chatReplay';
 import { fetchViewerStats } from './viewerStats';
-import { calculateScores } from './scoring';
+import { analyze } from './scoring';
 
 /**
  * Runs the full comment-analysis pipeline:
  *   1. Chat replay via yt-dlp (YouTube live_chat or Twitch rechat)
  *   2. Viewer-count time series via playboard.co (YouTube only)
- *   3. Bucket aggregation + 3-element weighted score
+ *   3. Bucket aggregation (Stage 1). Rolling-window scoring runs in the
+ *      renderer so the user can move the W slider without an IPC round-trip.
  *
  * Stages are sequential — playboard's HTML scrape is slow enough that
  * doing it in parallel with yt-dlp doesn't help much, and serial logs
@@ -24,8 +25,9 @@ import { calculateScores } from './scoring';
  * Failure modes are absorbed at each stage:
  *   - chat = [] → buckets all have commentCount=0 (uninteresting graph but
  *     completes without throwing)
- *   - viewers.source === 'unavailable' → scoring switches to 2-element
- *     weights (density + keyword), viewerGrowth row dimmed in tooltip
+ *   - viewers.source === 'unavailable' → renderer switches to the
+ *     no-viewer weight set (retention drops out, density/keyword absorb
+ *     its share)
  */
 export async function analyzeComments(
   args: CommentAnalysisStartArgs,
@@ -47,13 +49,13 @@ export async function analyzeComments(
   onProgress({ phase: 'viewers', percent: 100 });
 
   onProgress({ phase: 'scoring', percent: 0 });
-  const analysis = calculateScores({
+  const analysis = analyze({
     messages,
     viewers,
     durationSec: args.durationSec,
   });
   console.log(
-    `[comment-analysis] scoring done: ${analysis.samples.length} buckets, hasViewerStats=${analysis.hasViewerStats}`,
+    `[comment-analysis] bucketize done: ${analysis.buckets.length} buckets, hasViewerStats=${analysis.hasViewerStats}`,
   );
   onProgress({ phase: 'scoring', percent: 100 });
 

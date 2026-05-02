@@ -2,10 +2,15 @@ import React, { useCallback, useMemo, useRef, useState, type MouseEvent } from '
 import { useEditorStore } from '../store/editorStore';
 import { ScoreSample, CommentAnalysis } from '../../../common/types';
 import { ReactionCategory } from '../../../common/commentAnalysis/keywords';
+import { computeRollingScores } from '../lib/rollingScore';
 import styles from './CommentAnalysisGraph.module.css';
 
 type Props = {
   analysis: CommentAnalysis;
+  // Rolling-window size in seconds (30..300). Coming from
+  // editorStore.analysisWindowSec via the parent so the slider above the
+  // graph can drive recomputation.
+  windowSec: number;
   onSeek?: (sec: number) => void;
   selectionRange?: { startSec: number; endSec: number } | null;
   onSelectionChange?: (range: { startSec: number; endSec: number } | null) => void;
@@ -40,10 +45,11 @@ const CATEGORY_COLORS: Record<ReactionCategory, string> = {
   other: 'var(--reaction-other)',
 };
 
-export default function CommentAnalysisGraph({ 
-  analysis, 
-  onSeek, 
-  selectionRange, 
+export default function CommentAnalysisGraph({
+  analysis,
+  windowSec,
+  onSeek,
+  selectionRange,
   onSelectionChange,
   onPeakClick
 }: Props) {
@@ -54,6 +60,20 @@ export default function CommentAnalysisGraph({
   const [dragCurrentSec, setDragCurrentSec] = useState<number | null>(null);
 
   const durationSec = analysis.videoDurationSec;
+
+  // Stage 2: rolling-window scores. Recomputed on every windowSec
+  // change but the inputs are stable references coming from main, so
+  // memoisation is worth doing. Cost is sub-millisecond at 1-hour
+  // videos, so this is comfortably below a frame even when the user
+  // drags the slider.
+  const samples = useMemo<ScoreSample[]>(() => {
+    return computeRollingScores(
+      analysis.buckets,
+      windowSec,
+      analysis.bucketSizeSec,
+      analysis.hasViewerStats,
+    );
+  }, [analysis.buckets, analysis.bucketSizeSec, analysis.hasViewerStats, windowSec]);
 
   const currentPercent = useMemo(() => {
     if (durationSec <= 0) return 0;
@@ -67,47 +87,66 @@ export default function CommentAnalysisGraph({
     return ratio * durationSec;
   }, [durationSec]);
 
-  // SVG Waveform generation. 
+  // Map a timeline second to a sample index. Samples slide bucket-by-
+  // bucket so index = round(time / bucketSizeSec), clamped — at the very
+  // tail where time > lastSample.timeSec we still want to land on the
+  // last sample rather than off the end.
+  const sampleAt = useCallback((timeSec: number): ScoreSample | null => {
+    if (samples.length === 0) return null;
+    const raw = Math.round(timeSec / analysis.bucketSizeSec);
+    const clamped = Math.max(0, Math.min(samples.length - 1, raw));
+    return samples[clamped] ?? null;
+  }, [samples, analysis.bucketSizeSec]);
+
+  // SVG Waveform generation.
   // We use a single smooth path for the entire graph.
   const points = useMemo(() => {
-    const samples = analysis.samples;
     if (samples.length < 2) return [];
-    
-    return samples.map((s, i) => ({
-      x: (i / (samples.length - 1)) * 100,
-      y: (1 - s.total) * 100
-    }));
-  }, [analysis.samples]);
+    // The waveform spans the full timeline width even though samples
+    // only reach `(buckets.length - bucketsPerWindow) * bucketSize`.
+    // Map each sample's centre (start + W/2) to an x position so the
+    // wave aligns with the time axis the user sees in the player.
+    return samples.map((s) => {
+      const centre = s.timeSec + windowSec / 2;
+      const x = durationSec > 0 ? Math.min(100, Math.max(0, (centre / durationSec) * 100)) : 0;
+      return { x, y: (1 - s.total) * 100 };
+    });
+  }, [samples, windowSec, durationSec]);
 
   // Catmull-Rom to Bezier conversion for smooth curves
   const curvePath = useMemo(() => {
     if (points.length < 3) return '';
-    
-    // Start at the first point
-    let d = `M 0,${points[0]!.y}`;
-    
+
+    // Start at the first point's x (samples don't start at x=0 because
+    // of the half-window offset, so anchor the path to wherever the
+    // first sample actually sits).
+    const first = points[0]!;
+    let d = `M ${first.x},${first.y}`;
+
     // Smooth the path using quadratic curves through midpoints
-    for (let i = 0; i < points.length - 1; i++) {
+    for (let i = 0; i < points.length - 1; i += 1) {
       const p0 = points[i]!;
       const p1 = points[i + 1]!;
       const midX = (p0.x + p1.x) / 2;
       const midY = (p0.y + p1.y) / 2;
-      
+
       // Control point is the current point, destination is the midpoint to next
       d += ` Q ${p0.x},${p0.y} ${midX},${midY}`;
     }
-    
+
     // Finish at the last point
     const last = points[points.length - 1]!;
-    d += ` L 100,${last.y}`;
-    
+    d += ` L ${last.x},${last.y}`;
+
     return d;
   }, [points]);
 
   const fillPath = useMemo(() => {
-    if (!curvePath) return '';
-    return `${curvePath} L 100 100 L 0 100 Z`;
-  }, [curvePath]);
+    if (!curvePath || points.length === 0) return '';
+    const first = points[0]!;
+    const last = points[points.length - 1]!;
+    return `${curvePath} L ${last.x} 100 L ${first.x} 100 Z`;
+  }, [curvePath, points]);
 
   const handleMouseDown = (e: MouseEvent<HTMLDivElement>) => {
     const rect = containerRef.current?.getBoundingClientRect();
@@ -129,13 +168,12 @@ export default function CommentAnalysisGraph({
       setDragCurrentSec(time);
     }
 
-    const sampleIndex = Math.round(time / analysis.bucketSizeSec);
-    const sample = analysis.samples[sampleIndex];
-
+    const sample = sampleAt(time);
     if (sample) {
+      const sampleCentre = sample.timeSec + windowSec / 2;
       setHoverSample({
         sample,
-        x: (sample.timeSec / durationSec) * rect.width,
+        x: durationSec > 0 ? (sampleCentre / durationSec) * rect.width : 0,
         y: e.clientY - rect.top,
       });
     } else {
@@ -155,9 +193,8 @@ export default function CommentAnalysisGraph({
 
     if (pxDiff < 5) {
       // Click detection. If total >= 0.5, it's a peak click.
-      const sampleIndex = Math.round(time / analysis.bucketSizeSec);
-      const sample = analysis.samples[sampleIndex];
-      
+      const sample = sampleAt(time);
+
       if (sample && sample.total >= 0.5) {
         onPeakClick?.(sample);
       } else {
@@ -189,8 +226,8 @@ export default function CommentAnalysisGraph({
 
   return (
     <div className={styles.container}>
-      <div 
-        ref={containerRef} 
+      <div
+        ref={containerRef}
         className={styles.graphArea}
         onMouseDown={handleMouseDown}
         onMouseMove={handleMouseMove}
@@ -204,16 +241,16 @@ export default function CommentAnalysisGraph({
               <stop offset="100%" stopColor="rgba(255, 255, 255, 0)" />
             </linearGradient>
           </defs>
-          
+
           <path d={fillPath} className={styles.waveformFill} />
           <path d={curvePath} className={styles.waveformPath} />
         </svg>
 
         {/* 選択範囲オーバーレイ */}
         {(dragRange || (selectionRange && !dragRange)) && (
-          <div 
+          <div
             className={styles.selectionOverlay}
-            style={{ 
+            style={{
               left: `${((dragRange?.start ?? selectionRange?.startSec ?? 0) / durationSec) * 100}%`,
               width: `${(((dragRange?.end ?? selectionRange?.endSec ?? 0) - (dragRange?.start ?? selectionRange?.startSec ?? 0)) / durationSec) * 100}%`
             }}
@@ -233,21 +270,21 @@ export default function CommentAnalysisGraph({
 
         {/* Tooltip */}
         {hoverSample && (
-          <div 
+          <div
             className={styles.tooltip}
-            style={{ 
+            style={{
               left: hoverSample.x,
               transform: `translateX(${hoverSample.x > (containerRef.current?.clientWidth || 0) - 180 ? '-100%' : '0'})`
             }}
           >
             <div className={styles.tooltipTime}>
-              {formatHMS(hoverSample.sample.timeSec)} 〜 {formatHMS(hoverSample.sample.timeSec + analysis.bucketSizeSec)}
+              {formatHMS(hoverSample.sample.timeSec)} 〜 {formatHMS(hoverSample.sample.timeSec + hoverSample.sample.windowSec)}
             </div>
             <div className={styles.tooltipTotal}>
               <span>スコア</span>
               <span>{(hoverSample.sample.total * 100).toFixed(0)}</span>
             </div>
-            
+
             <div className={styles.tooltipDetail}>
               <div className={styles.categoryGrid}>
                 {(Object.keys(hoverSample.sample.categoryHits) as ReactionCategory[]).map(cat => {
@@ -257,13 +294,13 @@ export default function CommentAnalysisGraph({
                     <div key={cat} className={styles.categoryRow}>
                       <span className={styles.categoryDot} style={{ background: CATEGORY_COLORS[cat] }} />
                       <span className={styles.categoryLabel}>{CATEGORY_NAMES[cat]}</span>
-                      <span className={styles.categoryValue}>{(val * 100).toFixed(0)}</span>
+                      <span className={styles.categoryValue}>{val}</span>
                     </div>
                   );
                 })}
               </div>
               <div className={styles.msgStats}>
-                コメント: {hoverSample.sample.messages.length}件
+                コメント: {hoverSample.sample.messageCount}件
               </div>
             </div>
           </div>
@@ -272,5 +309,6 @@ export default function CommentAnalysisGraph({
     </div>
   );
 }
+
 
 

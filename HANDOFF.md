@@ -39,6 +39,7 @@ Electron + React + TypeScript 製。**現在は配布前の "自分用ツール"
 - **DropZone への URL 入力統合**: 完了
 - **3 フェーズ構造への再編**: 完了 (Load -> Clip Select -> Edit)
 - **コメント分析グラフ(UI MVP)**: 完了 (モックデータ表示 + ドラッグ選択)
+- **コメント分析 rolling window スコア + W スライダー**: 完了 (5 要素 / 30 秒〜5 分可変 / Stage 1+2 分離)
 
 ### 次フェーズ
 - **進行中**: コメント分析画面 (バックエンド実装待ち) — 詳細は `docs/COMMENT_ANALYSIS_DESIGN.md`
@@ -133,7 +134,9 @@ jikkyou-cut/
             │   └── useTranscription.ts
             └── components/
                 ├── ClipSelectView.tsx          # フェーズ2: 切り抜き範囲選択画面
-                ├── CommentAnalysisGraph.tsx    # ヒートマップ風盛り上がりグラフ
+                ├── PeakDetailPanel.tsx         # フェーズ2: ピーク詳細(コメント一覧)
+                ├── CommentAnalysisGraph.tsx    # YouTube Most replayed 風盛り上がりグラフ
+                ├── WindowSizeSlider.tsx        # フェーズ2: rolling window 幅(W)スライダー
                 ├── DropZone.tsx                # フェーズ1: ファイル DnD + URL 入力
                 ├── EditableTranscriptList.tsx  # フェーズ3: キュー一覧(リニア表示)
                 ├── SpeakerColumnView.tsx       # フェーズ3: 話者カラム表示モード
@@ -161,6 +164,12 @@ type EditorState = {
 
   // 文字起こし結果
   cues: TranscriptCue[];
+
+  // コメント分析グラフの rolling window 幅(秒)。30..300 の 30 秒
+  // ステップ。`WindowSizeSlider` から書き、`CommentAnalysisGraph` が
+  // 読んで `computeRollingScores` を再計算する。setFile / clearFile で
+  // 初期値 120 にリセット。永続化はせず(プロトタイプ範囲)
+  analysisWindowSec: number;
   // ...
 };
 ```
@@ -171,7 +180,7 @@ type EditorState = {
 
 **メインプロセスが唯一の真実源**。preload で `window.api` として expose される。
 主要な名前空間: `fonts`, `subtitleSettings`, `urlDownload`, `commentAnalysis`, `loadProject`, `saveProject`, `startTranscription`, `startExport` 等。
-- `commentAnalysis.{start, cancel, onProgress}` — `videoFilePath` + `sourceUrl`(URL DL 由来)+ `durationSec` を渡すと、yt-dlp チャット取得 → playboard 視聴者数取得 → 5 秒バケット 3 要素統合スコア計算 を順次実行して `CommentAnalysis` を返す。`onProgress` は phase=chat/viewers/scoring の 3 段階で発火。失敗時は graceful degradation(チャット 0 件 / 視聴者数なしモード)。
+- `commentAnalysis.{start, cancel, onProgress}` — `videoFilePath` + `sourceUrl`(URL DL 由来)+ `durationSec` を渡すと、yt-dlp チャット取得 → playboard 視聴者数取得 → 5 秒バケット集計(Stage 1)を順次実行して `CommentAnalysis` を返す(`buckets[]` を含む)。実際のスコア(`ScoreSample[]`)は renderer で `src/renderer/src/lib/rollingScore.ts` の `computeRollingScores` が W スライダーの値で都度計算する Stage 2。`onProgress` は phase=chat/viewers/scoring の 3 段階で発火。失敗時は graceful degradation(チャット 0 件 / 視聴者数なしモードで重み切替)。
 
 ---
 
@@ -199,17 +208,19 @@ type EditorState = {
 
 ### Phase 2: 切り抜き選択 (`clip-select`)
 ```
-┌────────────────────────────────────────────────┐
-│ [戻る]                             [この区間を編集] │
-├────────────────────────────────────────────────┤
-│                                                │
-│                Video Preview                   │
-│                                                │
-├────────────────────────────────────────────────┤
-│   [|||||||||||||||| Heatmap Graph |||||||||||||]  │
-│   (ドラッグして範囲選択 / Esc でクリア)           │
-└────────────────────────────────────────────────┘
+┌─────────────────────────────────────────────────────────────┐
+│ [戻る]                                     [この区間を編集] │
+├───────────────────────────────────────────────┬─────────────┤
+│                                               │ [詳細パネル] │
+│                Video Preview                  │  (ピーク時)  │
+│                                               │             │
+├───────────────────────────────────────────────┤  コメント   │
+│  [ウィンドウ:2分 ━━●━━━━]  ピーク検出粒度を調整 │   一覧      │
+│   [ ~~~~~~~~~~~~ SVG Waveform ~~~~~~~~~~~~ ]  │             │
+│   (ドラッグ選択 / ピーククリックで詳細パネル)     │             │
+└───────────────────────────────────────────────┴─────────────┘
 ```
+波形の上に rolling window 幅スライダー(`WindowSizeSlider`)。30 秒〜5 分(30 秒ステップ、初期 2 分)で連続可変、波形は変更に追従して都度再描画される(renderer 内 `computeRollingScores`、IPC 往復なし)。
 
 ### Phase 3: 編集 (`edit`)
 ```

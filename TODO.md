@@ -16,11 +16,15 @@
 - **コメント分析画面(MVP)** — 詳細は `docs/COMMENT_ANALYSIS_DESIGN.md` 参照
   - [x] yt-dlp でのチャットリプレイ取得(YouTube + Twitch)
   - [x] playboard.co での視聴者数取得(ヒューリスティックパース)
-  - [x] スコア計算ロジック(キーワード辞書 + 密度集計 + 視聴者増加)
+  - [x] スコア計算ロジック(瞬間スコア・初期実装)
   - [x] ClipSelectView 結線(loading/ready/error/no-source の 4 状態)
-  - [ ] 次: ClipSelectView UI 改修(Antigravity)
+  - [x] YouTube Most replayed 風 UI (波線 + グラデ塗り) に再構成
+  - [x] 波線色を背景レイヤー化(hover/drag 時のみ強調)
+  - [x] **rolling window スコア + W スライダー UI**(5 要素:平均コメ密度・平均キーワード・持続率・ピーク強度・視聴者維持率、Stage 1=main bucketize / Stage 2=renderer rolling)
+  - [ ] **次**: AI 要約(Claude Haiku)で詳細パネルの内容スロット埋め込み
   - [ ] 自動候補抽出ボタン
   - [ ] 区間複数選択
+  - [ ] スコア重み調整 UI(現状ハードコード)
   - [ ] edit フェーズで clipRange を使った動画範囲絞り込み(Timeline/VideoPlayer 連携)
   - [ ] ProjectFile.clipRange 永続化
 
@@ -91,6 +95,7 @@
 
 ### 2026-05-02
 
+- コメント分析: rolling window スコアに作り直し + W スライダー UI 追加 — 旧「5 秒バケット瞬間スコア」を「W 分続いた盛り上がり」へ。5 要素(平均コメ密度・平均キーワード・持続率・ピーク強度・視聴者維持率)、W=30 秒〜5 分(30 秒ステップ、初期値 2 分)。Stage 1(`bucketize`、main 1 回)と Stage 2(`computeRollingScores`、renderer 都度)に分解、スライダー操作時の体感ラグを排除。`RawBucket` 型新設、`ScoreSample` 構造刷新、`CommentAnalysis.samples` 廃止 → `buckets[]` 保持。視聴者は維持率(min/max)1 軸へ統一(growth rate 廃止)。`src/common/types.ts` / `src/main/commentAnalysis/scoring.ts` / `src/renderer/src/lib/rollingScore.ts`(新規)/ `src/renderer/src/components/{WindowSizeSlider,CommentAnalysisGraph,ClipSelectView,PeakDetailPanel}` / `src/renderer/src/store/editorStore.ts`
 - 緊急修正: ClipSelectView の `onDuration`/`onCurrentTime` 未配線 — 3 症状(`<video>` コントロール消失 + 再生ボタンで末尾に飛ぶ + 分析グラフ真っ黒)の共通根本。`durationSec` が clip-select 中ずっと null のままで、preview-skip ロジックが `decidePreviewSkip='end'` を返したり、mock fallback が samples=0 を生成していた。`1678746`(ClipSelectView 新設)時点からの抜け漏れ、`1533d31`(実分析)で表面化。副次的に mediaProtocol と commentAnalysis にログ追加
 - コメント分析: 実データ取得 + スコア計算ロジック実装 — yt-dlp チャットリプレイ(YT live_chat / Twitch rechat)+ playboard.co スクレイピング + ハードコード辞書 + 5 秒バケット 3 要素統合スコア。`src/main/commentAnalysis/*` を新設、IPC 統合済み、ClipSelectView がモック→実分析に切替(失敗時はモック fallback)。`editorStore.sourceUrl` 追加、URL DL 完了時に capture
 - プログレッシブ DL + 並行文字起こしの技術検証(spike) — 4 論点(yt-dlp シーク追従 / `<video>` buffered / Gladia 並行 / プロセス管理)を実機 + 公式ドキュメントで検証、`docs/PROGRESSIVE_DL_SPIKE_REPORT.md` にまとめた。本実装は未着手、設計選択肢をユーザ判断待ちにエスカレート

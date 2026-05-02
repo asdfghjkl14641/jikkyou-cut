@@ -154,7 +154,17 @@ type EditorState = {
   // View mode for cue list
   viewMode: 'linear' | 'speaker-column';
   setViewMode: (mode: 'linear' | 'speaker-column') => void;
+
+  // Rolling-window size (seconds) for the comment-analysis graph. The
+  // user picks 30..300 in 30s steps via WindowSizeSlider; the renderer
+  // recomputes ScoreSample[] off the persisted RawBucket[] each time
+  // this changes. Resets to the default on every fresh file load —
+  // intentionally not persisted to disk (prototype scope).
+  analysisWindowSec: number;
+  setAnalysisWindowSec: (sec: number) => void;
 };
+
+const DEFAULT_ANALYSIS_WINDOW_SEC = 120;
 
 const basename = (absPath: string): string => {
   const parts = absPath.split(/[\\/]/);
@@ -226,6 +236,8 @@ export const useEditorStore = create<EditorState>((set, get) => ({
 
   viewMode: 'linear',
 
+  analysisWindowSec: DEFAULT_ANALYSIS_WINDOW_SEC,
+
   setPhase: (phase) => set({ phase }),
   setClipRange: (range) => set({ clipRange: range }),
 
@@ -259,6 +271,7 @@ export const useEditorStore = create<EditorState>((set, get) => ({
       exportError: null,
       viewMode: 'linear',
       clipRange: null,
+      analysisWindowSec: DEFAULT_ANALYSIS_WINDOW_SEC,
     }),
 
   setSourceUrl: (url) => set({ sourceUrl: url }),
@@ -289,6 +302,7 @@ export const useEditorStore = create<EditorState>((set, get) => ({
       exportError: null,
       viewMode: 'linear',
       clipRange: null,
+      analysisWindowSec: DEFAULT_ANALYSIS_WINDOW_SEC,
     }),
 
 
@@ -672,4 +686,12 @@ export const useEditorStore = create<EditorState>((set, get) => ({
   },
 
   setViewMode: (mode) => set({ viewMode: mode }),
+
+  setAnalysisWindowSec: (sec) => {
+    if (!Number.isFinite(sec)) return;
+    // Clamp to the slider's documented domain so a stray external caller
+    // can't push the value outside the UI's reach.
+    const clamped = Math.max(30, Math.min(300, Math.round(sec)));
+    set({ analysisWindowSec: clamped });
+  },
 }));

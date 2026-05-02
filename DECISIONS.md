@@ -15,6 +15,28 @@
 
 ---
 
+## 2026-05-02 14:30 - コメント分析を rolling window スコアに作り直し + W スライダー UI 追加
+
+- 誰が: Claude Code
+- 何を: 5 要素(平均コメント密度・平均キーワード・持続率・ピーク強度・視聴者維持率)の rolling window 統合スコアに刷新。W はユーザがスライダーで 30 秒〜5 分の範囲(30 秒ステップ、初期値 2 分)で可変。Stage 1(`bucketize`、main で 1 回)と Stage 2(`computeRollingScores`、renderer で都度)に分解
+  - **`src/common/types.ts`**: `RawBucket` 型新設(timeSec / commentCount / keywordHits / categoryHits / messages / viewerCount: number | null)。`ScoreSample` 構造刷新(timeSec / windowSec / density / keyword / continuity / peak / retention / total / dominantCategory / categoryHits[raw 件数] / messageCount)。`CommentAnalysis.samples` を廃止して `buckets: RawBucket[]` を保持
+  - **`src/main/commentAnalysis/scoring.ts`**: `bucketize()` を export、`analyze()` が CommentAnalysis(buckets のみ)を返す形に。viewerCount は playboard 失敗時 `null`(以前は `0`)— retention の min/max 計算で「データ無し」と「視聴者ゼロ」を区別
+  - **`src/renderer/src/lib/rollingScore.ts`(新規)**: sliding-window で各 sample を計算。重みは `WEIGHTS_WITH_VIEWERS = {density:0.35, keyword:0.20, continuity:0.20, peak:0.10, retention:0.15}`、`WEIGHTS_WITHOUT_VIEWERS = {0.45, 0.25, 0.20, 0.10, 0}`。continuity = 動画全体の中央値以上のバケット割合、peak = window 内 max(commentCount) / 動画全体 max、retention = window 内 min(viewers)/max(viewers)、ウィンドウに viewer サンプル無ければ 0.5 fallback。density / keyword は window 平均値の動画全体最大で正規化
+  - **`src/renderer/src/components/WindowSizeSlider.{tsx,module.css}`(新規)**: HTML range スライダー、ラベル整形(`30s/1分/1.5分/2分/...`)、注釈ホバー説明
+  - **`src/renderer/src/store/editorStore.ts`**: `analysisWindowSec: number`(初期 120)+ `setAnalysisWindowSec`。setFile / clearFile で初期値にリセット。永続化はせず(プロトタイプ範囲)
+  - **`src/renderer/src/components/CommentAnalysisGraph.tsx`**: props に `windowSec` 追加。`samples` を `useMemo` で都度計算。各サンプルの x 座標は window 中央(start + W/2)— 全幅にわたってカーブが伸びるよう調整。tooltip は windowSec を反映、categoryHits は raw 件数表示
+  - **`src/renderer/src/components/ClipSelectView.tsx`**: 波形のすぐ上にスライダー配置、windowSec を Graph と PeakDetailPanel に propagate
+  - **`src/renderer/src/components/PeakDetailPanel.tsx`**: `analysis` prop 追加、コメント一覧を `[sample.timeSec, sample.timeSec + sample.windowSec)` の bucket から useMemo で集める。「区間設定」ボタンも window 全幅を clipRange へ
+  - **`src/renderer/src/components/CommentAnalysisGraph.mock.ts`**: 出力を `samples[]` から `buckets[]` に変更(Stage 1 形状)
+- 理由: 旧スコアは「5 秒バケットの瞬間スコア」だけで、「2-5 分続く塊」を表現できなかった。切り抜き作業の本質は「2-5 分の塊を選ぶ」ことなので、rolling window で「W 分続いた盛り上がり」を直接スコア化。Stage 1/2 分離は、スライダー操作時の体感ラグを排除する目的(IPC 往復させない)。視聴者系は「維持率(min/max)」1 軸に絞り、配信全体の右肩上がり/下がりトレンドに引きずられない指標に統一(旧 viewerGrowth は廃止)
+- 開放されている設計判断:
+  - 視聴者増加率(growth rate)を別軸として復活させるか
+  - 重み調整 UI(現状ハードコード)
+  - W スライダーの永続化(現状: ファイル切替でデフォルト 2 分にリセット)
+  - 自動候補抽出ボタン(上位 N 区間)
+- 影響: 上記 7 ファイル + 新規 3 ファイル
+- コミット: (未定)
+
 ## 2026-05-02 13:30 - コメント分析波線の色をさらに薄く調整(背景レイヤー化)
 
 - 誰が: Claude Code

@@ -1,70 +1,79 @@
-import type { CommentAnalysis, ScoreSample } from './CommentAnalysisGraph';
+import type { CommentAnalysis, RawBucket } from '../../../common/types';
+import type { ReactionCategory } from '../../../common/commentAnalysis/keywords';
 
-export const generateMockAnalysis = (durationSec: number, bucketSizeSec: number = 5): CommentAnalysis => {
-  if (durationSec <= 0) return { videoDurationSec: 0, bucketSizeSec, samples: [] };
-  const sampleCount = Math.floor(durationSec / bucketSizeSec);
-  const samples: ScoreSample[] = [];
+const ZERO_CATEGORY_HITS = (): Record<ReactionCategory, number> => ({
+  laugh: 0,
+  surprise: 0,
+  emotion: 0,
+  praise: 0,
+  other: 0,
+});
 
-  // 合成の重み
-  const weights = {
-    commentDensity: 0.5,
-    viewerGrowth: 0.3,
-    keywordHits: 0.2,
-  };
+// Synthesises a `CommentAnalysis` with three gaussian comment-density
+// peaks. Used as the fallback shape while the real analysis is loading
+// or when the source is a local file (no chat replay available). The
+// graph component still computes rolling scores from these buckets so
+// the W slider remains interactive in mock mode.
+export const generateMockAnalysis = (
+  durationSec: number,
+  bucketSizeSec = 5,
+): CommentAnalysis => {
+  if (durationSec <= 0) {
+    return {
+      videoDurationSec: 0,
+      bucketSizeSec,
+      buckets: [],
+      hasViewerStats: false,
+      chatMessageCount: 0,
+      generatedAt: new Date().toISOString(),
+    };
+  }
 
-  // 山を作るためのユーティリティ
-  const createPeak = (x: number, pos: number, width: number, height: number) => {
-    return height * Math.exp(-Math.pow(x - pos, 2) / (2 * Math.pow(width, 2)));
-  };
+  const bucketCount = Math.floor(durationSec / bucketSizeSec);
+  const buckets: RawBucket[] = [];
 
-  for (let i = 0; i < sampleCount; i++) {
-    const timeSec = i * bucketSizeSec;
-    const x = timeSec;
+  const peak = (x: number, pos: number, width: number, height: number) =>
+    height * Math.exp(-Math.pow(x - pos, 2) / (2 * Math.pow(width, 2)));
 
-    // 複数の山を動画の長さに合わせてスケーリング
-    const scale = durationSec / 3600;
+  // Peaks scaled so the same shape is recognisable for any durationSec.
+  // Three peaks at roughly 1/6, 5/12, 7/9 of the timeline.
+  const scale = durationSec / 3600;
 
-    // コメント密度の山
-    let commentDensity = 
-      createPeak(x, 600 * scale, 100 * scale, 0.8) + 
-      createPeak(x, 1500 * scale, 150 * scale, 0.9) + 
-      createPeak(x, 2800 * scale, 120 * scale, 0.7);
-    
-    // 視聴者増加の山 (少しずらしたり重なったり)
-    let viewerGrowth = 
-      createPeak(x, 650 * scale, 80 * scale, 0.6) + 
-      createPeak(x, 1550 * scale, 100 * scale, 0.8) + 
-      createPeak(x, 2200 * scale, 200 * scale, 0.5);
+  for (let i = 0; i < bucketCount; i += 1) {
+    const t = i * bucketSizeSec;
+    const intensity =
+      peak(t, 600 * scale, 100 * scale, 0.8) +
+      peak(t, 1500 * scale, 150 * scale, 0.9) +
+      peak(t, 2800 * scale, 120 * scale, 0.7);
 
-    // キーワードヒットの山 (局所的に強い)
-    let keywordHits = 
-      createPeak(x, 580 * scale, 40 * scale, 0.9) + 
-      createPeak(x, 1520 * scale, 50 * scale, 1.0) + 
-      createPeak(x, 3100 * scale, 60 * scale, 0.8);
+    // commentCount per bucket — peak intensity is 0..1 in the original
+    // mock, here scaled to a count so the rolling-window stage has
+    // something to average. The +noise keeps the curve from looking
+    // synthetic.
+    const noisy = Math.max(0, intensity + (Math.random() - 0.5) * 0.1);
+    const commentCount = Math.round(noisy * 50);
+    const keywordHits = Math.round(commentCount * 0.3);
 
+    const cat = ZERO_CATEGORY_HITS();
+    cat.laugh = Math.round(keywordHits * 0.6);
+    cat.praise = keywordHits - cat.laugh;
 
-    // ノイズを少し混ぜる
-    commentDensity = Math.min(1, Math.max(0, commentDensity + Math.random() * 0.05));
-    viewerGrowth = Math.min(1, Math.max(0, viewerGrowth + Math.random() * 0.03));
-    keywordHits = Math.min(1, Math.max(0, keywordHits + Math.random() * 0.02));
-
-    const total = 
-      commentDensity * weights.commentDensity + 
-      viewerGrowth * weights.viewerGrowth + 
-      keywordHits * weights.keywordHits;
-
-    samples.push({
-      timeSec,
-      commentDensity,
-      viewerGrowth,
+    buckets.push({
+      timeSec: t,
+      commentCount,
       keywordHits,
-      total: Math.min(1, total),
+      categoryHits: cat,
+      messages: [],
+      viewerCount: null,
     });
   }
 
   return {
     videoDurationSec: durationSec,
     bucketSizeSec,
-    samples,
+    buckets,
+    hasViewerStats: false,
+    chatMessageCount: 0,
+    generatedAt: new Date().toISOString(),
   };
 };

@@ -1,4 +1,5 @@
 import type { AppConfig } from './config';
+import { ReactionCategory } from './commentAnalysis/keywords';
 
 export type TranscriptCue = {
   id: string;
@@ -244,23 +245,54 @@ export type CommentAnalysisStartArgs = {
   durationSec: number;
 };
 
-// Reuses the `CommentAnalysis` / `ScoreSample` shape exported by
-// `CommentAnalysisGraph.tsx` so renderer components can pass through
-// without translation.
-export type ScoreSample = {
-  timeSec: number;
-  commentDensity: number;
-  viewerGrowth: number;
-  keywordHits: number;
-  total: number;
+// Stage 1 output: raw per-bucket aggregates (no scoring applied yet). The
+// main process produces these once per analysis run; the renderer reuses
+// them to recompute `ScoreSample[]` whenever the user moves the W
+// (rolling-window-size) slider — without an IPC round-trip.
+export type RawBucket = {
+  timeSec: number;                              // bucket start
+  commentCount: number;                          // messages in this bucket
+  keywordHits: number;                           // total reaction-keyword matches
+  categoryHits: Record<ReactionCategory, number>;// per-category raw counts
+  messages: ChatMessage[];                       // messages that fell into this bucket
+  // Concurrent viewer count interpolated from playboard samples. `null`
+  // when no viewer stats are available — distinct from `0` (which would
+  // mean "playboard says nobody was watching" — almost never true).
+  viewerCount: number | null;
 };
+
+// Stage 2 output: rolling-window score for one window-start position. One
+// `ScoreSample` per bucket-start (samples slide bucket-by-bucket). Computed
+// in the renderer via `computeRollingScores(buckets, windowSec, ...)`.
+export type ScoreSample = {
+  timeSec: number;          // window start (== bucket[i].timeSec)
+  windowSec: number;        // W used to compute this sample
+  // All five components are normalised 0..1.
+  density: number;          // avg commentCount across W, normalised by global window-avg max
+  keyword: number;          // avg keywordHits across W, normalised by global window-avg max
+  continuity: number;       // fraction of buckets with commentCount >= global median
+  peak: number;             // max(commentCount) in W / global max(commentCount)
+  retention: number;        // min/max viewer count in W (0.5 fallback when no samples in W)
+  total: number;            // weighted composite, 0..1
+  dominantCategory: ReactionCategory | null;
+  // Raw per-category sums across the window. Tooltip / PeakDetailPanel
+  // render these directly as "笑い: 12 件" — no further normalisation.
+  categoryHits: Record<ReactionCategory, number>;
+  // Total messages in the window. Stored to avoid the tooltip having to
+  // sum buckets on every hover.
+  messageCount: number;
+};
+
 
 export type CommentAnalysis = {
   videoDurationSec: number;
   bucketSizeSec: number;
-  samples: ScoreSample[];
+  // Stage 1 result: per-bucket raw aggregates. Score samples are derived
+  // from these in the renderer with the user-controlled W.
+  buckets: RawBucket[];
   // Source-of-truth flags so the UI can show "視聴者データなし" badges
-  // when playboard didn't return anything.
+  // when playboard didn't return anything, and so the renderer can
+  // switch the scoring weights accordingly.
   hasViewerStats: boolean;
   chatMessageCount: number;
   generatedAt: string;
