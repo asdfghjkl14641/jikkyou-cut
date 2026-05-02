@@ -1,7 +1,9 @@
 import {
   CollectionStats,
+  bumpUploaderVideoCount,
+  getCreatorIdByName,
   getStats,
-  upsertCreator,
+  upsertUploader,
   upsertVideoFull,
   videoExists,
 } from './database';
@@ -272,13 +274,21 @@ class DataCollectionManager {
         continue;
       }
 
-      // Resolve creator: prefer the candidate-meta hint (came from per-
-      // creator search); else fall back to channel_name from the API.
+      // Resolve creator (= seed streamer being targeted) — only set
+      // when this video came from a per-creator search. Broad-search
+      // hits leave creator_id NULL because we don't know which seed
+      // streamer the clip is "about".
       const creatorHint = candidateMeta.get(id)?.creatorName;
-      const creatorName = creatorHint ?? detail.channelTitle ?? extracted.meta.channel ?? null;
-      const isTarget = creatorHint != null;
-      const creatorId = creatorName
-        ? upsertCreator(creatorName, detail.channelId || extracted.meta.channel_id || null, isTarget)
+      const creatorId = creatorHint ? getCreatorIdByName(creatorHint) : null;
+
+      // Resolve uploader (= the channel that posted this clip) — set
+      // for every video we save, regardless of search origin. This
+      // replaces the old auto-add-to-creators path that polluted the
+      // creators table with clip uploaders.
+      const uploaderName = detail.channelTitle || extracted.meta.channel || null;
+      const uploaderChannelId = detail.channelId || extracted.meta.channel_id || null;
+      const uploaderId = uploaderName
+        ? upsertUploader(uploaderChannelId, uploaderName)
         : null;
 
       const durationSec =
@@ -298,6 +308,7 @@ class DataCollectionManager {
           video: {
             id,
             creator_id: creatorId,
+            uploader_id: uploaderId,
             title: detail.title || extracted.meta.title,
             channel_id: detail.channelId || extracted.meta.channel_id || null,
             channel_name: detail.channelTitle || extracted.meta.channel || null,
@@ -326,6 +337,7 @@ class DataCollectionManager {
             end_sec: c.end_time,
           })),
         });
+        if (uploaderId != null) bumpUploaderVideoCount(uploaderId);
         saved += 1;
       } catch (err) {
         logError(`DB upsert failed for ${id}: ${err instanceof Error ? err.message : String(err)}`);

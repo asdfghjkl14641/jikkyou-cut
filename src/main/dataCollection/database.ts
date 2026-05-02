@@ -124,6 +124,7 @@ export type CreatorRow = {
 export type VideoUpsert = {
   id: string;
   creator_id: number | null;
+  uploader_id: number | null;
   title: string;
   channel_id: string | null;
   channel_name: string | null;
@@ -192,6 +193,19 @@ export function listCreators(): CreatorRow[] {
     .all() as CreatorRow[];
 }
 
+// Look up a creator's id by name, without touching channel_id /
+// is_target / group. Used by the batch loop to attribute videos
+// found via per-creator search to the seed creator that prompted
+// the search — passing detail.channelId through upsertCreator would
+// incorrectly overwrite the creator's resolved channel_id with the
+// uploader's channel_id (different entity).
+export function getCreatorIdByName(name: string): number | null {
+  const row = openDb()
+    .prepare('SELECT id FROM creators WHERE name = ? LIMIT 1')
+    .get(name) as { id: number } | undefined;
+  return row?.id ?? null;
+}
+
 // Backfill the `creator_group` column only when it's currently NULL.
 // Used by the seed-or-update step so a previously seeded creator
 // (with group already set) is never overwritten by a stale value, but
@@ -200,6 +214,43 @@ export function setCreatorGroupIfNull(name: string, group: string): void {
   openDb()
     .prepare('UPDATE creators SET creator_group = ? WHERE name = ? AND creator_group IS NULL')
     .run(group, name);
+}
+
+// ---- Uploader helpers ------------------------------------------------------
+// Uploaders are clip-uploader channels (the entity that posted the
+// video). They live in their own table so the creators table can stay
+// pure (= seeded streamers only), which lets Phase 2 analytics treat
+// the two populations independently. Migration 001 split them out from
+// the legacy mixed-creators table.
+
+export function upsertUploader(channelId: string | null, channelName: string): number {
+  const conn = openDb();
+  const trimmed = channelName.trim();
+  if (!trimmed) {
+    throw new Error('upsertUploader: channelName must be non-empty');
+  }
+  // INSERT ... ON CONFLICT ... RETURNING id is supported on SQLite
+  // 3.35+ which better-sqlite3 v12 bundles. Returns existing id on
+  // conflict so the caller doesn't need a separate SELECT round-trip.
+  const row = conn
+    .prepare(
+      `INSERT INTO uploaders (channel_id, channel_name)
+       VALUES (?, ?)
+       ON CONFLICT(channel_name) DO UPDATE SET
+         channel_id = COALESCE(uploaders.channel_id, excluded.channel_id)
+       RETURNING id`,
+    )
+    .get(channelId, trimmed) as { id: number };
+  return row.id;
+}
+
+// Bumped on every successful video upsert that links to this uploader.
+// Cheap counter — saved in the row so analytics can filter "uploaders
+// with at least N videos" without a heavy JOIN.
+export function bumpUploaderVideoCount(uploaderId: number): void {
+  openDb()
+    .prepare('UPDATE uploaders SET video_count = video_count + 1 WHERE id = ?')
+    .run(uploaderId);
 }
 
 // ---- Video upsert (atomic across video + peaks + chapters) ----------------
@@ -213,16 +264,17 @@ export function upsertVideoFull(args: {
   const tx = conn.transaction(() => {
     conn
       .prepare(
-        `INSERT INTO videos (id, creator_id, title, channel_id, channel_name,
+        `INSERT INTO videos (id, creator_id, uploader_id, title, channel_id, channel_name,
                              view_count, like_count, comment_count, duration_sec,
                              published_at, thumbnail_path, url, description, raw_metadata,
                              collected_at)
-         VALUES (@id, @creator_id, @title, @channel_id, @channel_name,
+         VALUES (@id, @creator_id, @uploader_id, @title, @channel_id, @channel_name,
                  @view_count, @like_count, @comment_count, @duration_sec,
                  @published_at, @thumbnail_path, @url, @description, @raw_metadata,
                  CURRENT_TIMESTAMP)
          ON CONFLICT(id) DO UPDATE SET
            creator_id = excluded.creator_id,
+           uploader_id = excluded.uploader_id,
            title = excluded.title,
            channel_id = excluded.channel_id,
            channel_name = excluded.channel_name,
@@ -317,7 +369,11 @@ export function getQuotaPerKeyToday(): Array<{ keyIndex: number; unitsUsed: numb
 
 export type CollectionStats = {
   videoCount: number;
+  // Seed creators only (= is_target=1). Auto-discovered uploaders
+  // moved to the uploaders table by migration 001 — they are no
+  // longer counted here.
   creatorCount: number;
+  uploaderCount: number;
   quotaUsedToday: number;
   lastCollectedAt: string | null;
 };
@@ -325,11 +381,16 @@ export type CollectionStats = {
 export function getStats(): CollectionStats {
   const conn = openDb();
   const v = conn.prepare('SELECT COUNT(*) AS n FROM videos').get() as { n: number };
-  const c = conn.prepare('SELECT COUNT(*) AS n FROM creators').get() as { n: number };
+  const c = conn.prepare('SELECT COUNT(*) AS n FROM creators WHERE is_target = 1').get() as { n: number };
+  // The uploaders table is created by migration 001. On a fresh
+  // install the migration runs before the first getStats call (wired
+  // via app.whenReady), so the table is always present here.
+  const u = conn.prepare('SELECT COUNT(*) AS n FROM uploaders').get() as { n: number };
   const last = conn.prepare('SELECT MAX(collected_at) AS t FROM videos').get() as { t: string | null };
   return {
     videoCount: v.n,
     creatorCount: c.n,
+    uploaderCount: u.n,
     quotaUsedToday: getTotalQuotaUsedToday(),
     lastCollectedAt: last.t,
   };

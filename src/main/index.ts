@@ -19,6 +19,7 @@ import * as commentAnalysis from './commentAnalysis';
 import * as aiSummary from './aiSummary';
 import { dataCollectionManager } from './dataCollection';
 import { seedOrUpdateCreators } from './dataCollection/seedCreators';
+import { runMigrations } from './dataCollection/migrations';
 import * as creatorList from './dataCollection/creatorList';
 import type { AppConfig } from '../common/config';
 import type {
@@ -306,6 +307,18 @@ app.whenReady().then(async () => {
   buildMenu(() => mainWindow);
   registerIpcHandlers();
   createWindow();
+
+  // Run any pending DB migrations BEFORE the seed step touches the
+  // database. Migration 001 splits clip uploaders out of the creators
+  // table — running it first guarantees getStats / upsertCreator etc.
+  // see the post-migration schema. Idempotent via PRAGMA user_version,
+  // creates a timestamped backup of the .db file before mutating.
+  try {
+    const result = await runMigrations();
+    console.log('[migration] result:', result);
+  } catch (err) {
+    console.warn('[migration] failed:', err);
+  }
 
   // Seed-or-update creators.json (idempotent diff-merge — adds names
   // that aren't yet present and backfills missing group tags, but

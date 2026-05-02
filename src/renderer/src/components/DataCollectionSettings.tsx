@@ -15,6 +15,7 @@ import styles from './SettingsDialog.module.css';
 type Stats = {
   videoCount: number;
   creatorCount: number;
+  uploaderCount: number;
   quotaUsedToday: number;
   isRunning: boolean;
   isPaused: boolean;
@@ -184,8 +185,12 @@ export default function DataCollectionSettings() {
           <span style={{ fontVariantNumeric: 'tabular-nums' }}>{stats?.videoCount.toLocaleString() ?? '...'}</span>
         </div>
         <div>
-          <span style={{ color: 'var(--text-muted)' }}>配信者</span>:&nbsp;
+          <span style={{ color: 'var(--text-muted)' }}>配信者(seed)</span>:&nbsp;
           <span style={{ fontVariantNumeric: 'tabular-nums' }}>{stats?.creatorCount ?? '...'}</span>
+        </div>
+        <div>
+          <span style={{ color: 'var(--text-muted)' }}>切り抜きチャンネル</span>:&nbsp;
+          <span style={{ fontVariantNumeric: 'tabular-nums' }}>{stats?.uploaderCount?.toLocaleString() ?? '...'}</span>
         </div>
         <div>
           <span style={{ color: 'var(--text-muted)' }}>本日のクォータ</span>:&nbsp;

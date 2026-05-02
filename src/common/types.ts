@@ -502,7 +502,14 @@ export type IpcApi = {
   dataCollection: {
     getStats: () => Promise<{
       videoCount: number;
+      // Seed creators only (= is_target=1). Migration 001 split clip
+      // uploaders out into the uploaders table — they are no longer
+      // counted here.
       creatorCount: number;
+      // Distinct clip-uploader channels seen in collection results.
+      // Tracked separately from creators so analytics can compare
+      // seeded streamers vs the long-tail of fan-made clip channels.
+      uploaderCount: number;
       quotaUsedToday: number;
       isRunning: boolean;
       // Mutually exclusive with isRunning. Both false ⇒ idle (no

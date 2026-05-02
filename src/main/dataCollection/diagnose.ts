@@ -135,6 +135,58 @@ export function diagnoseDataCollection(): void {
       `${seedTargetCount.n + autoAddedCount.n} total`,
     );
 
+    // Migration-aware queries. Skip silently if the uploaders table
+    // doesn't exist (= migration 001 hasn't run yet).
+    const hasUploaders = db
+      .prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='uploaders'")
+      .get();
+    if (hasUploaders) {
+      // Q10: total uploaders
+      const upCount = db.prepare('SELECT COUNT(*) AS n FROM uploaders').get() as { n: number };
+      // eslint-disable-next-line no-console
+      console.log('[diag] Q10 uploaders total:', upCount.n);
+
+      // Q11: videos linked to an uploader
+      const videosWithUp = db.prepare(
+        'SELECT COUNT(*) AS n FROM videos WHERE uploader_id IS NOT NULL',
+      ).get() as { n: number };
+      // eslint-disable-next-line no-console
+      console.log('[diag] Q11 videos with uploader_id NOT NULL:', videosWithUp.n);
+
+      // Q12: videos linked to a seed creator
+      const videosWithCreator = db.prepare(
+        'SELECT COUNT(*) AS n FROM videos WHERE creator_id IS NOT NULL',
+      ).get() as { n: number };
+      // eslint-disable-next-line no-console
+      console.log('[diag] Q12 videos with creator_id NOT NULL (seed 紐付き):', videosWithCreator.n);
+
+      // Q13: top 10 uploaders by video_count (cached) — sanity check
+      // that the migration's count refresh matched reality.
+      const topUploaders = db.prepare(`
+        SELECT u.channel_name, u.video_count AS cached, COUNT(v.id) AS actual
+        FROM uploaders u
+        LEFT JOIN videos v ON v.uploader_id = u.id
+        GROUP BY u.id
+        ORDER BY u.video_count DESC
+        LIMIT 10
+      `).all();
+      // eslint-disable-next-line no-console
+      console.log('[diag] Q13 top 10 uploaders (cached vs actual count):');
+      for (const r of topUploaders as Array<{ channel_name: string; cached: number; actual: number }>) {
+        const drift = r.cached !== r.actual ? ` ⚠ DRIFT` : '';
+        // eslint-disable-next-line no-console
+        console.log(`  cached=${r.cached} actual=${r.actual}${drift} — "${r.channel_name}"`);
+      }
+
+      // Q14: user_version (= which migrations have run)
+      const userVersion = db.pragma('user_version', { simple: true }) as number;
+      // eslint-disable-next-line no-console
+      console.log('[diag] Q14 user_version:', userVersion);
+    } else {
+      // eslint-disable-next-line no-console
+      console.log('[diag] Q10-Q14 skipped (uploaders table does not exist — migration 001 has not run)');
+    }
+
     // eslint-disable-next-line no-console
     console.log('===== DIAGNOSIS COMPLETE =====');
   } catch (err) {
