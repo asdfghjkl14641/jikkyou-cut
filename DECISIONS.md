@@ -15,6 +15,31 @@
 
 ---
 
+## 2026-05-03 09:30 - データ収集制御ボタンの整理 + npm run dev 必須を CLAUDE.md に明文化
+
+- 誰が: Claude Code
+- 何を: データ収集 UI のボタン整理(「今すぐ実行」→「1 回だけ取得」リネーム、「取得を停止」ボタン新設、旧「一時停止 / 再開」ボタン廃止)+ Manager に `cancelCurrentBatch()` 追加 + `nextBatchAt` 追跡 + `isBatchActive` を IPC に公開。並行で CLAUDE.md の最上段に **npm run dev 必須 / npm run start 禁止** を強調記載 + `dev:fresh` script 追加
+- 理由: 1) 「実行」より「取得」の方がデータ取得の意図が伝わる、2) 既存に「停止」相当ボタンが無く進行中バッチを途中で止める手段が無かった、3) Claude Code セッションが `npm run start`(preview コマンド)で古いビルドを掴む事故が複数回発生していたため再発防止
+- ボタンの意味分離(3 軸):
+  - 永続マスタースイッチ(再起動跨ぐ)→ 「有効化する / 無効化する」(既存、`dataCollectionEnabled` フラグ)
+  - 1 回手動取得(off-cycle)→ 「1 回だけ取得」(旧「今すぐ実行」、`triggerNow` IPC)
+  - 進行中バッチ停止(永続状態を変えずに)→ 「取得を停止」(NEW、`cancelCurrent` IPC)
+- Manager の cancel セマンティクス:
+  - `cancelCurrentBatch()` は state を `paused` に変えない。`cancelRequested = true` を立てるだけで、進行中バッチが次のチェックポイントで自然に exit
+  - 次回スケジュール(`scheduleNext` の timer)は影響を受けない → 規定の 2h 後に通常通り再開
+  - `runOneBatch()` 先頭で `cancelRequested = false` を再リセット(前回の cancel が次バッチに漏れない)、finally で「cancelled」ログ
+- UI のステータス表示優先度刷新:バッチ進行中なら最優先で「🟢 取得中…」、それ以外は enabled / paused / idle / no-keys を 4 way に区別。`nextBatchAtSec` で「待機中(次まで N 分)」を可視化
+- 起動コマンドの明文化:
+  - CLAUDE.md 最上段(概要より上)に「⚠️ アプリ起動時の絶対ルール」セクション追加。✅ `npm run dev` / ✅ `npm run dev:fresh` / ❌ `npm run start` / ❌ ビルド成果物直接実行 を一覧表で明示。dev 起動成功の目印 + 古い electron プロセス掃除コマンド(PowerShell + bash 両方)+ 過去事例まで記載
+  - `package.json` に `dev:fresh` 追加(`node -e` でクロスプラットフォームな `out/` 削除 → electron-vite dev -w、外部依存なし)
+- 開放されている設計判断:
+  - 停止時の進行中データの保存(現状はバッチ単位破棄、部分保存済みは残る)
+  - 部分的キャンセル(配信者単位 / クエリ単位)
+  - 「取得中」中の cancel 確認ダイアログをカスタムモーダルに(現状は window.confirm、CSS Modules 統一感のため後から検討)
+- 影響: CLAUDE.md(冒頭警告 + dev:fresh 解説)、package.json(dev:fresh script)、`src/main/dataCollection/index.ts`(cancelCurrentBatch + nextBatchAt + isBatchActive)、`src/common/types.ts`(IPC 型拡張)、`src/main/index.ts`(IPC ハンドラ)、`src/preload/index.ts`(bridge)、`src/renderer/src/components/DataCollectionSettings.tsx`(UI 整理)
+- 実機検証 ✅:`npm run dev:fresh` で port 3003 起動、creators 75 件のまま seed delta なし、新 UI ボタン配置確認
+- コミット: `c54ba71`(docs claude.md)、`b95240b`(feat ボタン整理)
+
 ## 2026-05-03 08:30 - 配信者リスト 40 → 75 拡張(vspo + neoporte 追加 + 差分マージ + サイクル 1h → 2h)
 
 - 誰が: Claude Code
