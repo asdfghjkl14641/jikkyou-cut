@@ -374,3 +374,58 @@
   gap: 8px;
   margin-top: 4px;
 }
+
+/* Existing keys (read-only chips with × to remove). Visually distinct
+   from the new-key input section so the user can't confuse the two
+   — that confusion was the cause of the "saved 1 → still 1" bug. */
+.existingKeyList {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 8px 10px;
+  background: var(--bg-elevated, #1a1a1a);
+  border: 1px solid var(--border-subtle, #2a2a2a);
+  border-radius: 4px;
+}
+
+.existingKeyHeader {
+  font-size: 11px;
+  color: var(--text-secondary);
+  margin-bottom: 2px;
+}
+
+.existingKeyRow {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.existingKeyRowRemoved code {
+  text-decoration: line-through;
+  opacity: 0.5;
+}
+
+.existingKeyLabel {
+  font-size: 11px;
+  color: var(--text-secondary);
+  min-width: 36px;
+}
+
+.existingKeyValue {
+  flex: 1;
+  font-family: ui-monospace, monospace;
+  font-size: 12px;
+  letter-spacing: 0.5px;
+  color: var(--text-primary);
+}
+
+.newKeySection {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.newKeyHeader {
+  font-size: 11px;
+  color: var(--text-secondary);
+}

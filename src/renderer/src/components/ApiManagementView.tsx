@@ -301,20 +301,18 @@ function YoutubeKeysSection() {
   const [keyCount, setKeyCount] = useState(0);
   const [quota, setQuota] = useState<QuotaRow[]>([]);
   const [editing, setEditing] = useState(false);
+  // Existing saved keys (loaded on edit-mode entry). Read-only here:
+  // the user can mark them for removal via × but cannot edit in place.
+  // The previous design seeded these into password inputs, where the
+  // user could not visually distinguish a pre-filled row from an empty
+  // one and ended up overwriting their existing keys.
+  const [existing, setExisting] = useState<string[]>([]);
+  const [removeMask, setRemoveMask] = useState<boolean[]>([]);
+  // Brand-new keys typed during this edit session. Always at least one
+  // empty row so the input is visible.
   const [draft, setDraft] = useState<string[]>(['']);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-
-  // Render-time log. Fires every render so we can correlate state
-  // values with what the user sees on screen. Per the 3rd-pass debug
-  // protocol — if the count diverges from intuition, this is where we
-  // catch it.
-  console.log(
-    '[YT-DEBUG] render: editing:', editing,
-    'keyCount:', keyCount,
-    'draft.length:', draft.length,
-    'busy:', busy,
-  );
 
   // Initial load + 5-second poll for live quota visibility.
   useEffect(() => {
@@ -337,33 +335,26 @@ function YoutubeKeysSection() {
     return () => { alive = false; clearInterval(interval); };
   }, []);
 
-  // Seed the editor with what's already saved when the user opens
-  // edit mode. Without this, draft starts as [''] every time, so any
-  // save replaces the existing N keys with whatever was typed in this
-  // session — the bug behind "saved 1 key, came back, can't grow it".
-  // The IPC `getKeys` returns plaintext keys (deliberate relaxation;
-  // see common/types.ts comment).
+  // Load existing keys when entering edit mode. They go into a
+  // separate `existing` list (not into draft) so the user cannot
+  // accidentally overwrite them by typing into a masked password
+  // field. The IPC `getKeys` returns plaintext (deliberate; see
+  // common/types.ts comment).
   useEffect(() => {
-    console.log('[YT-DEBUG] useEffect[editing] fired, editing:', editing);
     if (!editing) {
-      console.log('[YT-DEBUG] useEffect[editing] early-return (not in edit mode)');
+      setExisting([]);
+      setRemoveMask([]);
+      setDraft(['']);
       return;
     }
     let alive = true;
-    console.log('[YT-DEBUG] useEffect[editing] calling getKeys()...');
     void window.api.youtubeApiKeys.getKeys().then((keys) => {
-      if (!alive) {
-        console.log('[YT-DEBUG] useEffect[editing] resolved but alive=false, dropping');
-        return;
-      }
-      console.log('[YT-DEBUG] useEffect[editing] getKeys returned, keys.length:', keys.length);
-      const seed = keys.length > 0 ? keys : [''];
-      console.log('[YT-DEBUG] useEffect[editing] setDraft seeding with', seed.length, 'rows');
-      // Seed with existing keys; if none, start with one blank row so
-      // the editor always has at least one input visible.
-      setDraft(seed);
-    }).catch((err) => {
-      console.warn('[YT-DEBUG] useEffect[editing] getKeys failed:', err);
+      if (!alive) return;
+      setExisting(keys);
+      setRemoveMask(new Array(keys.length).fill(false));
+      setDraft(['']);
+    }).catch(() => {
+      // ignore — error display reserved for save failures
     });
     return () => { alive = false; };
   }, [editing]);
@@ -371,32 +362,39 @@ function YoutubeKeysSection() {
   const totalUsed = quota.reduce((acc, r) => acc + r.unitsUsed, 0);
   const totalCap = keyCount * YT_DAILY_QUOTA_PER_KEY;
 
+  const keptCount = existing.filter((_, i) => !removeMask[i]).length;
+  const newCount = draft.map((k) => k.trim()).filter((k) => k.length > 0).length;
+  const finalCount = keptCount + newCount;
+  const canAddDraftRow = !busy && existing.length + draft.length < MAX_YT_KEYS;
+
+  // Mask middle of a key for safe display. Standard YouTube keys are
+  // 39 chars — keeping first 6 + last 4 lets the user disambiguate
+  // multiple keys without leaking the secret to a screenshot.
+  const maskKey = (key: string): string => {
+    if (key.length <= 12) return '•'.repeat(key.length);
+    return `${key.slice(0, 6)}${'•'.repeat(Math.min(key.length - 10, 12))}${key.slice(-4)}`;
+  };
+
   const handleSave = async () => {
-    console.log('[YT-DEBUG] handleSave called');
-    console.log(
-      '[YT-DEBUG] handleSave: draft.length:', draft.length,
-      'each-trim-length:', draft.map((k) => k.trim().length),
-    );
     setError(null);
-    const cleaned = draft.map((k) => k.trim()).filter((k) => k.length > 0);
-    console.log('[YT-DEBUG] handleSave: after trim+filter, cleaned.length:', cleaned.length);
-    if (cleaned.length === 0) {
-      console.log('[YT-DEBUG] handleSave: cleaned is empty → showing error, NOT calling setKeys');
-      setError('少なくとも 1 つのキーを入力してください');
+    const kept = existing.filter((_, i) => !removeMask[i]);
+    const newOnes = draft.map((k) => k.trim()).filter((k) => k.length > 0);
+    // Dedupe in case the user pastes a key that's already saved.
+    const merged = Array.from(new Set([...kept, ...newOnes]));
+    if (merged.length === 0) {
+      setError('少なくとも 1 つのキーが必要です');
       return;
     }
     setBusy(true);
     try {
-      console.log('[YT-DEBUG] handleSave: invoking IPC setKeys with', cleaned.length, 'keys');
-      await window.api.youtubeApiKeys.setKeys(cleaned);
-      console.log('[YT-DEBUG] handleSave: IPC setKeys returned, calling getKeyCount...');
+      await window.api.youtubeApiKeys.setKeys(merged);
       const reloadCount = await window.api.youtubeApiKeys.getKeyCount();
-      console.log('[YT-DEBUG] handleSave: getKeyCount returned', reloadCount);
+      setExisting([]);
+      setRemoveMask([]);
       setDraft(['']);
       setEditing(false);
       setKeyCount(reloadCount);
     } catch (err) {
-      console.warn('[YT-DEBUG] handleSave failed:', err);
       setError(err instanceof Error ? err.message : String(err));
     } finally {
       setBusy(false);
@@ -428,14 +426,7 @@ function YoutubeKeysSection() {
           <button
             type="button"
             className={styles.smallButton}
-            onClick={() => {
-              console.log('[YT-DEBUG] toggle button clicked, current editing:', editing, 'keyCount:', keyCount);
-              setEditing((v) => {
-                const next = !v;
-                console.log('[YT-DEBUG] toggle: setEditing functional update', v, '→', next);
-                return next;
-              });
-            }}
+            onClick={() => setEditing((v) => !v)}
             disabled={busy}
           >
             <Edit2 size={12} />
@@ -485,82 +476,105 @@ function YoutubeKeysSection() {
 
       {editing && (
         <div className={styles.multiKeyEditor}>
-          <div className={styles.multiKeyRows}>
-            {draft.map((key, i) => (
-              <div key={i} className={styles.multiKeyRow}>
-                <input
-                  type="password"
-                  className={styles.input}
-                  value={key}
-                  onChange={(e) => {
-                    const v = e.target.value;
-                    console.log('[YT-DEBUG] input onChange index:', i, 'valueLength:', v.length);
-                    setDraft((prev) => {
-                      const next = [...prev];
-                      next[i] = v;
-                      console.log(
-                        '[YT-DEBUG] input onChange setDraft: prev.length:', prev.length,
-                        'next.length:', next.length,
-                        'next-trim-lengths:', next.map((k) => k.trim().length),
-                      );
-                      return next;
-                    });
-                  }}
-                  placeholder={`キー ${i + 1}`}
-                  spellCheck={false}
-                  autoComplete="off"
-                  disabled={busy}
-                />
-                <button
-                  type="button"
-                  className={styles.smallButton}
-                  onClick={() => {
-                    console.log('[YT-DEBUG] remove-row clicked, index:', i, 'current draft.length:', draft.length);
-                    setDraft((prev) => {
-                      const next = prev.filter((_, idx) => idx !== i);
-                      console.log('[YT-DEBUG] remove-row setDraft: prev.length:', prev.length, '→ next.length:', next.length);
-                      return next;
-                    });
-                  }}
-                  disabled={busy || draft.length === 1}
-                  title="この行を削除"
-                >
-                  <X size={12} />
-                </button>
+          {existing.length > 0 && (
+            <div className={styles.existingKeyList}>
+              <div className={styles.existingKeyHeader}>
+                登録済み({keptCount} / {existing.length} 個を保持)
               </div>
-            ))}
+              {existing.map((k, i) => {
+                const removed = removeMask[i];
+                return (
+                  <div
+                    key={i}
+                    className={`${styles.existingKeyRow} ${removed ? styles.existingKeyRowRemoved : ''}`}
+                  >
+                    <span className={styles.existingKeyLabel}>キー {i + 1}</span>
+                    <code className={styles.existingKeyValue}>{maskKey(k)}</code>
+                    <button
+                      type="button"
+                      className={styles.smallButton}
+                      onClick={() =>
+                        setRemoveMask((prev) => {
+                          const next = [...prev];
+                          next[i] = !next[i];
+                          return next;
+                        })
+                      }
+                      disabled={busy}
+                      title={removed ? '削除を取り消す' : 'このキーを保存時に削除'}
+                    >
+                      {removed ? '取消' : <X size={12} />}
+                    </button>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+
+          <div className={styles.newKeySection}>
+            <div className={styles.newKeyHeader}>
+              {existing.length > 0 ? '新しいキーを追加' : '新しいキー'}
+            </div>
+            <div className={styles.multiKeyRows}>
+              {draft.map((key, i) => (
+                <div key={i} className={styles.multiKeyRow}>
+                  <input
+                    type="password"
+                    className={styles.input}
+                    value={key}
+                    onChange={(e) =>
+                      setDraft((prev) => {
+                        const next = [...prev];
+                        next[i] = e.target.value;
+                        return next;
+                      })
+                    }
+                    placeholder="AIza... で始まる新規キー"
+                    spellCheck={false}
+                    autoComplete="off"
+                    disabled={busy}
+                  />
+                  <button
+                    type="button"
+                    className={styles.smallButton}
+                    onClick={() =>
+                      setDraft((prev) => {
+                        const next = prev.filter((_, idx) => idx !== i);
+                        return next.length === 0 ? [''] : next;
+                      })
+                    }
+                    disabled={busy || draft.length === 1}
+                    title="この行を削除"
+                  >
+                    <X size={12} />
+                  </button>
+                </div>
+              ))}
+            </div>
           </div>
+
           <div className={styles.multiKeyActions}>
             <button
               type="button"
               className={styles.smallButton}
-              onClick={() => {
-                console.log('[YT-DEBUG] add-row button clicked, current draft.length:', draft.length, 'MAX:', MAX_YT_KEYS);
+              onClick={() =>
                 setDraft((prev) => {
-                  if (prev.length >= MAX_YT_KEYS) {
-                    console.log('[YT-DEBUG] add-row BLOCKED at cap', MAX_YT_KEYS);
-                    return prev;
-                  }
-                  const next = [...prev, ''];
-                  console.log(
-                    '[YT-DEBUG] add-row setDraft: prev.length:', prev.length,
-                    '→ next.length:', next.length,
-                  );
-                  return next;
-                });
-              }}
-              disabled={busy || draft.length >= MAX_YT_KEYS}
+                  if (existing.length + prev.length >= MAX_YT_KEYS) return prev;
+                  return [...prev, ''];
+                })
+              }
+              disabled={!canAddDraftRow}
             >
               <Plus size={12} />
-              キーを追加({draft.length} / {MAX_YT_KEYS})
+              新規行を追加(現在 {existing.length + draft.length} / {MAX_YT_KEYS})
             </button>
             <button
               type="button"
               className={styles.primaryButton}
               onClick={handleSave}
-              disabled={busy || draft.every((k) => !k.trim())}
+              disabled={busy || finalCount === 0}
             >
-              {busy ? '保存中...' : '全て保存(既存を上書き)'}
+              {busy ? '保存中...' : `保存(合計 ${finalCount} 個)`}
             </button>
           </div>
         </div>
