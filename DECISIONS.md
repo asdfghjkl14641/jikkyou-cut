@@ -15,6 +15,26 @@
 
 ---
 
+## 2026-05-03 08:30 - 配信者リスト 40 → 75 拡張(vspo + neoporte 追加 + 差分マージ + サイクル 1h → 2h)
+
+- 誰が: Claude Code
+- 何を: 直前 `16535eb` の 40 人を 75 人に拡張(にじ 15→20 / ホロ 10→15 / ぶいすぽ 0→15 新規 / ネオポルテ 0→5 新規(★ 柊ツルギ含む)/ ストリーマー 15→20)、`CreatorGroup` 型に `'vspo'` / `'neoporte'` 追加。`seedCreatorsIfEmpty` を `seedOrUpdateCreators`(差分マージ)に進化、サイクル間隔 1h → 2h
+- 理由: ユーザ精査の最終リスト反映。40 → 75 拡張時に既存 creators.json を全置換すると解決済み channelId とユーザ手動編集が消える事故になるため、差分マージへ。クォータも 75 × 3 = 22.5K/サイクル + 周辺で ~23.75K → 1h 間隔だと 570K/日 > 500K 予算超過のため 2h(285K/日)で余裕を持たせる
+- 差分マージのセマンティクス:
+  1. 既存 creators.json をロード
+  2. SEED_CREATORS のうち既存に同名がある → 触らない(channelId / 順序保持)。ただし既存 group が null なら seed の group を backfill(creators.json + DB 両方、DB は新規 `setCreatorGroupIfNull`)
+  3. 既存に無い名前のみ append + DB `upsertCreator`
+- 0-hit 警告:creator の全 3 クエリで 0 件なら `logWarn` で「表記揺れ / 脱退 / 改名の可能性」を collection.log に出力。group 名も付記して、流動的な箱(neoporte 等)で誤検出しやすいことを明示
+- 開放されている設計判断:
+  - ネオポルテメンバー名の最新検証(変動箱なので、データ収集後にユーザが log を見て手修正)
+  - 配信者表記揺れの自動吸収
+  - グループ別検索クエリのカスタマイズ(現状全 group 同じ 3 クエリ)
+  - 1 時間 vs 2 時間以外のサイクル間隔(時間帯で変える、夜だけ多めに走らせる、等)
+- 影響: src/main/dataCollection/seedCreators.ts(SEED_CREATORS 75 人 + seedOrUpdateCreators)、creatorList.ts(`CreatorGroup` 拡張)、database.ts(`setCreatorGroupIfNull` 追加)、index.ts(0-hit warn + COLLECTION_INTERVAL_MS 1h → 2h)、main/index.ts(関数名切替)
+- 実機検証 ✅:既存 40 件 creators.json で起動 → 35 件追加 + group 保持(file 75 件、group 内訳 nijisanji 20 / hololive 15 / vspo 15 / neoporte 5 / streamer 20、null group 0 件)
+- ⚠️ ネオポルテ 5 人は名前そのまま投入。最初のサイクルで 0-hit 警告が出る可能性あり、ユーザは API 管理 → 収集ログ タブで確認 + creators.json を手修正
+- コミット: `cde28b0`
+
 ## 2026-05-03 07:30 - 配信者 40 人 seed 投入 + 検索クエリ多角化 + channelId 自動解決
 
 - 誰が: Claude Code

@@ -1,114 +1,95 @@
 # 次セッションへの引き継ぎ (NEXT_SESSION_HANDOFF)
 
 ## 凍結時刻
-2026-05-03 07:30 — 配信者 40 人 seed 投入 + 検索クエリ多角化 + channelId 自動解決完了。**データ収集の有効化はユーザの操作待ち**。
+2026-05-03 08:30 — 配信者リスト 75 人化(vspo + neoporte 追加 + 差分マージ)+ サイクル間隔 1h → 2h。**データ収集の有効化はユーザの操作待ち**。
 
 ## リポジトリ状態
-- HEAD: `16535eb`(feat(data-collection): 配信者 40 人 seed 投入 + 検索クエリ多角化 + channelId 自動解決)
-- 直後に docs コミット予定(本ファイル + DECISIONS.md + TODO.md + HANDOFF.md + DATA_COLLECTION_DESIGN.md)
+- HEAD: `cde28b0`(feat(data-collection): seed リスト 40 → 75 拡張)
+- 直後に docs コミット予定
 - Working Tree: docs commit 後 clean
 
 ## 直前の状況サマリ
 
-ユーザ精査の **配信者 40 人**(VTuber 25 + ストリーマー 15)を seed 化し、初回起動時に `creators.json` + DB へ自動投入する仕組みを実装した。検索クエリも 1 → 3 へ多角化、channelId は初回バッチで自動解決して永続化。
+ユーザ精査の **配信者 75 人最終リスト**(にじ 20 + ホロ 15 + ぶいすぽ 15 新規 + ネオポルテ 5 新規 + ストリーマー 20)を seed 化し、既存 40 人 creators.json に **差分マージ** で 35 人を追加。`CreatorGroup` 型に `'vspo'` / `'neoporte'` を追加、サイクル間隔をクォータ予算に合わせて 1 時間 → 2 時間に調整。
 
-実装は完了したが**データ収集はまだ動いていない**。ユーザが API 管理 / Settings 画面で **「有効化する」を押す** 操作が必要(`dataCollectionEnabled` フラグ、デフォルト `false` を尊重)。
+実装は完了したが**データ収集はまだ動いていない**(`dataCollectionEnabled === false` のまま)。ユーザが API 管理画面 / Settings → 切り抜きデータ収集 で **「有効化する」を押す** 操作待ち。
 
-### 追加した設計レイヤ
+### 差分マージのセマンティクス(`seedOrUpdateCreators`)
 
-| 名前 | 役割 |
+旧 `seedCreatorsIfEmpty` は creators.json が空の時だけ全投入する設計だったため、40 → 75 拡張時にユーザの手動編集や解決済み channelId が消える事故になり得た。今回それを差分マージへ進化:
+
+1. 既存 creators.json をロード
+2. SEED_CREATORS のうち既存に同名がある → 触らない(channelId / 順序保持)。**ただし既存 group が null なら seed の group を backfill**(creators.json + DB 両方、DB 側は新規 `setCreatorGroupIfNull`)
+3. 既存に無い名前のみ append + DB `upsertCreator`
+
+### グループ別人数(75 人)
+
+| `creator_group` | 人数 |
 |---|---|
-| `SEED_CREATORS` | `seedCreators.ts` 内の literal 40 人定数。`group` フィールドで `'nijisanji'\|'hololive'\|'streamer'` にタグ付け |
-| `seedCreatorsIfEmpty()` | `app.whenReady` で 1 回呼ぶ。`creators.json` が空の時のみ投入(冪等)。同時に DB の `creators` テーブルへ `upsertCreator(name, null, true, group)` |
-| `resolveCreatorChannelIds()` | バッチ先頭で呼ばれる。`channelId === null` の creator のみ `search.list type=channel`(100u/人)で解決して `creators.json` + DB に persist。一度解決したら fastpath で skip |
-| `buildPerCreatorQueries(name)` | `[<name> 切り抜き, <name> 神回, <name> 名場面]` を返す。manager は creator × 3 クエリループ |
-| `creator_group` カラム | `creators` テーブルに追加(`migrateSchema()` で `PRAGMA table_info` チェック後 `ALTER TABLE ADD COLUMN`、既存 DB に冪等)。Phase 2 のグループ別集計用 |
+| `nijisanji` | 20 |
+| `hololive` | 15 |
+| `vspo` | 15 |
+| `neoporte` | 5(★ 柊ツルギ含む) |
+| `streamer` | 20 |
+| **合計** | **75** |
 
-### クォータ見積もり(50 キー想定、500K 日次)
+null group: 0 件(全 seed エントリに group タグ付き)
+
+### クォータ見積もり(50 キー × 75 人)
 
 | 項目 | 単価 | 件数 | 合計 |
 |---|---|---|---|
-| per-creator search.list | 100u | 40 × 3 = 120 | 12,000u |
+| per-creator search.list | 100u | 75 × 3 = 225 | 22,500u |
 | broad search.list | 100u | 11 | 1,100u |
 | videos.list | 1u | ~150 | 150u |
-| **1 サイクル** |  |  | **~13.25K** |
-| 初回のみ channelId 解決 | 100u | 40 | +4,000u |
+| **1 サイクル** |  |  | **~23.75K** |
+| 初回 channelId 解決(残 35 人) | 100u | 35 | +3,500u |
 
-1 時間ごと 24 サイクル/日 = 318K → 500K 予算で余裕。
+**サイクル間隔 2 時間**:12 サイクル/日 × 23.75K = **285K/日**(500K 予算の 57%、余裕あり)。
 
-### 上書き安全性
+1 時間ごとだと 570K/日で予算超過するため `COLLECTION_INTERVAL_MS = 2 * 60 * 60 * 1000` に変更。
 
-`upsertCreator(name, channelId, isTarget, group?)` の挙動:
-- INSERT: 全フィールド書く
-- UPDATE: `channel_id = COALESCE(?, channel_id)`、`is_target` 上書き、**`creator_group` は触らない**
+### 0-hit 警告(neoporte 等の流動箱対策)
 
-→ random clip uploader の per-video upsert で seed creator の group が消えることはない。
+creator の全 3 クエリ(切り抜き / 神回 / 名場面)で 0 件なら `logWarn` で `creator "○○" は全 3 クエリで 0 件 — 表記揺れ / 脱退 / 改名の可能性。creators.json を見直してください (group=neoporte)` を collection.log に出力。ユーザは API 管理 → 収集ログ タブで確認 + `creators.json` を手修正する想定(自動補正はしない)。
 
-### app.whenReady() の起動順序
+ネオポルテメンバーは spec のままで投入(柊ツルギ / 叶神あかり / 愛宮みるく / 白雪レイド / 獅子神レオナ)。**最初のバッチで警告が出たら名前を修正する作業がユーザ側に残る**。
 
-```
-1. nativeTheme.themeSource = 'dark'
-2. handleMediaProtocol()
-3. buildMenu(...)
-4. registerIpcHandlers()
-5. createWindow()
-6. seedCreatorsIfEmpty()  ← NEW (空の時のみ 40 人投入)
-7. dataCollectionManager.start()  ← dataCollectionEnabled === true なら
-```
+## 主要変更ファイル(直近 = `cde28b0`)
 
-### バッチの先頭順序
+- `src/main/dataCollection/seedCreators.ts` — `SEED_CREATORS` 75 人 + `seedOrUpdateCreators` (差分マージ)
+- `src/main/dataCollection/creatorList.ts` — `CreatorGroup` に `'vspo'` / `'neoporte'` 追加
+- `src/main/dataCollection/database.ts` — `setCreatorGroupIfNull` 追加
+- `src/main/dataCollection/index.ts` — 0-hit warn + `COLLECTION_INTERVAL_MS` 1h → 2h
+- `src/main/index.ts` — 関数名 `seedCreatorsIfEmpty` → `seedOrUpdateCreators` 切替
 
-```
-1. resolveCreatorChannelIds()  ← NEW (channelId 未解決のみ search.list 100u/人)
-2. per-creator search × 3 クエリ
-3. broad search × 11 クエリ
-4. videoExists で dedup
-5. fetchVideoDetails (videos.list)
-6. yt-dlp で heatmap / chapters / サムネ
-7. upsertVideoFull
-```
+UI / IPC は無変更。
 
-## 主要変更ファイル(直近 = `16535eb`)
+## 動作確認(実機 — 一部済 / 残はユーザ操作待ち)
 
-- `src/main/dataCollection/seedCreators.ts`(新規、40 人 + helpers)
-- `src/main/dataCollection/database.ts`(creator_group カラム + migration + upsertCreator group 引数)
-- `src/main/dataCollection/creatorList.ts`(CreatorEntry.group 追加)
-- `src/main/dataCollection/searchQueries.ts`(buildPerCreatorQueries 3 クエリ化)
-- `src/main/dataCollection/youtubeApi.ts`(searchChannelByName 追加)
-- `src/main/dataCollection/index.ts`(manager: resolveChannelIds + 多角化ループ)
-- `src/main/index.ts`(seed wiring)
-
-UI / IPC は無変更 — 既存の `creators.add` / `list` / `remove` は後方互換で動く。
-
-## 動作確認(ユーザ実機 — 操作待ち)
-
-1. **空 creators.json で起動** → 起動時に `[data-collection] seeding creators.json with 40 entries` ログ → API 管理画面の配信者リスト UI に 40 人並ぶ
-2. **既に creators.json がある状態で再起動** → `[data-collection] creators already populated (N) — skipping seed` ログで skip
-3. **「有効化する」ボタン押下** → 5 秒後にバッチ開始 → `[data-collection] resolved channelId for ...` × 40 → `[data-collection] search per-creator "葛葉 切り抜き" → N items` 等が順次流れる
-4. **2 回目以降のバッチ** → channelId 解決は no-op fastpath、search のみ走る
+- ✅ **既存 40 人 creators.json で起動 → 35 件追加 + group 保持**:`creators already populated (75) — no seed delta`(ホットリロードで先に行ったため、新セッションでは delta 0 で確認)。`creators.json` を Node で直読みして **75 件、group 内訳 nijisanji 20 / hololive 15 / vspo 15 / neoporte 5 / streamer 20、null group 0 件** を確認
+- ⏳ **「有効化する」押下 → 最初のバッチ**:ユーザ操作待ち。`channelId` 解決(残 35 人 × 100u = 3.5K)→ per-creator × 3 クエリ → broad → enrich → upsert
+- ⏳ **ネオポルテ 0-hit 警告**:最初のバッチ走らせて collection.log を見ないと判明しない。出たらユーザが creators.json 手修正
 
 ## 既知の地雷・注意点
 
-- **既存 install で creators.json に手動データがある場合**:seed は **発火しない**(冪等)。group タグも付かない。Phase 2 集計で「未分類」として現れる前提で OK
-- **channel 検索の精度**:`searchChannelByName` は first hit を返すヒューリスティック。同名 channel が複数ある場合は誤マッチ可能性。ログで「resolved channelId for ...」を見ながら、明らかに違うものはユーザが手動で `creators.json` を編集する想定
-- **クエリ追加でクォータ誤算**:現状は 13.25K/サイクル想定。クエリを 4 つ目以上に増やしたい時は `searchQueries.ts` の `buildPerCreatorQueries` だけ触れば OK、見積も `DATA_COLLECTION_DESIGN.md` のテーブルを更新
-- **`upsertCreator` の group 引数**:default が `null`。INSERT 時のみ反映、UPDATE 時は touch しない。これを破ると random uploader が seed creator を上書きする回帰になるので注意
+- **ネオポルテメンバー**:流動的な箱。spec のメンバー名で投入したが、最初のバッチで `creator "○○" は全 3 クエリで 0 件` 警告が出る可能性あり。出たらユーザが「修正提案」を確認しつつ creators.json を手修正
+- **「セッション内 pause / resume」の意味**:`isPaused` / `isRunning` はセッション内モード(再起動で消える)。永続的な ON/OFF は `dataCollectionEnabled` フラグの方
+- **ホットリロードと seed の関係**:Vite + electron-vite は main プロセスの再ビルド時にプロセスを再起動する。今回検証では既に前回の dev サーバが 40 → 75 のマージを完了させていた。新規 install では本セッションで `seed delta: +35 new creators` ログが出る想定
+- **0-hit 警告は「全 3 クエリで 0」の時のみ**:1 件でも引っかかれば警告は出ない。とはいえ 1 / 50 とかだと表記揺れの兆候だが、現状はそこまで厳しくはチェックしてない。必要なら threshold を上げる(spec の "≥ 2" など)
 
 ## 次タスク候補
 
 1. **【ユーザ操作】**:API 管理画面 → 切り抜きデータ収集 → 「有効化する」を押す → 1 週間放置
-2. データ蓄積中に CollectionLogViewer で時々確認(ERROR 赤色頻発なら原因特定)
-3. **Phase 2(蓄積データ分析)**:
-   - グループ別(にじさんじ / ホロ / ストリーマー)再生数分布
-   - サムネ + タイトルパターン抽出
-   - per-creator の伸び率時系列(現状は最新 view_count しか持ってないので `video_stats_history` テーブル新設を検討)
-4. **Phase 3(統合)**:`aiSummary.autoExtract` の Stage 2 プロンプトに「この配信者の伸びパターン」をコンテキスト注入
+2. データ蓄積中に CollectionLogViewer で時々確認 — 特にネオポルテメンバーの 0-hit 警告
+3. 警告出た creators.json を手修正(ユーザ判断で正しい名前へ。ネオポルテは公式 X / YouTube 検索で最新メンバー名を確認)
+4. **Phase 2(蓄積データ分析)**:グループ別の再生数分布 / per-creator 伸び率時系列(`video_stats_history` テーブル新設検討)/ サムネ + タイトルパターン抽出
+5. **Phase 3(統合)**:`aiSummary.autoExtract` の Stage 2 プロンプトに「この配信者の伸びパターン」をコンテキスト注入
 
 ## みのる(USER)への報告用
 
-- 配信者 **40 人**(にじさんじ 15 / ホロライブ 10 / ストリーマー 15)を seed 投入完了 ✅
-- per-creator クエリを「切り抜き / 神回 / 名場面」の **3 角化**
-- channelId は初回バッチで自動解決(40 × 100u = 4K のみ、以降 0)
-- 1 サイクル ~13.25K、50 キー × 500K 日次予算で余裕
-- グループ別タグ(`creator_group`)を DB に保持、Phase 2 でグループ比較に使える
+- 配信者リスト **75 人** で完成 ✅(にじ 20 / ホロ 15 / ぶいすぽ 15 / ネオポルテ 5 / ストリーマー 20)
+- 旧 40 人は **そのまま保持**(channelId / 順序が消えてない)、新規 35 人を追加するだけの差分マージで安全に拡張
+- サイクル間隔は **2 時間**(クォータ予算 500K に対し 285K/日で余裕)
+- ネオポルテメンバーは spec のまま投入。最初のバッチで 0-hit 警告が出る場合あり、API 管理 → 収集ログ タブで確認しつつ `creators.json` を手修正する想定
 - **次の一手**:API 管理画面 → 切り抜きデータ収集 → 「**有効化する**」ボタン → 1 週間放置で 1 万件規模を目指す
