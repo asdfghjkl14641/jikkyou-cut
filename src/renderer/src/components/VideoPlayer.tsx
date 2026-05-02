@@ -251,6 +251,16 @@ const VideoPlayer = forwardRef<VideoPlayerHandle, Props>(function VideoPlayer(
     // Capture intrinsic dimensions for export-time subtitle PlayResX/Y.
     // Skipped via the store guard if either is 0 (e.g. before metadata).
     useEditorStore.getState().setVideoDimensions(v.videoWidth, v.videoHeight);
+
+    // Defensive volume reset. Chromium occasionally remembers a per-
+    // element volume of 0 across reloads (especially with custom
+    // protocols like media://), and Electron's autoplay policy can
+    // muted-start a fresh element. Force audible defaults here so a
+    // newly-loaded video is heard. The user can still drag the volume
+    // slider down afterwards — those changes are kept until the next
+    // file swap.
+    if (v.muted) v.muted = false;
+    if (v.volume === 0) v.volume = 1;
   };
 
   return (

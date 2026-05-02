@@ -88,13 +88,24 @@ function groupByCategory(samples: ScoreSample[]): FillSegment[] {
   return out;
 }
 
+// 'pending' is the just-pressed state: we haven't decided whether the
+// user wants a click (seek), a drag-range (new segment), or a segment
+// move/resize until they actually move the mouse far enough. mouseup
+// from `pending` always fires a click → seek so that tapping anywhere
+// on the waveform — including the existing segment overlay bars —
+// jumps the playhead. Without this, clicking on a colored segment bar
+// would fall through to segment-move and the seek never fires.
 type DragMode =
+  | { kind: 'pending'; downSec: number; downClientX: number; downClientY: number; pendingHit: { id: string; mode: 'left' | 'right' | 'middle' } | null }
   | { kind: 'select'; startSec: number; currentSec: number }
   | { kind: 'segment-move'; id: string; offsetSec: number; originStartSec: number; originEndSec: number; spanSec: number }
   | { kind: 'segment-resize-left'; id: string; originStartSec: number; originEndSec: number }
   | { kind: 'segment-resize-right'; id: string; originStartSec: number; originEndSec: number };
 
 const MIN_SEGMENT_SEC = 1;
+// Pixel threshold to promote `pending` into a real drag. 5 px matches
+// the previous select-vs-click threshold.
+const DRAG_THRESHOLD_PX = 5;
 
 export default function CommentAnalysisGraph({
   analysis,
@@ -252,29 +263,17 @@ export default function CommentAnalysisGraph({
 
     setPendingSelection(null);
 
+    // Always start in `pending`. Promotion to select / segment-* happens
+    // in mousemove once we know whether the user is dragging. Clicks
+    // (no movement) always end in seek/peak via the mouseup handler.
     const hit = hitTestSegment(time);
-    if (hit) {
-      const seg = segments.find((s) => s.id === hit.id);
-      if (!seg) return;
-      onSelectSegment?.(seg.id);
-      if (hit.mode === 'left') {
-        setDrag({ kind: 'segment-resize-left', id: seg.id, originStartSec: seg.startSec, originEndSec: seg.endSec });
-      } else if (hit.mode === 'right') {
-        setDrag({ kind: 'segment-resize-right', id: seg.id, originStartSec: seg.startSec, originEndSec: seg.endSec });
-      } else {
-        setDrag({
-          kind: 'segment-move',
-          id: seg.id,
-          offsetSec: time - seg.startSec,
-          originStartSec: seg.startSec,
-          originEndSec: seg.endSec,
-          spanSec: seg.endSec - seg.startSec,
-        });
-      }
-      return;
-    }
-
-    setDrag({ kind: 'select', startSec: time, currentSec: time });
+    setDrag({
+      kind: 'pending',
+      downSec: time,
+      downClientX: e.clientX,
+      downClientY: e.clientY,
+      pendingHit: hit,
+    });
   };
 
   const handleMouseMove = (e: MouseEvent<HTMLDivElement>) => {
@@ -282,6 +281,48 @@ export default function CommentAnalysisGraph({
     if (!rect || rect.width <= 0) return;
     const x = e.clientX - rect.left;
     const time = getTimeAtX(x);
+
+    // Promote pending → real drag once the user moves past the threshold.
+    if (drag?.kind === 'pending') {
+      const dx = Math.abs(e.clientX - drag.downClientX);
+      const dy = Math.abs(e.clientY - drag.downClientY);
+      if (dx + dy < DRAG_THRESHOLD_PX) {
+        // Still might be a click — update hover but don't commit to drag yet.
+        const sample = sampleAt(time);
+        if (sample) {
+          const sampleCentre = sample.timeSec + windowSec / 2;
+          setHoverSample({ sample, x: durationSec > 0 ? (sampleCentre / durationSec) * rect.width : 0 });
+        } else {
+          setHoverSample(null);
+        }
+        return;
+      }
+      // Promote.
+      const hit = drag.pendingHit;
+      if (hit) {
+        const seg = segments.find((s) => s.id === hit.id);
+        if (seg) {
+          onSelectSegment?.(seg.id);
+          if (hit.mode === 'left') {
+            setDrag({ kind: 'segment-resize-left', id: seg.id, originStartSec: seg.startSec, originEndSec: seg.endSec });
+          } else if (hit.mode === 'right') {
+            setDrag({ kind: 'segment-resize-right', id: seg.id, originStartSec: seg.startSec, originEndSec: seg.endSec });
+          } else {
+            setDrag({
+              kind: 'segment-move',
+              id: seg.id,
+              offsetSec: drag.downSec - seg.startSec,
+              originStartSec: seg.startSec,
+              originEndSec: seg.endSec,
+              spanSec: seg.endSec - seg.startSec,
+            });
+          }
+          return;
+        }
+      }
+      setDrag({ kind: 'select', startSec: drag.downSec, currentSec: time });
+      return;
+    }
 
     if (drag?.kind === 'select') {
       setDrag({ ...drag, currentSec: time });
@@ -338,30 +379,37 @@ export default function CommentAnalysisGraph({
     const x = e.clientX - rect.left;
     const time = getTimeAtX(x);
 
-    if (drag.kind === 'select') {
-      const pxDiff = Math.abs(e.clientX - (rect.left + (drag.startSec / durationSec) * rect.width));
-      if (pxDiff < 5) {
-        // Treat as click — peak / seek.
-        const sample = sampleAt(time);
-        if (sample && sample.total >= 0.5) onPeakClick?.(sample);
-        else onSeek?.(time);
-        setPendingSelection(null);
-      } else {
-        const start = Math.min(drag.startSec, time);
-        const end = Math.max(drag.startSec, time);
-        if (end - start >= MIN_SEGMENT_SEC) {
-          setPendingSelection({ startSec: start, endSec: end });
-        }
+    if (drag.kind === 'pending') {
+      // Mouse never moved past threshold → user clicked. Always seek
+      // (or open the peak detail panel if the click landed on a peak),
+      // regardless of whether the click was on a segment overlay bar.
+      // This is the fix for "clicking on the waveform doesn't seek".
+      const sample = sampleAt(drag.downSec);
+      if (sample && sample.total >= 0.5) onPeakClick?.(sample);
+      else onSeek?.(drag.downSec);
+      // If the click landed on an existing segment bar, also select it
+      // so Delete-key removal and the highlight on the list panel pick
+      // up the right entry.
+      if (drag.pendingHit) onSelectSegment?.(drag.pendingHit.id);
+      setPendingSelection(null);
+    } else if (drag.kind === 'select') {
+      const start = Math.min(drag.startSec, time);
+      const end = Math.max(drag.startSec, time);
+      if (end - start >= MIN_SEGMENT_SEC) {
+        setPendingSelection({ startSec: start, endSec: end });
       }
     }
+    // segment-move / segment-resize-* end with no-op — onMutateSegment
+    // has already been called incrementally during mousemove.
     setDrag(null);
   };
 
   const handleMouseLeave = () => {
-    if (drag?.kind === 'select') {
-      // Drag-leaving abandons the selection. Active segment-drag continues
-      // until mouseup — but Chromium keeps firing move events while the
-      // button is down, so this branch is mostly for the select case.
+    // Cancel pending click (cursor left without committing) and abandon
+    // in-flight select drag. Segment-* drags persist — Chromium keeps
+    // firing mousemove with button held even when the pointer leaves the
+    // element, so the move/resize logic stays valid until mouseup.
+    if (drag?.kind === 'pending' || drag?.kind === 'select') {
       setDrag(null);
     }
     setHoverSample(null);
@@ -529,13 +577,13 @@ export default function CommentAnalysisGraph({
         })}
 
         {/* Hover line + tooltip (only when not in any drag state) */}
-        {hoverSample && drag === null && (
+        {hoverSample && (drag === null || drag.kind === 'pending') && (
           <div className={styles.hoverLine} style={{ left: hoverSample.x }} />
         )}
 
         <div className={styles.cursor} style={{ left: `${currentPercent}%` }} />
 
-        {hoverSample && drag === null && (
+        {hoverSample && (drag === null || drag.kind === 'pending') && (
           <div
             className={styles.tooltip}
             style={{
