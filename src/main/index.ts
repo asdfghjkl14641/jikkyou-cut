@@ -18,6 +18,7 @@ import * as urlDownload from './urlDownload';
 import * as commentAnalysis from './commentAnalysis';
 import * as aiSummary from './aiSummary';
 import { dataCollectionManager } from './dataCollection';
+import { seedCreatorsIfEmpty } from './dataCollection/seedCreators';
 import * as creatorList from './dataCollection/creatorList';
 import type { AppConfig } from '../common/config';
 import type {
@@ -309,7 +310,6 @@ app.whenReady().then(async () => {
   // empty). This must run before the manager touches the list so the
   // first batch already has the curated 40-creator targeting set.
   try {
-    const { seedCreatorsIfEmpty } = await import('./dataCollection/seedCreators');
     await seedCreatorsIfEmpty();
   } catch (err) {
     console.warn('[data-collection] seed step failed:', err);
