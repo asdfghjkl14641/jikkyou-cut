@@ -23,6 +23,7 @@
   },
   "scripts": {
     "dev": "electron-vite dev -w",
+    "dev:fresh": "node -e \"require('fs').rmSync('out',{recursive:true,force:true})\" && electron-vite dev -w",
     "build": "electron-vite build",
     "start": "electron-vite preview",
     "tsc": "tsc --build"
