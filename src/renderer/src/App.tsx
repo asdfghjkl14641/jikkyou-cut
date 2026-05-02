@@ -30,7 +30,7 @@ import styles from './App.module.css';
 // iterating on a single test video, this saves the user from pasting it
 // every launch. Used only as a fallback when `lastDownloadUrl` is null —
 // any previously-downloaded URL takes precedence.
-const PROTOTYPE_DEFAULT_URL = 'https://www.youtube.com/watch?v=kod7RhQQCv4&t=2s';
+const PROTOTYPE_DEFAULT_URL = 'https://www.youtube.com/watch?v=O5gI5cIM4Yc&t=3s';
 
 export default function App() {
   const filePath = useEditorStore((s) => s.filePath);
