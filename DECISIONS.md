@@ -30,7 +30,7 @@
   - 戻りアニメーション(現状はインスタント切替)
 - 影響: editorStore.ts(phase + previousPhase + 2 アクション)、App.tsx(early return + 旧 setApiMgmtOpen 削除 + 新 onMenuOpenApiManagement ハンドラ)、ApiManagementView.{tsx,module.css}(新規)、ApiManagementDialog.{tsx,module.css}(削除)
 - ⚠️ 実機検証はユーザ環境で必要(全フェーズからの遷移 / Esc / 戻るボタン / データ保持)
-- コミット: (未定)
+- コミット: `662be56`
 
 ## 2026-05-03 01:00 - 「API 管理」専用画面の新設(全 API キー統合 + ログビューア)
 
