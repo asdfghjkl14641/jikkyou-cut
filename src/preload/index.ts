@@ -5,6 +5,7 @@ import type {
   FontDownloadProgress,
   IpcApi,
   AiSummaryProgress,
+  AutoExtractProgress,
   TranscriptionProgress,
   UrlDownloadProgress,
 } from '../common/types';
@@ -135,6 +136,17 @@ const api: IpcApi = {
       ipcRenderer.on('aiSummary:progress', listener);
       return () => {
         ipcRenderer.removeListener('aiSummary:progress', listener);
+      };
+    },
+    autoExtract: (args) => ipcRenderer.invoke('aiSummary:autoExtract', args),
+    onAutoExtractProgress: (cb) => {
+      const listener = (
+        _e: Electron.IpcRendererEvent,
+        p: AutoExtractProgress,
+      ) => cb(p);
+      ipcRenderer.on('aiSummary:autoExtractProgress', listener);
+      return () => {
+        ipcRenderer.removeListener('aiSummary:autoExtractProgress', listener);
       };
     },
   },

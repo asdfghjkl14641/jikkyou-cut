@@ -222,6 +222,19 @@ function registerIpcHandlers() {
     },
   );
   ipcMain.handle('aiSummary:cancel', () => aiSummary.cancelAll());
+
+  // 1-button auto-extract: peak detection → AI refine → title generation.
+  // Owns its own progress channel ('aiSummary:autoExtractProgress') so the
+  // 3-phase progress bar in ClipSelectView doesn't get cross-talk from
+  // the manual title-generation flow above.
+  ipcMain.handle(
+    'aiSummary:autoExtract',
+    async (_e, args: Parameters<typeof aiSummary.autoExtractClipCandidates>[0]) => {
+      return aiSummary.autoExtractClipCandidates(args, (p) => {
+        mainWindow?.webContents.send('aiSummary:autoExtractProgress', p);
+      });
+    },
+  );
 }
 
 app.whenReady().then(() => {

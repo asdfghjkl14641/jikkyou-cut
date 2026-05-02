@@ -15,6 +15,31 @@
 
 ---
 
+## 2026-05-02 22:30 - 切り抜き候補の自動抽出(ハイブリッド方式 + 1 ボタン全自動)
+
+- 誰が: Claude Code
+- 何を: 「波形見ても切り抜きどこか分からん」というユーザ要望に対し、**ボタン 1 つで Stage 1(アルゴリズム検出)→ Stage 2(AI 精査)→ Stage 4(タイトル生成)** を一気通貫に実行する機能を追加
+  - **`src/main/commentAnalysis/peakDetection.ts`(新規)**:rolling-score をすべての window-start 位置で計算 → ローカル極大値検出(±W/2 以内で最大) → score≥0.30 + 動画両端 30 秒バッファでフィルタ → スコア降順で greedy non-overlap(隣接候補は最低 W 離す) → 上位 10 個を返す。スコア計算ロジックは renderer の `rollingScore.ts` と同一(意図的な duplicate、weights が drift したら両方更新)
+  - **`src/main/aiSummary.ts` の拡張**:
+    - `callAnthropicRaw()` を内部関数として切り出し(既存の `callAnthropic` は薄いラッパに)。raw text を返すので JSON 応答もパース可能
+    - `refineCandidatesWithAI(videoKey, candidates, targetCount)`:Stage 2。候補 10 個をプロンプトに含めて Claude Haiku 4.5 に投げ、起承転結 / ネタバレ性 / 反応質を基準にベスト N 個を JSON で返させる。各候補のコメントは **per-author dedup(2件まで)→ 30 件まで均等サンプリング** で前処理。出力は startSec/endSec の ±0.1秒一致でバリデート、フォールバックは「スコア降順上位 N」。キャッシュは `userData/comment-analysis/<videoKey>-extractions.json`(キー = `t${targetCount}-${start}-${end}-${msglen}|...`)
+    - `autoExtractClipCandidates(args, onProgress)`:オーケストレータ。Stage 1 → Stage 2 → Stage 4(`generateSegmentTitles` 流用)を順次。各 phase の進捗を `{phase: 'detect'|'refine'|'titles', percent}` で renderer に push
+  - **IPC**:`aiSummary.autoExtract` + `onAutoExtractProgress` を追加(`aiSummary.generate` の進捗チャネルとは別、cross-talk 防止)
+  - **`ClipSelectView` ヘッダ**:「✨ 自動で切り抜き候補を抽出」ボタン + 件数 select(3/4/5、デフォルト 3)。disabled 条件は `!hasAnthropicApiKey` / `analysisState !== 'ready'` / `clipSegments.length >= 5`
+  - **進捗ダイアログ**:モーダル overlay(z-index: 1000)で 3 step バー + 現在 phase ラベル + キャンセルボタン(`aiSummary.cancel()`)。`autoState` と既存の `aiState` を分離
+  - **既存の「AI でタイトル生成」ボタン(ClipSegmentsList)は温存**:手動で区間追加した後にタイトルだけ AI に頼む用途で残す価値あり
+- 検証: サンドボックスで合成データ(1 時間動画 / 5 個の gaussian peak / 1 つはエッジ端)で smoke test。5 つの peak のうち エッジ端は 30 秒バッファで filter、残り 4 個が score 順にピックされることを確認(±5-10s で synthetic centre と一致)
+- 理由: アルゴリズムだけだと「数値の山」止まりで物語性を判定できないので AI 精査と組み合わせ。1 ボタン全自動でユーザの「ここどう?」要望に直結。Stage 2 のキャッシュで 2 回目は API なしで即返り
+- 開放されている設計判断:
+  - Sonnet/Opus への切り替え UI(コスト見て判断)
+  - ユーザカスタムプロンプト
+  - 連続実行時の差分追加(現状はクリアしてから実行前提)
+  - 抽出区間数の上限拡張(現状 5)
+  - Stage 1 と renderer rollingScore の二重実装解消(common/ 配下に共通化)
+- 影響: src/common/types.ts(`AutoExtractStartArgs/Progress/Result` 追加 + IpcApi 拡張)、src/main/commentAnalysis/peakDetection.ts(新規)、src/main/aiSummary.ts(`callAnthropicRaw` + `refineCandidatesWithAI` + `autoExtractClipCandidates`)、src/main/index.ts(IPC ハンドラ)、src/preload/index.ts(`aiSummary.autoExtract` + `onAutoExtractProgress`)、src/renderer/src/components/ClipSelectView.{tsx,module.css}(ヘッダボタン + count select + 進捗 modal)
+- ⚠️ 実機検証はユーザ側で必要(Anthropic API キー保存 → 実 DL 動画でボタン押下 → 抽出結果の質を主観評価)
+- コミット: (未定)
+
 ## 2026-05-02 21:30 - 動画音声不再生バグの **真の** 根本原因を特定・修正(audio fragment 不完全 DL → silent 切断)
 
 - 誰が: Claude Code

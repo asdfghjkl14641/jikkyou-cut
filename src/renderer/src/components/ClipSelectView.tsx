@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
-import { ChevronLeft, Check } from 'lucide-react';
+import { ChevronLeft, Check, Sparkles, X } from 'lucide-react';
 import { useEditorStore, MAX_CLIP_SEGMENTS } from '../store/editorStore';
 import VideoPlayer from './VideoPlayer';
 import CommentAnalysisGraph from './CommentAnalysisGraph';
@@ -15,6 +15,7 @@ import type {
   ReactionCategory,
   AiSummarySegment,
   AiSummaryProgress,
+  AutoExtractProgress,
 } from '../../../common/types';
 import styles from './ClipSelectView.module.css';
 
@@ -69,6 +70,16 @@ export default function ClipSelectView() {
     | { kind: 'error'; message: string };
   const [aiState, setAiState] = useState<AiState>({ kind: 'idle' });
   const [hasAnthropicApiKey, setHasAnthropicApiKey] = useState(false);
+
+  // Auto-extract (1-button "find me clips") lifecycle. Owns its own
+  // state separate from the manual-title path so progress dialogs
+  // don't fight each other.
+  type AutoExtractState =
+    | { kind: 'idle' }
+    | { kind: 'running'; phase: AutoExtractProgress['phase']; percent: number }
+    | { kind: 'error'; message: string };
+  const [autoState, setAutoState] = useState<AutoExtractState>({ kind: 'idle' });
+  const [autoTargetCount, setAutoTargetCount] = useState(3);
 
   // Refresh the Anthropic key flag whenever this view mounts (covers the
   // "user opened Settings, saved a key, then came back" path).
@@ -186,6 +197,79 @@ export default function ClipSelectView() {
     });
   }, [clipSegments, graphAnalysis]);
 
+  // 1-button auto-extract flow. Disabled conditions:
+  //   - no Anthropic key → button greyed out, tooltip explains
+  //   - analysis not ready → can't peak-detect without buckets
+  //   - already 5+ segments → ask user to clear first (we don't want
+  //     the "extract" action to silently no-op when it can't add)
+  const autoExtractEnabled =
+    hasAnthropicApiKey &&
+    analysisState.kind === 'ready' &&
+    clipSegments.length < 5;
+  const autoExtractDisabledReason = !hasAnthropicApiKey
+    ? '設定画面で Anthropic API キーを登録してください'
+    : analysisState.kind !== 'ready'
+    ? 'コメント分析の完了を待ってから実行してください'
+    : clipSegments.length >= 5
+    ? '既存の区間が 5 個以上あります。クリアしてから実行してください'
+    : undefined;
+
+  const handleAutoExtract = useCallback(async () => {
+    if (analysisState.kind !== 'ready' || !filePath) return;
+    if (!hasAnthropicApiKey) {
+      setAutoState({ kind: 'error', message: '設定画面で Anthropic API キーを登録してください' });
+      return;
+    }
+    setAutoState({ kind: 'running', phase: 'detect', percent: 0 });
+    const cleanup = window.api.aiSummary.onAutoExtractProgress((p) => {
+      setAutoState({ kind: 'running', phase: p.phase, percent: p.percent });
+    });
+    try {
+      const analysis = analysisState.analysis;
+      const result = await window.api.aiSummary.autoExtract({
+        videoKey: filePath,
+        buckets: analysis.buckets,
+        windowSec: analysisWindowSec,
+        hasViewerStats: analysis.hasViewerStats,
+        videoDurationSec: analysis.videoDurationSec,
+        targetCount: autoTargetCount,
+      });
+      // Apply each segment via the store. Stop early if we hit the
+      // hard limit (already-existing segments + new ones could exceed
+      // 20 in pathological cases).
+      let added = 0;
+      for (const seg of result.segments) {
+        const r = addClipSegment({
+          startSec: seg.startSec,
+          endSec: seg.endSec,
+          title: seg.title,
+          dominantCategory: seg.dominantCategory,
+        });
+        if (r.ok) added += 1;
+      }
+      setAutoState({ kind: 'idle' });
+      if (result.warning) {
+        // Surface the warning on the manual-title aiState slot — it
+        // shares a styling with the existing "AI 失敗" banner so it
+        // appears in the segments list area where the user is looking.
+        setAiState({ kind: 'error', message: result.warning });
+      }
+      if (added === 0) {
+        setAutoState({ kind: 'error', message: '抽出結果なし(候補が見つかりませんでした)' });
+      }
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      setAutoState({ kind: 'error', message: msg });
+    } finally {
+      cleanup();
+    }
+  }, [analysisState, filePath, hasAnthropicApiKey, analysisWindowSec, autoTargetCount, addClipSegment]);
+
+  const handleCancelAutoExtract = useCallback(() => {
+    void window.api.aiSummary.cancel();
+    setAutoState({ kind: 'idle' });
+  }, []);
+
   const handleGenerateAiTitles = useCallback(async () => {
     if (clipSegments.length === 0) return;
     if (!hasAnthropicApiKey) {
@@ -258,6 +342,28 @@ export default function ClipSelectView() {
           </button>
         </div>
         <div className={styles.headerRight}>
+          <div className={styles.autoExtractGroup} title={autoExtractDisabledReason}>
+            <select
+              className={styles.autoExtractCount}
+              value={autoTargetCount}
+              onChange={(e) => setAutoTargetCount(Number(e.target.value))}
+              disabled={!autoExtractEnabled || autoState.kind === 'running'}
+              aria-label="抽出する区間数"
+            >
+              <option value={3}>3 個</option>
+              <option value={4}>4 個</option>
+              <option value={5}>5 個</option>
+            </select>
+            <button
+              type="button"
+              className={styles.autoExtractButton}
+              onClick={handleAutoExtract}
+              disabled={!autoExtractEnabled || autoState.kind === 'running'}
+            >
+              <Sparkles size={14} />
+              自動で切り抜き候補を抽出
+            </button>
+          </div>
           <button
             type="button"
             className={styles.editButton}
@@ -363,6 +469,71 @@ export default function ClipSelectView() {
           }}
           onClose={() => setSegmentMenu(null)}
         />
+      )}
+
+      {(autoState.kind === 'running' || autoState.kind === 'error') && (
+        <div className={styles.autoExtractOverlay}>
+          <div className={styles.autoExtractDialog}>
+            {autoState.kind === 'running' ? (
+              <>
+                <div className={styles.autoExtractTitle}>
+                  <Sparkles size={16} />
+                  <span>切り抜き候補を抽出中...</span>
+                </div>
+                <div className={styles.autoExtractPhase}>
+                  {autoState.phase === 'detect' && 'ピーク検出中...'}
+                  {autoState.phase === 'refine' && 'AI が候補を精査中...'}
+                  {autoState.phase === 'titles' && 'タイトル生成中...'}
+                </div>
+                <div className={styles.autoExtractBar}>
+                  <div
+                    className={styles.autoExtractBarFill}
+                    style={{ width: `${autoState.percent}%` }}
+                  />
+                </div>
+                <div className={styles.autoExtractStepRow}>
+                  <span className={autoState.phase === 'detect' ? styles.autoExtractStepActive : styles.autoExtractStepDone}>
+                    1. 検出
+                  </span>
+                  <span className={
+                    autoState.phase === 'refine' ? styles.autoExtractStepActive
+                    : autoState.phase === 'titles' ? styles.autoExtractStepDone
+                    : styles.autoExtractStepPending
+                  }>
+                    2. 精査
+                  </span>
+                  <span className={autoState.phase === 'titles' ? styles.autoExtractStepActive : styles.autoExtractStepPending}>
+                    3. タイトル
+                  </span>
+                </div>
+                <button
+                  type="button"
+                  className={styles.autoExtractCancel}
+                  onClick={handleCancelAutoExtract}
+                >
+                  キャンセル
+                </button>
+              </>
+            ) : (
+              <>
+                <div className={styles.autoExtractTitle}>
+                  <span>抽出に失敗しました</span>
+                </div>
+                <div className={styles.autoExtractError}>
+                  {autoState.message}
+                </div>
+                <button
+                  type="button"
+                  className={styles.autoExtractCancel}
+                  onClick={() => setAutoState({ kind: 'idle' })}
+                >
+                  <X size={14} />
+                  閉じる
+                </button>
+              </>
+            )}
+          </div>
+        </div>
       )}
     </div>
   );

@@ -339,6 +339,39 @@ export type AiSummaryStartArgs = {
   segments: AiSummarySegment[];
 };
 
+// ---- Auto-extract (Stage 1 algorithm + Stage 2 AI refine + Stage 4 titles) ----
+
+// Args for the renderer → main "go find me clips" call. Buckets cross
+// the IPC boundary along with the video metadata so the main process
+// can do Stage 1 (peak detection) without bouncing back to renderer
+// for the rolling-score data.
+export type AutoExtractStartArgs = {
+  videoKey: string;
+  buckets: RawBucket[];
+  windowSec: number;
+  hasViewerStats: boolean;
+  videoDurationSec: number;
+  // 3..5 typically. The orchestrator caps internally if the candidate
+  // pool is smaller (you don't get a 5th segment from a video with
+  // only 3 distinct peaks).
+  targetCount: number;
+};
+
+// Phase 1 → 2 → 4 progress. `percent` is per-phase, not overall — the
+// renderer renders it as a 3-step progress bar.
+export type AutoExtractProgress = {
+  phase: 'detect' | 'refine' | 'titles';
+  percent: number;
+};
+
+export type AutoExtractResult = {
+  // Ready-to-add segments (no `id` — caller assigns via addClipSegment).
+  segments: Array<Omit<ClipSegment, 'id'>>;
+  // Optional warning surface if the AI step degraded to fallback. The
+  // renderer can show a toast like "AI 精査に失敗、スコア順で採用しました".
+  warning?: string;
+};
+
 // One clip segment in the user's selection list. Replaces the singular
 // `clipRange` — the editor now produces highlight-compilation–style
 // outputs with 1..20 segments separated by eyecatches.
@@ -454,5 +487,11 @@ export type IpcApi = {
     generate: (args: AiSummaryStartArgs) => Promise<AiSummaryResult[]>;
     cancel: () => Promise<void>;
     onProgress: (cb: (p: AiSummaryProgress) => void) => () => void;
+    // 1 ボタンで Stage 1 (アルゴリズム peak 検出) → Stage 2 (AI 精査)
+    // → Stage 4 (タイトル生成) を一気通貫。区間追加までやって ClipSegment
+    // 形状の配列(idなし)を返す。renderer は addClipSegment ループで
+    // store に流し込むだけ。
+    autoExtract: (args: AutoExtractStartArgs) => Promise<AutoExtractResult>;
+    onAutoExtractProgress: (cb: (p: AutoExtractProgress) => void) => () => void;
   };
 };

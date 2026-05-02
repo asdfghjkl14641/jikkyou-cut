@@ -25,6 +25,7 @@
   - [x] **操作系整理 + 常駐ライブコメントビュー**(波形は左=シーク・右ドラッグ=区間追加、PeakDetailPanel 廃止、LiveCommentFeed 新設で chat 全件を再生位置追従・自動スクロール表示、仮想スクロール独自実装)
   - [x] **操作感改善 + 区間バー右クリックメニュー**(左クリック即時シーク / ホバー圧縮 / コメント行コンパクト化 / SegmentContextMenu)
   - [x] **AI タイトル要約(Claude Haiku 4.5)**(Anthropic BYOK、aiSummary.ts オーケストレータ、3 並列 + リトライ + キャッシュ、Settings UI 拡張、ClipSegmentsList の AI 生成ボタン)
+  - [x] **切り抜き候補の自動抽出(ハイブリッド + 1 ボタン全自動)**(Stage 1 algorithm peak detection → Stage 2 AI refine → Stage 4 title generation、ClipSelectView ヘッダの ✨ ボタン + 件数 select 3/4/5 + 3-step 進捗 modal、Stage 2 キャッシュ、フォールバック付き)
   - [ ] **次**: アイキャッチの実体動画化(FFmpeg で黒画面 + テキスト合成)
   - [ ] 編集画面での clipSegments 適用
   - [ ] アイキャッチの実体動画化(FFmpeg で黒画面 + テキスト合成)
@@ -100,6 +101,7 @@
 
 ### 2026-05-02
 
+- 切り抜き候補の自動抽出(ハイブリッド方式 + 1 ボタン全自動) — `peakDetection.ts` で Stage 1(rolling score 全位置 → ローカル極大値 → ±30s バッファ + score≥0.30 + W 間隔 dedup → top 10)、Claude Haiku で Stage 2(候補 10 → ベスト N、起承転結 / ネタバレ性 / 反応質を基準に JSON 出力)、Stage 4 で既存 `generateSegmentTitles` 流用してタイトル生成。ClipSelectView ヘッダに ✨ ボタン + 件数 select + 3-step 進捗 modal。Stage 2 キャッシュ + フォールバック(API 失敗時はスコア順)。サンドボックス合成データの smoke test で peak detection の正確性 + edge buffer フィルタリング動作を確認
 - 動画音声不再生バグの **真の** 根本原因特定・修正 — `6.mp4` を `ffprobe` で実調査した結果、4cca71f の仮説(Opus codec)は誤りで、**真因は yt-dlp の `--skip-unavailable-fragments` デフォルト挙動** で audio fragment 部分 DL 失敗時に partial audio を merger に渡して silent truncation していた(動画 158.6 分 vs 音声 16.1 分)。`--abort-on-unavailable-fragment` + `--retries 30 --fragment-retries 30` + post-DL ffprobe validation(±5 秒の duration mismatch を hard error 化)を追加。4cca71f の format selector + AAC postprocessor + audioTracks enable は defense in depth で温存
 - 動画音声不再生バグの **当初** 根本修正(format selector + AAC postprocessor) — 後の調査で目当ての仮説が外れていたと判明、ただし副次的な防御策として温存(Opus-in-MP4 等の codec ケース対応)
 - LiveCommentFeed 行密度再調整(40 → 32 px) — ROW_HEIGHT 32、padding 3/10、font 12px、line-height 1.3、時刻列 44px。Part A 後の実機確認でまだスカスカ感
