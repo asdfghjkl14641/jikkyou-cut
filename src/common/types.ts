@@ -1,5 +1,6 @@
 import type { AppConfig } from './config';
 import { ReactionCategory } from './commentAnalysis/keywords';
+export type { ReactionCategory } from './commentAnalysis/keywords';
 
 export type TranscriptCue = {
   id: string;
@@ -302,6 +303,36 @@ export type UrlDownloadArgs = {
   url: string;
   quality: string;
   outputDir: string;
+};
+
+// One clip segment in the user's selection list. Replaces the singular
+// `clipRange` — the editor now produces highlight-compilation–style
+// outputs with 1..20 segments separated by eyecatches.
+export type ClipSegment = {
+  id: string;
+  startSec: number;
+  endSec: number;
+  // null = the segment hasn't been titled yet (AI title generation will
+  // fill these in a future task). UI shows a faint placeholder.
+  title: string | null;
+  // Carried from the score sample at add-time so the segment bar on the
+  // waveform can be coloured even after the user drags its bounds away
+  // from the original peak.
+  dominantCategory: ReactionCategory | null;
+};
+
+// Auto-generated divider between consecutive clip segments. `eyecatches[i]`
+// sits between `clipSegments[i]` and `clipSegments[i + 1]` — so the array
+// is always exactly `max(0, clipSegments.length - 1)` long.
+export type Eyecatch = {
+  id: string;
+  // User-editable label shown on the actual eyecatch frame later. Defaults
+  // to "場面 N" but the user can rename per-divider.
+  text: string;
+  durationSec: number;
+  // When true, the divider is rendered as a direct cut (no eyecatch frame).
+  // The data slot persists so toggling back doesn't lose the text.
+  skip: boolean;
 };
 
 export type IpcApi = {

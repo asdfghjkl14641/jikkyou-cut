@@ -15,6 +15,30 @@
 
 ---
 
+## 2026-05-02 16:00 - 複数区間選択 + 感情 9 カテゴリ拡張 + 区間色塗り + アイキャッチ枠
+
+- 誰が: Claude Code(Antigravity から託された仕様の実装)
+- 何を:
+  - **感情カテゴリ 9 種化**: 既存 5(laugh/surprise/emotion/praise/other)に **death/victory/scream/flag** を追加。ゲーム実況文化(死亡フラグ・クラッチ・GG・察しなど)に踏み込んだ語彙。長語先優先のソート + 正規表現エスケープを `keywords.ts` で済ませる
+  - **複数区間選択 (`clipSegments[]`)**: 旧 `clipRange` を撤廃し、最大 20 個の `ClipSegment` 配列に。`addClipSegment` は重複検出 / 上限チェックを返却、ドラッグ範囲選択 + ピーク詳細パネルから追加できる。区間は時刻順に自動ソート
+  - **`Eyecatch[]` 自動同期**: 区間が 2 つ以上になると区間間に自動生成。`syncEyecatches(N, current)` で長さ追従、削除時は対応スロットを除去。`skip` フラグで「直結」も選べる
+  - **波形の category 色塗り**: 線(stroke)は白固定維持、塗りを `dominantCategory` ごとに分割描画(連続同カテゴリ群を 1 path、隣接時は両端 10% フェードする `linearGradient` で seam 隠し、中央 0.12 透明度)。「グチャグチャ感」再発防止に opacity を強く抑え、白い印象を保持
+  - **波形の区間オーバーレイバー**: dominantCategory 色 × `color-mix in srgb 40%` で半透明、番号バッジ + 端ドラッグ resize + 中央ドラッグ move + 隣接区間 clamp + 選択時の削除ボタン
+  - **`ClipSegmentsList` 新規**: 動画下にカード一覧、HTML5 drag-and-drop で順序入替、区間タイトル inline 編集(null 時はプレースホルダ)、区間間にアイキャッチ行(text 編集 + skip toggle)、全削除は `window.confirm` で誤操作防止
+  - **`PeakDetailPanel`**: 「この区間を編集範囲に設定」→「この区間を切り抜きに追加」に変更。store の add 結果を返り値で受け取り、追加成功 / 重複 / 上限のフィードバックをボタン上で表示(panel は閉じない=連続追加可)
+  - **CSS 変数**: `--reaction-death/-victory/-scream/-flag` 4 色追加(暗赤/金/オレンジ/緑)
+- 理由: 単区間 `clipRange` ではハイライトコンピレ的編集ができない。10 個以上の区間 + 区間間アイキャッチで「動画ダイジェスト」を編成できる土台が要る。感情拡張はゲーム実況に必須の語彙(死亡 / 勝利 / フラグ)で、視聴者の感情遷移をスコアに反映させる第一歩
+- 開放されている設計判断:
+  - AI タイトル生成(次タスク、Claude Haiku)
+  - アイキャッチの実体動画化(次タスク、FFmpeg で黒画面 + テキスト合成)
+  - 編集画面で `clipSegments` を実際に動画範囲絞り込みに使う(現状 `setPhase('edit')` のみで動画レンジは未連動)
+  - `ProjectFile` への永続化
+  - 自動候補抽出(上位 N ピークを一括追加)
+  - スコア重み調整 UI(現状ハードコード)
+- 副次効果: keywords.ts のカテゴリ化 / ReactionCategory 型追加が `7f41a02` 時点で uncommitted な WIP 依存だったが、本コミットでようやく一緒に repo に乗る
+- 影響: src/common/types.ts (ClipSegment / Eyecatch / ReactionCategory 再 export)、src/common/commentAnalysis/keywords.ts (9 cat / 65+ pattern / sort + escape)、src/main/commentAnalysis/scoring.ts (ZERO 9 cat)、src/renderer/src/lib/rollingScore.ts (9 cat)、src/renderer/src/components/CommentAnalysisGraph.{tsx,module.css}(per-cat fill + 区間バー + drag handlers)、src/renderer/src/components/ClipSegmentsList.{tsx,module.css}(新規)、src/renderer/src/components/ClipSelectView.{tsx,module.css}(統合)、src/renderer/src/components/PeakDetailPanel.tsx(addClipSegment 化)、src/renderer/src/components/CommentAnalysisGraph.mock.ts(9 cat)、src/renderer/src/store/editorStore.ts (clipSegments / eyecatches + actions)、src/renderer/src/styles.css(4 色追加)
+- コミット: (未定)
+
 ## 2026-05-02 14:30 - コメント分析を rolling window スコアに作り直し + W スライダー UI 追加
 
 - 誰が: Claude Code

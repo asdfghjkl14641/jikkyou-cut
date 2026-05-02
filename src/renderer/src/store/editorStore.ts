@@ -8,6 +8,8 @@ import type {
   SubtitleSettings,
   ProjectFile,
   SpeakerStyle,
+  ClipSegment,
+  Eyecatch,
 } from '../../../common/types';
 
 type TranscriptionStatus =
@@ -23,14 +25,22 @@ const HISTORY_LIMIT = 100;
 
 type EditorPhase = 'load' | 'clip-select' | 'edit';
 
-type ClipRange = {
-  startSec: number;
-  endSec: number;
-} | null;
+// Maximum number of clip segments the user can stack — set well above
+// the realistic 10-or-so per highlight compilation so a determined user
+// won't hit it accidentally, but capped so a misbehaving drag-handler
+// or auto-suggest can't blow up the list.
+export const MAX_CLIP_SEGMENTS = 20;
+const DEFAULT_EYECATCH_DURATION_SEC = 1.5;
 
 type EditorState = {
   phase: EditorPhase;
-  clipRange: ClipRange;
+  // Multi-segment selection — replaces the old singular `clipRange`.
+  // Always paired with `eyecatches` whose length is held at
+  // `max(0, clipSegments.length - 1)` (one divider per gap between
+  // adjacent segments). Rendering order in the UI follows the array
+  // order; reordering is via `reorderClipSegments`.
+  clipSegments: ClipSegment[];
+  eyecatches: Eyecatch[];
   filePath: string | null;
   fileName: string | null;
   // Source URL the video was downloaded from (yt-dlp). Null for local
@@ -83,7 +93,15 @@ type EditorState = {
 
   // phase lifecycle
   setPhase: (phase: EditorPhase) => void;
-  setClipRange: (range: ClipRange) => void;
+
+  // Clip-segment lifecycle. Mutations on `clipSegments` automatically
+  // resize `eyecatches` to N-1, preserving slot text where possible.
+  addClipSegment: (segment: Omit<ClipSegment, 'id'>) => { ok: true; id: string } | { ok: false; reason: 'limit' | 'duplicate' };
+  removeClipSegment: (id: string) => void;
+  updateClipSegment: (id: string, patch: Partial<Omit<ClipSegment, 'id'>>) => void;
+  reorderClipSegments: (orderedIds: string[]) => void;
+  clearAllSegments: () => void;
+  updateEyecatch: (id: string, patch: Partial<Omit<Eyecatch, 'id'>>) => void;
 
   // file lifecycle
   setFile: (absPath: string) => void;
@@ -195,9 +213,39 @@ const computeRangeIds = (
 const clampIndex = (i: number, len: number): number =>
   Math.max(0, Math.min(len - 1, i));
 
+// Cheap unique id for clip segments / eyecatches. We don't need
+// cryptographic randomness here — the id only has to be unique within
+// the live array, which has at most 20 entries.
+const localId = (): string =>
+  `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+
+const makeEyecatch = (index: number): Eyecatch => ({
+  id: localId(),
+  text: `場面 ${index + 2}`,
+  durationSec: DEFAULT_EYECATCH_DURATION_SEC,
+  skip: false,
+});
+
+// Resize the eyecatches array to track segment count. Existing slots
+// are kept positionally so the user's edits don't churn unnecessarily;
+// new slots appended at the end use the default `場面 N+2` text (the
+// "+2" lines up with the segment number that comes after the gap).
+function syncEyecatches(
+  segmentsLen: number,
+  current: Eyecatch[],
+): Eyecatch[] {
+  const target = Math.max(0, segmentsLen - 1);
+  if (current.length === target) return current;
+  if (current.length > target) return current.slice(0, target);
+  const next = [...current];
+  for (let i = current.length; i < target; i += 1) next.push(makeEyecatch(i));
+  return next;
+}
+
 export const useEditorStore = create<EditorState>((set, get) => ({
   phase: 'load',
-  clipRange: null,
+  clipSegments: [],
+  eyecatches: [],
   filePath: null,
   fileName: null,
   sourceUrl: null,
@@ -239,7 +287,71 @@ export const useEditorStore = create<EditorState>((set, get) => ({
   analysisWindowSec: DEFAULT_ANALYSIS_WINDOW_SEC,
 
   setPhase: (phase) => set({ phase }),
-  setClipRange: (range) => set({ clipRange: range }),
+
+  addClipSegment: (segment) => {
+    const { clipSegments, eyecatches } = get();
+    if (clipSegments.length >= MAX_CLIP_SEGMENTS) return { ok: false, reason: 'limit' };
+    // Reject exact duplicates so the "add" button on PeakDetailPanel is
+    // safe to spam — the user can dismiss the warning rather than ending
+    // up with a list full of identical entries.
+    const dup = clipSegments.some(
+      (s) => Math.abs(s.startSec - segment.startSec) < 0.01 && Math.abs(s.endSec - segment.endSec) < 0.01,
+    );
+    if (dup) return { ok: false, reason: 'duplicate' };
+    const id = localId();
+    const next = [...clipSegments, { ...segment, id }];
+    next.sort((a, b) => a.startSec - b.startSec);
+    set({ clipSegments: next, eyecatches: syncEyecatches(next.length, eyecatches) });
+    return { ok: true, id };
+  },
+
+  removeClipSegment: (id) => {
+    const { clipSegments, eyecatches } = get();
+    const idx = clipSegments.findIndex((s) => s.id === id);
+    if (idx < 0) return;
+    const nextSegments = clipSegments.filter((s) => s.id !== id);
+    // Drop the eyecatch that used to sit "just after" the removed
+    // segment. For the last segment we drop the previous gap instead
+    // (there's no "after" gap to remove).
+    const eyecatchKill = Math.min(idx, eyecatches.length - 1);
+    const trimmedEyecatches = eyecatchKill >= 0
+      ? eyecatches.filter((_, i) => i !== eyecatchKill)
+      : eyecatches;
+    set({
+      clipSegments: nextSegments,
+      eyecatches: syncEyecatches(nextSegments.length, trimmedEyecatches),
+    });
+  },
+
+  updateClipSegment: (id, patch) => {
+    const { clipSegments } = get();
+    set({
+      clipSegments: clipSegments.map((s) => (s.id === id ? { ...s, ...patch } : s)),
+    });
+  },
+
+  reorderClipSegments: (orderedIds) => {
+    const { clipSegments } = get();
+    const byId = new Map(clipSegments.map((s) => [s.id, s] as const));
+    const next: ClipSegment[] = [];
+    for (const id of orderedIds) {
+      const seg = byId.get(id);
+      if (seg) next.push(seg);
+    }
+    // Append any segment whose id wasn't in the user-provided list — defensive
+    // against UI bugs that drop ids during drag-and-drop.
+    for (const seg of clipSegments) if (!orderedIds.includes(seg.id)) next.push(seg);
+    set({ clipSegments: next });
+  },
+
+  clearAllSegments: () => set({ clipSegments: [], eyecatches: [] }),
+
+  updateEyecatch: (id, patch) => {
+    const { eyecatches } = get();
+    set({
+      eyecatches: eyecatches.map((e) => (e.id === id ? { ...e, ...patch } : e)),
+    });
+  },
 
   setFile: (absPath) =>
     set({
@@ -270,7 +382,8 @@ export const useEditorStore = create<EditorState>((set, get) => ({
       exportResult: null,
       exportError: null,
       viewMode: 'linear',
-      clipRange: null,
+      clipSegments: [],
+      eyecatches: [],
       analysisWindowSec: DEFAULT_ANALYSIS_WINDOW_SEC,
     }),
 
@@ -301,7 +414,8 @@ export const useEditorStore = create<EditorState>((set, get) => ({
       exportResult: null,
       exportError: null,
       viewMode: 'linear',
-      clipRange: null,
+      clipSegments: [],
+      eyecatches: [],
       analysisWindowSec: DEFAULT_ANALYSIS_WINDOW_SEC,
     }),
 

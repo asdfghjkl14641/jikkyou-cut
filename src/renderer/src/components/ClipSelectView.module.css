@@ -132,3 +132,13 @@
   font-size: var(--font-size-xs);
   color: var(--text-muted);
 }
+
+.segmentsListWrapper {
+  /* The list grows with content but caps at ~40% of the workarea height
+     so the wave + video stay primary. Overflow scrolls inside the list
+     itself. */
+  flex-shrink: 1;
+  min-height: 0;
+  max-height: 38%;
+  display: flex;
+}

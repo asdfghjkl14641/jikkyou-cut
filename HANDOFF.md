@@ -40,6 +40,7 @@ Electron + React + TypeScript 製。**現在は配布前の "自分用ツール"
 - **3 フェーズ構造への再編**: 完了 (Load -> Clip Select -> Edit)
 - **コメント分析グラフ(UI MVP)**: 完了 (モックデータ表示 + ドラッグ選択)
 - **コメント分析 rolling window スコア + W スライダー**: 完了 (5 要素 / 30 秒〜5 分可変 / Stage 1+2 分離)
+- **複数区間選択 + 感情 9 カテゴリ + アイキャッチ枠**: 完了 (clipSegments[] 最大 20 / 区間バー drag / ClipSegmentsList / eyecatches 自動同期。AI タイトル生成とアイキャッチ実体動画化は次タスク)
 
 ### 次フェーズ
 - **進行中**: コメント分析画面 (バックエンド実装待ち) — 詳細は `docs/COMMENT_ANALYSIS_DESIGN.md`
@@ -134,8 +135,9 @@ jikkyou-cut/
             │   └── useTranscription.ts
             └── components/
                 ├── ClipSelectView.tsx          # フェーズ2: 切り抜き範囲選択画面
-                ├── PeakDetailPanel.tsx         # フェーズ2: ピーク詳細(コメント一覧)
-                ├── CommentAnalysisGraph.tsx    # YouTube Most replayed 風盛り上がりグラフ
+                ├── PeakDetailPanel.tsx         # フェーズ2: ピーク詳細(コメント一覧 + 切り抜き追加)
+                ├── CommentAnalysisGraph.tsx    # YouTube Most replayed 風盛り上がりグラフ + 区間バー描画
+                ├── ClipSegmentsList.tsx        # フェーズ2: 切り抜き区間カード一覧 + アイキャッチ行
                 ├── WindowSizeSlider.tsx        # フェーズ2: rolling window 幅(W)スライダー
                 ├── DropZone.tsx                # フェーズ1: ファイル DnD + URL 入力
                 ├── EditableTranscriptList.tsx  # フェーズ3: キュー一覧(リニア表示)
@@ -154,7 +156,15 @@ jikkyou-cut/
 type EditorState = {
   // フェーズ
   phase: 'load' | 'clip-select' | 'edit';
-  clipRange: { startSec: number; endSec: number } | null;
+
+  // 切り抜き区間群(旧 clipRange の置き換え)。最大 20 個。setFile /
+  // clearFile / clearAllSegments で空に戻る。順序は addClipSegment で
+  // startSec 昇順に維持される(reorder で手動入替も可能)
+  clipSegments: ClipSegment[];
+  // 区間と区間の間の divider。length は常に max(0, clipSegments.length - 1)
+  // で自動同期。各 Eyecatch には text(「場面 N」初期値)、durationSec、
+  // skip(直結フラグ)を持つ
+  eyecatches: Eyecatch[];
 
   // ファイル
   filePath: string | null;

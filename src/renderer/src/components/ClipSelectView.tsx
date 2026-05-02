@@ -1,15 +1,18 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
-import { ChevronLeft, Check, RotateCcw } from 'lucide-react';
-import { useEditorStore } from '../store/editorStore';
+import { ChevronLeft, Check } from 'lucide-react';
+import { useEditorStore, MAX_CLIP_SEGMENTS } from '../store/editorStore';
 import VideoPlayer from './VideoPlayer';
 import CommentAnalysisGraph from './CommentAnalysisGraph';
 import PeakDetailPanel from './PeakDetailPanel';
 import WindowSizeSlider from './WindowSizeSlider';
+import ClipSegmentsList from './ClipSegmentsList';
 import { generateMockAnalysis } from './CommentAnalysisGraph.mock';
 import type {
   CommentAnalysis,
   CommentAnalysisProgress,
   ScoreSample,
+  ClipSegment,
+  ReactionCategory,
 } from '../../../common/types';
 import styles from './ClipSelectView.module.css';
 
@@ -34,11 +37,19 @@ export default function ClipSelectView() {
   const setCurrentSec = useEditorStore((s) => s.setCurrentSec);
   const clearFile = useEditorStore((s) => s.clearFile);
   const setPhase = useEditorStore((s) => s.setPhase);
-  const setClipRange = useEditorStore((s) => s.setClipRange);
   const analysisWindowSec = useEditorStore((s) => s.analysisWindowSec);
   const setAnalysisWindowSec = useEditorStore((s) => s.setAnalysisWindowSec);
 
-  const [localRange, setLocalRange] = useState<{ startSec: number; endSec: number } | null>(null);
+  const clipSegments = useEditorStore((s) => s.clipSegments);
+  const eyecatches = useEditorStore((s) => s.eyecatches);
+  const addClipSegment = useEditorStore((s) => s.addClipSegment);
+  const removeClipSegment = useEditorStore((s) => s.removeClipSegment);
+  const updateClipSegment = useEditorStore((s) => s.updateClipSegment);
+  const reorderClipSegments = useEditorStore((s) => s.reorderClipSegments);
+  const clearAllSegments = useEditorStore((s) => s.clearAllSegments);
+  const updateEyecatch = useEditorStore((s) => s.updateEyecatch);
+
+  const [selectedSegmentId, setSelectedSegmentId] = useState<string | null>(null);
   const [selectedPeak, setSelectedPeak] = useState<ScoreSample | null>(null);
   const [analysisState, setAnalysisState] = useState<AnalysisState>({ kind: 'idle' });
 
@@ -94,21 +105,54 @@ export default function ClipSelectView() {
   }, [clearFile]);
 
   const handleEdit = useCallback(() => {
-    if (localRange) {
-      setClipRange(localRange);
+    if (clipSegments.length >= 1) {
+      // For now, set the editor's working range to the *first* segment so
+      // the existing edit-phase code keeps working. Multi-segment edit
+      // integration is a follow-up task — segments + eyecatches are
+      // already in the store ready to be picked up there.
       setPhase('edit');
     }
-  }, [localRange, setClipRange, setPhase]);
+  }, [clipSegments.length, setPhase]);
 
-  const handleClearRange = useCallback(() => {
-    setLocalRange(null);
-    setSelectedPeak(null);
-  }, []);
+  const handleAddFromDrag = useCallback((args: {
+    startSec: number;
+    endSec: number;
+    dominantCategory: ReactionCategory | null;
+  }) => {
+    const result = addClipSegment({
+      startSec: args.startSec,
+      endSec: args.endSec,
+      title: null,
+      dominantCategory: args.dominantCategory,
+    });
+    if (!result.ok) {
+      if (result.reason === 'limit') {
+        window.alert(`区間は最大 ${MAX_CLIP_SEGMENTS} 個までです。`);
+      }
+      // duplicate is silent — drag-add can hit it if the user accidentally
+      // re-drags an existing segment, no need to warn.
+    }
+  }, [addClipSegment]);
 
-  const handleSetRange = useCallback((start: number, end: number) => {
-    setClipRange({ startSec: start, endSec: end });
-    setPhase('edit');
-  }, [setClipRange, setPhase]);
+  const handleAddFromPeak = useCallback((args: {
+    startSec: number;
+    endSec: number;
+    dominantCategory: ReactionCategory | null;
+  }) => {
+    return addClipSegment({
+      startSec: args.startSec,
+      endSec: args.endSec,
+      title: null,
+      dominantCategory: args.dominantCategory,
+    });
+  }, [addClipSegment]);
+
+  const handleMutateSegment = useCallback(
+    (id: string, patch: Partial<Omit<ClipSegment, 'id'>>) => {
+      updateClipSegment(id, patch);
+    },
+    [updateClipSegment],
+  );
 
   const videoRef = React.useRef<any>(null);
 
@@ -118,17 +162,25 @@ export default function ClipSelectView() {
 
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
+      // Ignore typing in inputs/contenteditable so the list editor isn't disrupted.
+      const target = e.target as HTMLElement | null;
+      if (target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable)) {
+        return;
+      }
       if (e.key === 'Escape') {
         if (selectedPeak) {
           setSelectedPeak(null);
-        } else {
-          handleClearRange();
+        } else if (selectedSegmentId) {
+          setSelectedSegmentId(null);
         }
+      } else if ((e.key === 'Delete' || e.key === 'Backspace') && selectedSegmentId) {
+        removeClipSegment(selectedSegmentId);
+        setSelectedSegmentId(null);
       }
     };
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [selectedPeak, handleClearRange]);
+  }, [selectedPeak, selectedSegmentId, removeClipSegment]);
 
   if (!filePath) return null;
 
@@ -142,20 +194,15 @@ export default function ClipSelectView() {
           </button>
         </div>
         <div className={styles.headerRight}>
-          {(localRange || selectedPeak) && (
-            <button type="button" className={styles.clearButton} onClick={handleClearRange} title="クリア (Esc)">
-              <RotateCcw size={16} />
-              クリア
-            </button>
-          )}
           <button
             type="button"
             className={styles.editButton}
             onClick={handleEdit}
-            disabled={!localRange}
+            disabled={clipSegments.length === 0}
+            title={clipSegments.length === 0 ? '先に区間を選択してください' : undefined}
           >
             <Check size={18} />
-            この区間を編集
+            この区間を編集 ({clipSegments.length})
           </button>
         </div>
       </header>
@@ -182,10 +229,14 @@ export default function ClipSelectView() {
               <CommentAnalysisGraph
                 analysis={graphAnalysis}
                 windowSec={analysisWindowSec}
+                segments={clipSegments}
                 onSeek={handleSeekInternal}
-                selectionRange={localRange}
-                onSelectionChange={setLocalRange}
                 onPeakClick={setSelectedPeak}
+                onAddSegmentRequested={handleAddFromDrag}
+                onMutateSegment={handleMutateSegment}
+                onRemoveSegment={(id) => { removeClipSegment(id); setSelectedSegmentId(null); }}
+                onSelectSegment={setSelectedSegmentId}
+                selectedSegmentId={selectedSegmentId}
               />
               <div className={styles.statusLabel}>
                 {analysisState.kind === 'loading' && (
@@ -200,6 +251,21 @@ export default function ClipSelectView() {
               </div>
             </div>
           </div>
+
+          <div className={styles.segmentsListWrapper}>
+            <ClipSegmentsList
+              segments={clipSegments}
+              eyecatches={eyecatches}
+              maxSegments={MAX_CLIP_SEGMENTS}
+              selectedSegmentId={selectedSegmentId}
+              onSelectSegment={setSelectedSegmentId}
+              onUpdateSegment={updateClipSegment}
+              onRemoveSegment={(id) => { removeClipSegment(id); setSelectedSegmentId(null); }}
+              onUpdateEyecatch={updateEyecatch}
+              onClearAll={clearAllSegments}
+              onReorder={reorderClipSegments}
+            />
+          </div>
         </div>
 
         {selectedPeak && (
@@ -207,11 +273,10 @@ export default function ClipSelectView() {
             sample={selectedPeak}
             analysis={graphAnalysis}
             onClose={() => setSelectedPeak(null)}
-            onSetRange={handleSetRange}
+            onAddSegment={handleAddFromPeak}
           />
         )}
       </main>
     </div>
   );
 }
-

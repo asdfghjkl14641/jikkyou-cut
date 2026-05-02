@@ -1,8 +1,10 @@
-import React, { useMemo } from 'react';
-import { X, MessageSquare, Sparkles, Scissors } from 'lucide-react';
+import React, { useEffect, useMemo, useState } from 'react';
+import { X, MessageSquare, Sparkles, Plus, Check } from 'lucide-react';
 import { ScoreSample, ChatMessage, CommentAnalysis } from '../../../common/types';
 import { ReactionCategory, REACTION_KEYWORDS } from '../../../common/commentAnalysis/keywords';
 import styles from './PeakDetailPanel.module.css';
+
+type AddResult = { ok: true; id: string } | { ok: false; reason: 'limit' | 'duplicate' };
 
 type Props = {
   sample: ScoreSample | null;
@@ -11,7 +13,14 @@ type Props = {
   // analysis here lets us also show overall metadata if we want later.
   analysis: CommentAnalysis;
   onClose: () => void;
-  onSetRange: (startSec: number, endSec: number) => void;
+  // Returns the store outcome so the panel can show a success/duplicate
+  // toast inline. Panel intentionally stays open so the user can keep
+  // scanning peaks and queue more segments.
+  onAddSegment: (args: {
+    startSec: number;
+    endSec: number;
+    dominantCategory: ReactionCategory | null;
+  }) => AddResult;
 };
 
 const CATEGORY_NAMES: Record<ReactionCategory, string> = {
@@ -19,6 +28,10 @@ const CATEGORY_NAMES: Record<ReactionCategory, string> = {
   surprise: '驚き',
   emotion: '感動',
   praise: '称賛',
+  death: '死亡',
+  victory: '勝利',
+  scream: '叫び',
+  flag: 'フラグ',
   other: 'その他',
 };
 
@@ -27,6 +40,10 @@ const CATEGORY_COLORS: Record<ReactionCategory, string> = {
   surprise: 'var(--reaction-surprise)',
   emotion: 'var(--reaction-emotion)',
   praise: 'var(--reaction-praise)',
+  death: 'var(--reaction-death)',
+  victory: 'var(--reaction-victory)',
+  scream: 'var(--reaction-scream)',
+  flag: 'var(--reaction-flag)',
   other: 'var(--reaction-other)',
 };
 
@@ -37,12 +54,23 @@ const formatHMS = (totalSec: number): string => {
   return `${m}:${String(s).padStart(2, '0')}`;
 };
 
-export default function PeakDetailPanel({ sample, analysis, onClose, onSetRange }: Props) {
-  // Same window the rolling score covered. The "set range" button uses
-  // these endpoints verbatim, and the comment list is the union of every
+export default function PeakDetailPanel({ sample, analysis, onClose, onAddSegment }: Props) {
+  // Same window the rolling score covered. The "add" button uses these
+  // endpoints verbatim, and the comment list is the union of every
   // bucket that fell inside [startSec, endSec).
   const startSec = sample?.timeSec ?? 0;
   const endSec = sample ? startSec + sample.windowSec : 0;
+
+  // Inline feedback after pressing "add to clips" — clears on the next
+  // sample-change so the panel feels responsive without a separate toast
+  // system.
+  const [addFeedback, setAddFeedback] = useState<'added' | 'duplicate' | 'limit' | null>(null);
+
+  // Reset the inline feedback whenever a different peak is selected so
+  // the user sees a clean "add" button on the new panel.
+  useEffect(() => {
+    setAddFeedback(null);
+  }, [sample?.timeSec, sample?.windowSec]);
 
   // Collect messages from every bucket whose start is within the
   // window. We avoid re-filtering by individual message timestamps —
@@ -162,12 +190,28 @@ export default function PeakDetailPanel({ sample, analysis, onClose, onSetRange 
       </div>
 
       <div className={styles.footer}>
-        <button 
+        <button
           className={styles.actionButton}
-          onClick={() => onSetRange(startSec, endSec)}
+          onClick={() => {
+            const result = onAddSegment({
+              startSec,
+              endSec,
+              dominantCategory: sample.dominantCategory,
+            });
+            if (result.ok) setAddFeedback('added');
+            else setAddFeedback(result.reason);
+          }}
         >
-          <Scissors size={16} />
-          <span>この区間を編集範囲に設定</span>
+          {addFeedback === 'added' ? <Check size={16} /> : <Plus size={16} />}
+          <span>
+            {addFeedback === 'added'
+              ? '追加しました'
+              : addFeedback === 'duplicate'
+              ? '同じ範囲の区間が既に存在します'
+              : addFeedback === 'limit'
+              ? '区間は最大 20 個までです'
+              : 'この区間を切り抜きに追加'}
+          </span>
         </button>
       </div>
     </div>

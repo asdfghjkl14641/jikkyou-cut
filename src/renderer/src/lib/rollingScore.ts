@@ -26,6 +26,10 @@ const CATEGORIES: readonly ReactionCategory[] = [
   'surprise',
   'emotion',
   'praise',
+  'death',
+  'victory',
+  'scream',
+  'flag',
   'other',
 ] as const;
 
@@ -34,6 +38,10 @@ const ZERO_CATEGORY_HITS = (): Record<ReactionCategory, number> => ({
   surprise: 0,
   emotion: 0,
   praise: 0,
+  death: 0,
+  victory: 0,
+  scream: 0,
+  flag: 0,
   other: 0,
 });
 

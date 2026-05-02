@@ -57,6 +57,98 @@
   opacity: 0.8; /* Subtle multiplier for the gradient */
 }
 
+/* Per-category fill segments. The horizontal gradient applied per
+   <path> already carries the colour, so we don't tint here — just
+   ensure no stroke and tightly constrain the layer for hit-testing. */
+.waveformFillCategory {
+  stroke: none;
+}
+
+/* Selected clip-segment overlay bars on the waveform. One per
+   `clipSegments[]` entry. Coloured by dominantCategory at low opacity
+   so the wave underneath remains readable. */
+.segmentBar {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  pointer-events: auto;
+  z-index: 4;
+  border-left: 1px solid rgba(255, 255, 255, 0.5);
+  border-right: 1px solid rgba(255, 255, 255, 0.5);
+  cursor: grab;
+  display: flex;
+  align-items: flex-start;
+  justify-content: flex-start;
+  padding: 2px 4px;
+  /* Background colour set inline because var() pluck per-category. */
+}
+
+.segmentBar:hover {
+  filter: brightness(1.2);
+}
+
+.segmentBar.dragging {
+  cursor: grabbing;
+  filter: brightness(1.3);
+}
+
+.segmentNumber {
+  font-size: 10px;
+  font-weight: var(--font-weight-bold);
+  color: var(--text-primary);
+  background: rgba(0, 0, 0, 0.6);
+  padding: 1px 5px;
+  border-radius: 999px;
+  pointer-events: none;
+  line-height: 1.2;
+}
+
+.segmentResizeHandle {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 6px;
+  cursor: ew-resize;
+  z-index: 5;
+}
+
+.segmentResizeHandleLeft {
+  left: -3px;
+}
+
+.segmentResizeHandleRight {
+  right: -3px;
+}
+
+.segmentResizeHandle:hover {
+  background: rgba(255, 255, 255, 0.3);
+}
+
+/* Hint label that appears next to a fresh drag selection inviting the
+   user to commit it as a new clipSegment. */
+.dragAddHint {
+  position: absolute;
+  top: 4px;
+  background: var(--accent-primary);
+  color: white;
+  font-size: 11px;
+  font-weight: var(--font-weight-medium);
+  padding: 4px 10px;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  pointer-events: auto;
+  z-index: 8;
+  box-shadow: var(--shadow-md);
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  white-space: nowrap;
+}
+
+.dragAddHint:hover {
+  background: var(--accent-primary-hover);
+}
+
 .hoverLine {
   position: absolute;
   top: 0;
