@@ -258,6 +258,7 @@ function registerIpcHandlers() {
   ipcMain.handle('dataCollection:triggerNow', () => dataCollectionManager.triggerNow());
   ipcMain.handle('dataCollection:pause', () => dataCollectionManager.pause());
   ipcMain.handle('dataCollection:resume', () => dataCollectionManager.resume());
+  ipcMain.handle('dataCollection:cancelCurrent', () => dataCollectionManager.cancelCurrentBatch());
   ipcMain.handle('dataCollection:isEnabled', async () => {
     const cfg = await loadConfig();
     return cfg.dataCollectionEnabled;

@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { X, Database, Play, Pause } from 'lucide-react';
+import { X, Database, Play, Pause, Square } from 'lucide-react';
 import styles from './SettingsDialog.module.css';
 
 // Hosted under SettingsDialog. As of the API-management refactor,
@@ -19,6 +19,8 @@ type Stats = {
   isRunning: boolean;
   isPaused: boolean;
   isEnabled: boolean;
+  isBatchActive: boolean;
+  nextBatchAtSec: number | null;
   lastCollectedAt: string | null;
 };
 
@@ -84,6 +86,24 @@ export default function DataCollectionSettings() {
     setBusy(true);
     try {
       await window.api.dataCollection.triggerNow();
+      // Refresh immediately so the status flips to 取得中 without
+      // waiting for the next 5-second poll tick.
+      setStats(await window.api.dataCollection.getStats());
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const handleCancelCurrent = async () => {
+    if (!stats?.isBatchActive) return;
+    const ok = window.confirm(
+      '進行中の取得を停止しますか?\n\n現在のバッチは破棄されます(部分的に保存済みのデータは残ります)。',
+    );
+    if (!ok) return;
+    setBusy(true);
+    try {
+      await window.api.dataCollection.cancelCurrent();
+      setStats(await window.api.dataCollection.getStats());
     } finally {
       setBusy(false);
     }
@@ -112,31 +132,26 @@ export default function DataCollectionSettings() {
     }
   };
 
-  // Three-way control. Maps the visible state to the right manager
-  // action without making the user think about the distinction:
-  //   running  → pause()    (stop after current batch)
-  //   paused   → resume()
-  //   idle     → resume()    (start() under the hood, no-op if no keys)
-  const handleToggleCollection = async () => {
-    setBusy(true);
-    try {
-      if (stats?.isRunning) {
-        await window.api.dataCollection.pause();
-      } else {
-        await window.api.dataCollection.resume();
-      }
-      setStats(await window.api.dataCollection.getStats());
-    } finally {
-      setBusy(false);
-    }
-  };
-
   const formatDateTime = (iso: string | null): string => {
     if (!iso) return '未実行';
     const d = new Date(iso);
     if (Number.isNaN(d.getTime())) return iso;
     const pad = (n: number) => String(n).padStart(2, '0');
     return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
+  };
+
+  // "次のサイクルまで N 分 M 秒" — UX-friendly countdown for the
+  // 待機中 status. < 1 minute drops to seconds for clarity.
+  const formatNextBatch = (sec: number | null): string => {
+    if (sec == null) return '';
+    if (sec <= 0) return '間もなく';
+    if (sec < 60) return `次まで ${sec} 秒`;
+    const minutes = Math.floor(sec / 60);
+    const remSec = sec % 60;
+    if (minutes < 60) return `次まで ${minutes} 分${remSec > 0 ? ` ${remSec} 秒` : ''}`;
+    const hours = Math.floor(minutes / 60);
+    const remMin = minutes % 60;
+    return `次まで ${hours} 時間${remMin > 0 ? ` ${remMin} 分` : ''}`;
   };
 
   return (
@@ -189,16 +204,27 @@ export default function DataCollectionSettings() {
         <div>
           <span style={{ color: 'var(--text-muted)' }}>状態</span>:&nbsp;
           {(() => {
-            // Visible states. isEnabled is the persistent master switch;
-            // isRunning / isPaused live within an enabled session.
+            // Status precedence:
+            //   1. batch in flight → "取得中…" (regardless of enabled)
+            //   2. enabled + idle → "待機中 (次まで N 分)"
+            //   3. paused → "一時停止中"
+            //   4. disabled → "停止中(自動収集無効)" / "未起動"
+            if (stats?.isBatchActive) {
+              return <span style={{ color: 'var(--accent-success)' }}>🟢 取得中…</span>;
+            }
             if (!stats?.isEnabled) {
               return <span style={{ color: 'var(--text-muted)' }}>⚫ 停止中(自動収集無効)</span>;
             }
-            if (stats.isRunning) {
-              return <span style={{ color: 'var(--accent-success)' }}>🟢 実行中</span>;
-            }
             if (stats.isPaused) {
               return <span style={{ color: 'var(--accent-warning)' }}>⏸ 一時停止中</span>;
+            }
+            if (stats.isRunning) {
+              const next = formatNextBatch(stats.nextBatchAtSec);
+              return (
+                <span style={{ color: 'var(--accent-warning)' }}>
+                  ⏸ 待機中{next ? `(${next})` : ''}
+                </span>
+              );
             }
             if (keyCount === 0) {
               return <span style={{ color: 'var(--text-muted)' }}>⚫ 未起動(API キー未登録)</span>;
@@ -213,6 +239,7 @@ export default function DataCollectionSettings() {
       </div>
 
       <div style={{ display: 'flex', gap: 8, marginTop: 8, flexWrap: 'wrap' }}>
+        {/* Persistent master switch (re-instates after app restart) */}
         <button
           type="button"
           className={stats?.isEnabled ? styles.cancelButton : styles.saveButton}
@@ -228,36 +255,46 @@ export default function DataCollectionSettings() {
           {stats?.isEnabled ? <Pause size={12} /> : <Play size={12} />}
           {stats?.isEnabled ? '無効化する' : '有効化する'}
         </button>
+        {/* One-shot manual trigger (was 「今すぐ実行」 — renamed for
+            clarity of intent: 取得 maps onto data acquisition better
+            than 実行) */}
         <button
           type="button"
           className={styles.cancelButton}
           onClick={handleTriggerNow}
-          disabled={busy || keyCount === 0 || !stats?.isEnabled}
+          disabled={busy || keyCount === 0 || !stats?.isEnabled || stats.isBatchActive}
           title={
             !stats?.isEnabled
               ? 'データ収集を先に有効化してください'
               : keyCount === 0
               ? '先に API 管理画面で YouTube キーを登録してください'
-              : '今すぐ 1 バッチ実行'
+              : stats.isBatchActive
+              ? '進行中のバッチが完了するまで待ってください'
+              : '今すぐ 1 サイクル分だけ取得'
           }
           style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}
         >
           <Play size={12} />
-          今すぐ実行
+          1 回だけ取得
         </button>
-        {stats?.isEnabled && (stats.isRunning || stats.isPaused) && (
-          <button
-            type="button"
-            className={styles.cancelButton}
-            onClick={handleToggleCollection}
-            disabled={busy}
-            title={stats.isRunning ? '今のセッション内で一時停止' : '今のセッション内で再開'}
-            style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}
-          >
-            {stats.isRunning ? <Pause size={12} /> : <Play size={12} />}
-            {stats.isRunning ? '一時停止' : '再開'}
-          </button>
-        )}
+        {/* Cancel-in-flight — disabled unless a batch is mid-flight.
+            Doesn't change isEnabled / pause state, so the regular
+            schedule still ticks unaffected. */}
+        <button
+          type="button"
+          className={`${styles.cancelButton} ${styles.smallButtonDanger ?? ''}`}
+          onClick={handleCancelCurrent}
+          disabled={busy || !stats?.isBatchActive}
+          title={
+            !stats?.isBatchActive
+              ? '進行中のバッチがありません'
+              : '進行中のバッチを停止(現在のサイクルは破棄)'
+          }
+          style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}
+        >
+          <Square size={12} />
+          取得を停止
+        </button>
       </div>
 
       {/* Creator list */}

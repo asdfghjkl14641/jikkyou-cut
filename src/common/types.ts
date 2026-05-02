@@ -513,11 +513,22 @@ export type IpcApi = {
       // from isRunning/isPaused (which are session-only). When
       // false, auto-start at app launch is skipped.
       isEnabled: boolean;
+      // True while a batch is currently mid-flight (whether scheduled
+      // or fired by triggerNow). Drives the "1 回だけ取得" button's
+      // disabled state and the "取得を停止" button's enabled state.
+      isBatchActive: boolean;
+      // Seconds until the next scheduled batch fires. null when no
+      // timer is armed (idle / paused / batch currently active).
+      nextBatchAtSec: number | null;
       lastCollectedAt: string | null;
     }>;
     triggerNow: () => Promise<void>;
     pause: () => Promise<void>;
     resume: () => Promise<void>;
+    // Stop the in-flight batch without changing isEnabled / pause
+    // state. The regular schedule keeps ticking; the next cycle still
+    // fires at its scheduled time.
+    cancelCurrent: () => Promise<void>;
     isEnabled: () => Promise<boolean>;
     setEnabled: (enabled: boolean) => Promise<void>;
   };

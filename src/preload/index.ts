@@ -157,6 +157,7 @@ const api: IpcApi = {
     triggerNow: () => ipcRenderer.invoke('dataCollection:triggerNow'),
     pause: () => ipcRenderer.invoke('dataCollection:pause'),
     resume: () => ipcRenderer.invoke('dataCollection:resume'),
+    cancelCurrent: () => ipcRenderer.invoke('dataCollection:cancelCurrent'),
     isEnabled: () => ipcRenderer.invoke('dataCollection:isEnabled'),
     setEnabled: (enabled) => ipcRenderer.invoke('dataCollection:setEnabled', enabled),
   },

@@ -40,7 +40,15 @@ class DataCollectionManager {
   private state: ManagerState = 'idle';
   private currentBatch: Promise<void> | null = null;
   private timer: ReturnType<typeof setTimeout> | null = null;
+  // Reset at the top of every batch so a previous cancel doesn't bleed
+  // into the next run. Toggled true by pause() and cancelCurrentBatch();
+  // the batch loop checks it between API calls and bails early.
   private cancelRequested = false;
+  // Wall-clock timestamp (ms) when scheduleNext's timer is supposed to
+  // fire. Used by the UI to render "次まで N 分" without a separate
+  // tick channel. null when no timer is armed (idle / paused / batch
+  // currently active).
+  private nextBatchAt: number | null = null;
 
   /** Begin auto-collection. Returns immediately; first cycle fires after
    * STARTUP_DELAY_MS. No-op if no API keys are configured. */
@@ -64,6 +72,7 @@ class DataCollectionManager {
       clearTimeout(this.timer);
       this.timer = null;
     }
+    this.nextBatchAt = null;
   }
 
   async resume(): Promise<void> {
@@ -81,18 +90,42 @@ class DataCollectionManager {
     return this.runOneBatch();
   }
 
+  /** Stop the in-flight batch without changing the persistent
+   * enabled/paused state. The regular schedule (if armed) keeps
+   * ticking, so the next cycle will start at its scheduled time as
+   * usual. No-op if no batch is currently active. */
+  cancelCurrentBatch(): void {
+    if (!this.currentBatch) return;
+    this.cancelRequested = true;
+    logInfo('cancel signal sent — current batch will exit on next checkpoint');
+  }
+
   isRunning(): boolean {
     return this.state === 'running';
   }
 
-  getStatsSnapshot(): CollectionStats & { isRunning: boolean; isPaused: boolean } {
+  getStatsSnapshot(): CollectionStats & {
+    isRunning: boolean;
+    isPaused: boolean;
+    isBatchActive: boolean;
+    nextBatchAtSec: number | null;
+  } {
     // 3-way state for the UI (running / paused / idle). isRunning and
     // isPaused are mutually exclusive — both false ⇒ idle (no API
-    // keys configured, or never started).
+    // keys configured, or never started). isBatchActive is orthogonal:
+    // true while a batch is mid-flight (whether scheduled or
+    // triggerNow-driven). nextBatchAtSec counts down to the next
+    // scheduled batch.
+    const nextSec =
+      this.nextBatchAt != null
+        ? Math.max(0, Math.round((this.nextBatchAt - Date.now()) / 1000))
+        : null;
     return {
       ...getStats(),
       isRunning: this.state === 'running',
       isPaused: this.state === 'paused',
+      isBatchActive: this.currentBatch !== null,
+      nextBatchAtSec: nextSec,
     };
   }
 
@@ -100,7 +133,9 @@ class DataCollectionManager {
 
   private scheduleNext(delayMs: number): void {
     if (this.state !== 'running') return;
+    this.nextBatchAt = Date.now() + delayMs;
     this.timer = setTimeout(() => {
+      this.nextBatchAt = null;
       void this.runOneBatch().finally(() => {
         if (this.state === 'running') this.scheduleNext(COLLECTION_INTERVAL_MS);
       });
@@ -109,6 +144,10 @@ class DataCollectionManager {
 
   private async runOneBatch(): Promise<void> {
     if (this.currentBatch) return this.currentBatch;
+    // Fresh start — clear any cancel flag left over from a previous
+    // pause / cancelCurrentBatch invocation. The batch will re-set the
+    // flag while running if pause / cancel fires mid-batch.
+    this.cancelRequested = false;
     const batch = this._collectBatch().catch((err) => {
       logError(`batch error: ${err instanceof Error ? err.message : String(err)}`);
     });
@@ -116,6 +155,9 @@ class DataCollectionManager {
     try {
       await batch;
     } finally {
+      if (this.cancelRequested) {
+        logInfo('batch ended — cancelled by user / pause');
+      }
       this.currentBatch = null;
     }
   }
