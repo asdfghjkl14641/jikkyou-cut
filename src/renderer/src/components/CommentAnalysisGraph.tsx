@@ -1,26 +1,15 @@
 import React, { useCallback, useMemo, useRef, useState, type MouseEvent } from 'react';
 import { useEditorStore } from '../store/editorStore';
+import { ScoreSample, CommentAnalysis } from '../../../common/types';
+import { ReactionCategory } from '../../../common/commentAnalysis/keywords';
 import styles from './CommentAnalysisGraph.module.css';
-
-export type ScoreSample = {
-  timeSec: number;
-  commentDensity: number;
-  viewerGrowth: number;
-  keywordHits: number;
-  total: number;
-};
-
-export type CommentAnalysis = {
-  videoDurationSec: number;
-  bucketSizeSec: number;
-  samples: ScoreSample[];
-};
 
 type Props = {
   analysis: CommentAnalysis;
   onSeek?: (sec: number) => void;
   selectionRange?: { startSec: number; endSec: number } | null;
   onSelectionChange?: (range: { startSec: number; endSec: number } | null) => void;
+  onPeakClick?: (sample: ScoreSample) => void;
 };
 
 const formatHMS = (totalSec: number): string => {
@@ -35,11 +24,28 @@ const formatHMS = (totalSec: number): string => {
   return `${m}:${String(s).padStart(2, '0')}`;
 };
 
+const CATEGORY_NAMES: Record<ReactionCategory, string> = {
+  laugh: '笑い',
+  surprise: '驚き',
+  emotion: '感動',
+  praise: '称賛',
+  other: 'その他',
+};
+
+const CATEGORY_COLORS: Record<ReactionCategory, string> = {
+  laugh: 'var(--reaction-laugh)',
+  surprise: 'var(--reaction-surprise)',
+  emotion: 'var(--reaction-emotion)',
+  praise: 'var(--reaction-praise)',
+  other: 'var(--reaction-other)',
+};
+
 export default function CommentAnalysisGraph({ 
   analysis, 
   onSeek, 
   selectionRange, 
-  onSelectionChange 
+  onSelectionChange,
+  onPeakClick
 }: Props) {
   const currentSec = useEditorStore((s) => s.currentSec);
   const containerRef = useRef<HTMLDivElement>(null);
@@ -61,6 +67,48 @@ export default function CommentAnalysisGraph({
     return ratio * durationSec;
   }, [durationSec]);
 
+  // SVG Waveform generation. 
+  // We use a single smooth path for the entire graph.
+  const points = useMemo(() => {
+    const samples = analysis.samples;
+    if (samples.length < 2) return [];
+    
+    return samples.map((s, i) => ({
+      x: (i / (samples.length - 1)) * 100,
+      y: (1 - s.total) * 100
+    }));
+  }, [analysis.samples]);
+
+  // Catmull-Rom to Bezier conversion for smooth curves
+  const curvePath = useMemo(() => {
+    if (points.length < 3) return '';
+    
+    // Start at the first point
+    let d = `M 0,${points[0]!.y}`;
+    
+    // Smooth the path using quadratic curves through midpoints
+    for (let i = 0; i < points.length - 1; i++) {
+      const p0 = points[i]!;
+      const p1 = points[i + 1]!;
+      const midX = (p0.x + p1.x) / 2;
+      const midY = (p0.y + p1.y) / 2;
+      
+      // Control point is the current point, destination is the midpoint to next
+      d += ` Q ${p0.x},${p0.y} ${midX},${midY}`;
+    }
+    
+    // Finish at the last point
+    const last = points[points.length - 1]!;
+    d += ` L 100,${last.y}`;
+    
+    return d;
+  }, [points]);
+
+  const fillPath = useMemo(() => {
+    if (!curvePath) return '';
+    return `${curvePath} L 100 100 L 0 100 Z`;
+  }, [curvePath]);
+
   const handleMouseDown = (e: MouseEvent<HTMLDivElement>) => {
     const rect = containerRef.current?.getBoundingClientRect();
     if (!rect) return;
@@ -81,7 +129,6 @@ export default function CommentAnalysisGraph({
       setDragCurrentSec(time);
     }
 
-    // Find the closest sample for tooltip
     const sampleIndex = Math.round(time / analysis.bucketSizeSec);
     const sample = analysis.samples[sampleIndex];
 
@@ -104,16 +151,18 @@ export default function CommentAnalysisGraph({
     const x = e.clientX - rect.left;
     const time = getTimeAtX(x);
 
-    // If movement is very small, treat as click/seek
-    const diff = Math.abs(time - dragStartSec);
-    // threshold: 5px
     const pxDiff = Math.abs(e.clientX - (rect.left + (dragStartSec / durationSec) * rect.width));
 
     if (pxDiff < 5) {
-      onSeek?.(time);
-      // Optional: clear selection on click? 
-      // User said: "選択済み範囲をもう一度ドラッグしたら新規選択で上書き"
-      // Click usually seeks in these heatmaps.
+      // Click detection. If total >= 0.5, it's a peak click.
+      const sampleIndex = Math.round(time / analysis.bucketSizeSec);
+      const sample = analysis.samples[sampleIndex];
+      
+      if (sample && sample.total >= 0.5) {
+        onPeakClick?.(sample);
+      } else {
+        onSeek?.(time);
+      }
     } else {
       const start = Math.min(dragStartSec, time);
       const end = Math.max(dragStartSec, time);
@@ -126,11 +175,8 @@ export default function CommentAnalysisGraph({
 
   const handleMouseLeave = () => {
     setHoverSample(null);
-    if (dragStartSec !== null) {
-      // Cancel drag or commit? Usually cancel if it leaves area without mouseup
-      setDragStartSec(null);
-      setDragCurrentSec(null);
-    }
+    setDragStartSec(null);
+    setDragCurrentSec(null);
   };
 
   const dragRange = useMemo(() => {
@@ -151,73 +197,74 @@ export default function CommentAnalysisGraph({
         onMouseUp={handleMouseUp}
         onMouseLeave={handleMouseLeave}
       >
-        <div className={styles.bars}>
-          {analysis.samples.map((s, i) => {
-            const height = s.total * 100;
-            const opacity = 0.3 + s.total * 0.7;
-            const color = s.total > 0.8 ? '#F87171' : s.total > 0.5 ? '#FB923C' : 'var(--text-muted)';
+        <svg className={styles.svgWaveform} viewBox="0 0 100 100" preserveAspectRatio="none">
+          <defs>
+            <linearGradient id="waveformFillGradient" x1="0" y1="0" x2="0" y2="1">
+              <stop offset="0%" stopColor="rgba(255, 255, 255, 0.06)" />
+              <stop offset="100%" stopColor="rgba(255, 255, 255, 0)" />
+            </linearGradient>
+          </defs>
+          
+          <path d={fillPath} className={styles.waveformFill} />
+          <path d={curvePath} className={styles.waveformPath} />
+        </svg>
 
-            return (
-              <div
-                key={i}
-                className={styles.bar}
-                style={{ 
-                  height: `${height}%`,
-                  backgroundColor: color,
-                  opacity,
-                  left: `${(s.timeSec / durationSec) * 100}%`,
-                  width: `${(analysis.bucketSizeSec / durationSec) * 100}%`
-                }}
-              />
-            );
-          })}
-        </div>
-
-        {/* 選択範囲 (ドラッグ中) */}
-        {dragRange && (
+        {/* 選択範囲オーバーレイ */}
+        {(dragRange || (selectionRange && !dragRange)) && (
           <div 
             className={styles.selectionOverlay}
             style={{ 
-              left: `${(dragRange.start / durationSec) * 100}%`,
-              width: `${((dragRange.end - dragRange.start) / durationSec) * 100}%`
+              left: `${((dragRange?.start ?? selectionRange?.startSec ?? 0) / durationSec) * 100}%`,
+              width: `${(((dragRange?.end ?? selectionRange?.endSec ?? 0) - (dragRange?.start ?? selectionRange?.startSec ?? 0)) / durationSec) * 100}%`
             }}
-          />
+          >
+            <div className={styles.selectionBorder} style={{ left: 0 }} />
+            <div className={styles.selectionBorder} style={{ right: 0 }} />
+          </div>
         )}
 
-        {/* 確定済み選択範囲 */}
-        {selectionRange && !dragRange && (
-          <div 
-            className={styles.selectionOverlay}
-            style={{ 
-              left: `${(selectionRange.startSec / durationSec) * 100}%`,
-              width: `${((selectionRange.endSec - selectionRange.startSec) / durationSec) * 100}%`
-            }}
-          />
+        {/* ホバー縦線 (YouTube プレビュー風) */}
+        {hoverSample && dragStartSec === null && (
+          <div className={styles.hoverLine} style={{ left: hoverSample.x }} />
         )}
 
-        {/* 現在位置の線 */}
-        <div
-          className={styles.cursor}
-          style={{ left: `${currentPercent}%` }}
-        />
+        {/* 再生位置インジケータ */}
+        <div className={styles.cursor} style={{ left: `${currentPercent}%` }} />
 
-        {/* ツールチップ */}
+        {/* Tooltip */}
         {hoverSample && (
           <div 
             className={styles.tooltip}
             style={{ 
               left: hoverSample.x,
-              transform: `translateX(${hoverSample.x > (containerRef.current?.clientWidth || 0) - 150 ? '-100%' : '10px'})`
+              transform: `translateX(${hoverSample.x > (containerRef.current?.clientWidth || 0) - 180 ? '-100%' : '0'})`
             }}
           >
-            <div className={styles.tooltipTime}>{formatHMS(hoverSample.sample.timeSec)}</div>
-            <div className={styles.tooltipTotal}>
-              スコア: <span className={styles.totalValue}>{(hoverSample.sample.total * 100).toFixed(0)}</span>
+            <div className={styles.tooltipTime}>
+              {formatHMS(hoverSample.sample.timeSec)} 〜 {formatHMS(hoverSample.sample.timeSec + analysis.bucketSizeSec)}
             </div>
+            <div className={styles.tooltipTotal}>
+              <span>スコア</span>
+              <span>{(hoverSample.sample.total * 100).toFixed(0)}</span>
+            </div>
+            
             <div className={styles.tooltipDetail}>
-              <div>コメント密度: {(hoverSample.sample.commentDensity * 100).toFixed(0)}%</div>
-              <div>視聴者増加: {(hoverSample.sample.viewerGrowth * 100).toFixed(0)}%</div>
-              <div>キーワード: {(hoverSample.sample.keywordHits * 100).toFixed(0)}%</div>
+              <div className={styles.categoryGrid}>
+                {(Object.keys(hoverSample.sample.categoryHits) as ReactionCategory[]).map(cat => {
+                  const val = hoverSample.sample.categoryHits[cat];
+                  if (val <= 0) return null;
+                  return (
+                    <div key={cat} className={styles.categoryRow}>
+                      <span className={styles.categoryDot} style={{ background: CATEGORY_COLORS[cat] }} />
+                      <span className={styles.categoryLabel}>{CATEGORY_NAMES[cat]}</span>
+                      <span className={styles.categoryValue}>{(val * 100).toFixed(0)}</span>
+                    </div>
+                  );
+                })}
+              </div>
+              <div className={styles.msgStats}>
+                コメント: {hoverSample.sample.messages.length}件
+              </div>
             </div>
           </div>
         )}
@@ -225,3 +272,5 @@ export default function CommentAnalysisGraph({
     </div>
   );
 }
+
+

@@ -15,6 +15,36 @@
 
 ---
 
+## 2026-05-02 13:30 - コメント分析波線の色をさらに薄く調整(背景レイヤー化)
+
+- 誰が: Claude Code
+- 何を: `CommentAnalysisGraph.module.css` で波線 stroke `rgba(255,255,255,0.9)` → `rgba(255,255,255,0.45)`、stroke-width `1.5` → `1.2`、グラデ top `rgba(255,255,255,0.12)` → `rgba(255,255,255,0.06)`(後者は SVG `<stop>` なので `.tsx` 側)。`.graphArea:hover` / `:active` で stroke を `rgba(255,255,255,0.75)` にバンプ + `transition: stroke var(--transition-fast)` で滑らかに(svg 自体は `pointer-events: none` のため、parent の `.graphArea` 経由で hover/drag を捕捉)
+- 理由: 今後カテゴリ感情の色味・コメント内容を波形上にレイヤード表示していく計画。波線自体は背景レイヤーとして馴染む控えめさに振ることで、操作中以外は前景情報を邪魔しない。赤い再生位置線は据え置きで、薄い波線とのコントラストで自然に引き立つ
+- 影響: `src/renderer/src/components/CommentAnalysisGraph.module.css` + `.tsx`(SVG `<stop>` 1 行)
+- コミット: (未定)
+
+## 2026-05-02 11:30 - コメント分析グラフを YouTube ヒートマップ風の波線 UI に再構成
+- **誰が**: Antigravity
+- **何を**: 
+  - 直前のカテゴリ色パッチワーク + ドットマーカー UI を廃止し、白い滑らかな波線 1 本 + 下方向グラデ塗りに変更。
+  - カテゴリ情報はツールチップ内のドット表示に退避。
+  - SVG 描画を quadratic curves による平滑化ロジックに変更。
+- **理由**: 色分けとマーカーにより画面が「グチャグチャ感」を発しており、本来の YouTube Most replayed の控えめで洗練されたデザインから逸脱していた。引き算の設計により、動画再生バーに馴染むモダンな UI を実現した。
+- **影響**: `src/renderer/src/components/CommentAnalysisGraph.{tsx,module.css}`, `src/renderer/src/components/ClipSelectView.{tsx,module.css}`
+- **コミット**: (実施済み)
+
+## 2026-05-02 11:00 - コメント分析 UI を YouTube Most replayed 風に進化 + カテゴリ色分け + 詳細パネル
+- 誰が: Antigravity
+- 何を: 
+  - キーワード辞書をカテゴリ分け (笑い/驚き/感動/称賛/その他)
+  - `ScoreSample` に `dominantCategory` + `categoryHits` + `messages` を追加
+  - 波形を SVG 曲線 + カテゴリ色分けに変更 (YouTube Most replayed 風)
+  - ピーククリックで `PeakDetailPanel` 展開 (AI 要約スロットはプレースホルダ)
+  - `ClipSelectView` の不要テキスト UI を削除
+- 理由: スコアグラフが「数値の山」だけでは中身が読み取れず、結局シーク再生で内容を確認する必要があった。視覚的に「ここは笑い区間」「ここは称賛区間」と分かるようにすることで、切り抜き箇所の判断速度を劇的に向上させる。
+- 影響: `src/common/commentAnalysis/keywords.ts`, `src/common/types.ts`, `src/main/commentAnalysis/scoring.ts`, `src/renderer/src/components/CommentAnalysisGraph.{tsx,module.css}`, `src/renderer/src/components/PeakDetailPanel.{tsx,module.css}` (新規), `src/renderer/src/components/ClipSelectView.{tsx,module.css}`
+- コミット: (実施済み)
+
 ## 2026-05-02 12:30 - 緊急修正: ClipSelectView の onDuration/onCurrentTime 未配線が 3 症状の共通根本
 
 - 誰が: Claude Code

@@ -7,123 +7,165 @@
   gap: 0;
   box-shadow: none;
   user-select: none;
-}
-
-/* 簡素化のためヘッダ・凡例は削除、または display: none */
-.header {
-  display: none;
+  position: relative;
+  height: 120px;
 }
 
 .graphArea {
+  flex: 1;
   position: relative;
-  height: 100px;
-  background: var(--bg-base);
-  border-radius: var(--radius-sm);
-  border: 1px solid var(--border-subtle);
-  cursor: crosshair;
+  background: rgba(255, 255, 255, 0.02);
+  border-radius: var(--radius-lg);
   overflow: hidden;
+  cursor: crosshair;
 }
 
-.bars {
+.svgWaveform {
   position: absolute;
   top: 0;
   left: 0;
-  right: 0;
-  bottom: 0;
-  display: flex;
-  align-items: flex-end;
+  width: 100%;
+  height: 100%;
   pointer-events: none;
 }
 
-.bar {
-  position: absolute;
-  bottom: 0;
-  min-width: 1px;
-  transition: height var(--transition-base), background-color var(--transition-fast);
+.waveformPath {
+  fill: none;
+  /* Subdued so the wave reads as a background layer; emotion-category
+     overlays + comment text will sit on top. Hover/drag bumps it to
+     ~0.75 via the rule below for in-the-moment emphasis. */
+  stroke: rgba(255, 255, 255, 0.45);
+  stroke-width: 1.2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  vector-effect: non-scaling-stroke;
+  transition: stroke var(--transition-fast);
 }
 
-.graphArea:hover .bar {
-  filter: brightness(1.1);
+/* The svg itself has pointer-events: none, so :hover/:active need to
+   come from the .graphArea parent (which owns the mouse handlers and
+   the cursor: crosshair). Both states share the same emphasised value
+   — drag-active is functionally hover-with-button-down. */
+.graphArea:hover .waveformPath,
+.graphArea:active .waveformPath {
+  stroke: rgba(255, 255, 255, 0.75);
+}
+
+.waveformFill {
+  stroke: none;
+  fill: url(#waveformFillGradient);
+  opacity: 0.8; /* Subtle multiplier for the gradient */
+}
+
+.hoverLine {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 1px;
+  background: rgba(255, 255, 255, 0.4);
+  pointer-events: none;
+  z-index: 5;
 }
 
 .selectionOverlay {
   position: absolute;
   top: 0;
   bottom: 0;
-  background: var(--accent-primary);
-  opacity: 0.25;
-  border-left: 1px solid var(--accent-primary);
-  border-right: 1px solid var(--accent-primary);
+  background: rgba(255, 255, 255, 0.1);
   pointer-events: none;
   z-index: 2;
+}
+
+.selectionBorder {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 1px;
+  background: rgba(255, 255, 255, 0.4);
 }
 
 .cursor {
   position: absolute;
   top: 0;
   bottom: 0;
-  width: 2px;
+  width: 1.5px;
   background: var(--accent-danger);
   pointer-events: none;
-  margin-left: -1px;
-  z-index: 5;
-  box-shadow: 0 0 10px var(--accent-danger);
+  z-index: 10;
 }
 
-.cursor::after {
-  content: '';
-  position: absolute;
-  top: 0;
-  left: 50%;
-  transform: translateX(-50%);
-  border-left: 4px solid transparent;
-  border-right: 4px solid transparent;
-  border-top: 5px solid var(--accent-danger);
-}
-
+/* Tooltip */
 .tooltip {
   position: absolute;
-  top: 10px;
-  z-index: 10;
-  background: rgba(15, 17, 23, 0.95);
+  top: -10px;
+  background: rgba(15, 15, 20, 0.95);
   backdrop-filter: blur(8px);
-  border: 1px solid var(--border-subtle);
+  border: 1px solid var(--border-strong);
   border-radius: var(--radius-md);
   padding: var(--space-2) var(--space-3);
   pointer-events: none;
-  box-shadow: var(--shadow-xl);
-  min-width: 140px;
-  animation: fadeIn var(--transition-fast);
-}
-
-@keyframes fadeIn {
-  from { opacity: 0; transform: translateY(5px); }
-  to { opacity: 1; transform: translateY(0); }
+  z-index: 100;
+  box-shadow: var(--shadow-lg);
+  min-width: 180px;
+  transform: translateY(-100%);
 }
 
 .tooltipTime {
-  font-family: var(--font-mono);
   font-size: var(--font-size-xs);
   color: var(--text-muted);
   margin-bottom: var(--space-1);
 }
 
 .tooltipTotal {
-  font-size: var(--font-size-sm);
+  font-size: var(--font-size-md);
   font-weight: var(--font-weight-bold);
   color: var(--text-primary);
   margin-bottom: var(--space-2);
-}
-
-.totalValue {
-  color: #FB923C;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
 }
 
 .tooltipDetail {
-  font-size: 10px;
-  color: var(--text-secondary);
-  line-height: 1.4;
   display: flex;
   flex-direction: column;
-  gap: 2px;
+  gap: 4px;
+  border-top: 1px solid var(--border-subtle);
+  padding-top: var(--space-2);
+}
+
+.categoryGrid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.categoryRow {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-size: var(--font-size-xs);
+  color: var(--text-secondary);
+}
+
+.categoryDot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.categoryLabel {
+  color: var(--text-secondary);
+}
+
+.categoryValue {
+  color: var(--text-muted);
+  font-weight: var(--font-weight-medium);
+}
+
+.msgStats {
+  margin-top: var(--space-2);
+  font-size: var(--font-size-xs);
+  color: var(--text-muted);
 }
