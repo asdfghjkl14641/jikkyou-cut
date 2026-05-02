@@ -6,6 +6,7 @@ import CommentAnalysisGraph from './CommentAnalysisGraph';
 import WindowSizeSlider from './WindowSizeSlider';
 import ClipSegmentsList from './ClipSegmentsList';
 import LiveCommentFeed from './LiveCommentFeed';
+import SegmentContextMenu from './SegmentContextMenu';
 import { generateMockAnalysis } from './CommentAnalysisGraph.mock';
 import type {
   CommentAnalysis,
@@ -51,6 +52,12 @@ export default function ClipSelectView() {
 
   const [selectedSegmentId, setSelectedSegmentId] = useState<string | null>(null);
   const [analysisState, setAnalysisState] = useState<AnalysisState>({ kind: 'idle' });
+  // Right-click-on-segment context menu state. Position is viewport-
+  // space (clientX/Y), the menu uses position: fixed.
+  const [segmentMenu, setSegmentMenu] = useState<{ id: string; x: number; y: number } | null>(null);
+  // Triggers ClipSegmentsList to enter title-edit mode for a specific
+  // segment. Cleared by the list once handled.
+  const [editTitleRequestId, setEditTitleRequestId] = useState<string | null>(null);
 
   const mockAnalysis = useMemo<CommentAnalysis>(() => {
     return generateMockAnalysis(durationSec ?? 0) as CommentAnalysis;
@@ -205,9 +212,12 @@ export default function ClipSelectView() {
                 onSeek={handleSeekInternal}
                 onAddSegmentRequested={handleAddFromDrag}
                 onMutateSegment={handleMutateSegment}
-                onRemoveSegment={(id) => { removeClipSegment(id); setSelectedSegmentId(null); }}
                 onSelectSegment={setSelectedSegmentId}
                 selectedSegmentId={selectedSegmentId}
+                onSegmentContextMenu={(id, x, y) => {
+                  setSelectedSegmentId(id);
+                  setSegmentMenu({ id, x, y });
+                }}
               />
               <div className={styles.statusLabel}>
                 {analysisState.kind === 'loading' && (
@@ -229,6 +239,8 @@ export default function ClipSelectView() {
               eyecatches={eyecatches}
               maxSegments={MAX_CLIP_SEGMENTS}
               selectedSegmentId={selectedSegmentId}
+              editTitleRequestId={editTitleRequestId}
+              onEditTitleRequestHandled={() => setEditTitleRequestId(null)}
               onSelectSegment={setSelectedSegmentId}
               onUpdateSegment={updateClipSegment}
               onRemoveSegment={(id) => { removeClipSegment(id); setSelectedSegmentId(null); }}
@@ -247,6 +259,23 @@ export default function ClipSelectView() {
           />
         </aside>
       </main>
+
+      {segmentMenu && (
+        <SegmentContextMenu
+          x={segmentMenu.x}
+          y={segmentMenu.y}
+          onDelete={() => {
+            removeClipSegment(segmentMenu.id);
+            setSelectedSegmentId(null);
+            setSegmentMenu(null);
+          }}
+          onEditTitle={() => {
+            setEditTitleRequestId(segmentMenu.id);
+            setSegmentMenu(null);
+          }}
+          onClose={() => setSegmentMenu(null)}
+        />
+      )}
     </div>
   );
 }

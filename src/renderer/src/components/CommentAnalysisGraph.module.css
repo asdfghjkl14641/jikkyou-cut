@@ -211,7 +211,8 @@
   z-index: 10;
 }
 
-/* Tooltip */
+/* Tooltip — old 4-line version, kept for backward compat in case
+   anything still references it. New compact 1-line tooltip is below. */
 .tooltip {
   position: absolute;
   top: -10px;
@@ -225,6 +226,33 @@
   box-shadow: var(--shadow-lg);
   min-width: 180px;
   transform: translateY(-100%);
+}
+
+/* Compact 1-line hover tooltip — sits offset from the cursor so it
+   doesn't block the waveform underneath. */
+.tooltipCompact {
+  position: absolute;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  background: rgba(0, 0, 0, 0.85);
+  color: var(--text-primary);
+  font-size: 11px;
+  padding: 4px 8px;
+  border-radius: 4px;
+  pointer-events: none;
+  z-index: 100;
+  white-space: nowrap;
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.4);
+}
+
+.tooltipTimeInline {
+  font-variant-numeric: tabular-nums;
+  color: var(--text-primary);
+}
+
+.tooltipDot {
+  color: var(--text-muted);
 }
 
 .tooltipTime {

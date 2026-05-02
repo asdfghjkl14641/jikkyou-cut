@@ -1,0 +1,44 @@
+.menu {
+  position: fixed;
+  background: rgba(15, 15, 20, 0.96);
+  backdrop-filter: blur(8px);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-md);
+  padding: 4px;
+  list-style: none;
+  margin: 0;
+  z-index: 1000;
+  box-shadow: var(--shadow-lg);
+  min-width: 160px;
+  /* Subtle entry — too long looks laggy after a right-click. */
+  animation: jcut-segctx-fade 80ms ease-out;
+}
+
+@keyframes jcut-segctx-fade {
+  from { opacity: 0; transform: translateY(-2px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+.item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px;
+  border-radius: var(--radius-sm);
+  font-size: var(--font-size-sm);
+  color: var(--text-primary);
+  cursor: pointer;
+  user-select: none;
+}
+
+.item:hover {
+  background: rgba(255, 255, 255, 0.06);
+}
+
+.itemDanger {
+  color: var(--accent-danger);
+}
+
+.itemDanger:hover {
+  background: rgba(239, 68, 68, 0.12);
+}

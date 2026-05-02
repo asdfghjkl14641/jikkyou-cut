@@ -22,8 +22,12 @@ const CATEGORY_COLORS: Record<ReactionCategory, string> = {
   other: 'var(--reaction-other)',
 };
 
-const ROW_HEIGHT = 60; // px — fixed for virtual scroll
-const BUFFER_ROWS = 6;
+// Compacted from 60 → 40 so 4000+ comment streams stay readable without
+// scrolling fatigue. Author column was dropped at the same time — the
+// time + message text alone gives enough context, and the extra width
+// makes the message itself wrap less often.
+const ROW_HEIGHT = 40;
+const BUFFER_ROWS = 8;
 // "Current" highlight band, in seconds either side of currentSec.
 const CURRENT_BAND_SEC = 5;
 // Tolerance for distinguishing programmatic scrollTop from user wheel.
@@ -217,10 +221,9 @@ export default function LiveCommentFeed({ messages, currentSec, onCommentClick }
                 }
                 style={{ height: ROW_HEIGHT }}
                 onClick={() => onCommentClick?.(m.timeSec)}
-                title={`${formatHMS(m.timeSec)} にシーク`}
+                title={`${formatHMS(m.timeSec)} @${m.author}: ${m.text}`}
               >
                 <span className={styles.rowTime}>{formatHMS(m.timeSec)}</span>
-                <span className={styles.rowAuthor}>@{m.author}</span>
                 <span className={styles.rowText}>{highlightKeywords(m.text)}</span>
               </div>
             );

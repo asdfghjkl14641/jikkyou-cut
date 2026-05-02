@@ -1,4 +1,4 @@
-import React, { useCallback, useMemo, useRef, useState, type MouseEvent } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState, type MouseEvent } from 'react';
 import { Trash2 } from 'lucide-react';
 import { useEditorStore } from '../store/editorStore';
 import { ScoreSample, CommentAnalysis, ClipSegment } from '../../../common/types';
@@ -9,22 +9,18 @@ import styles from './CommentAnalysisGraph.module.css';
 type Props = {
   analysis: CommentAnalysis;
   windowSec: number;
-  // Selected clip segments — drawn as overlay bars on the waveform and
-  // hit-tested for drag/resize.
   segments: ClipSegment[];
-  // Single source of truth for "go to this time". Called for click-to-
-  // seek, live-seek (drag with left button), and segment selection
-  // bookkeeping. The component itself doesn't touch <video>.
   onSeek?: (sec: number) => void;
-  // Right-drag → segment auto-add. Returns the store outcome so the
-  // graph can show a transient warning toast for limit/duplicate.
   onAddSegmentRequested?: (
     args: { startSec: number; endSec: number; dominantCategory: ReactionCategory | null },
   ) => { ok: true; id: string } | { ok: false; reason: 'limit' | 'duplicate' };
   onMutateSegment?: (id: string, patch: Partial<Omit<ClipSegment, 'id'>>) => void;
-  onRemoveSegment?: (id: string) => void;
   onSelectSegment?: (id: string) => void;
   selectedSegmentId?: string | null;
+  // Right-click on a segment bar opens a context menu owned by the
+  // parent. The graph just hands over the segment id and the click
+  // viewport coordinates.
+  onSegmentContextMenu?: (segmentId: string, viewportX: number, viewportY: number) => void;
 };
 
 const formatHMS = (totalSec: number): string => {
@@ -37,18 +33,6 @@ const formatHMS = (totalSec: number): string => {
     return `${h}:${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`;
   }
   return `${m}:${String(s).padStart(2, '0')}`;
-};
-
-const CATEGORY_NAMES: Record<ReactionCategory, string> = {
-  laugh: '笑い',
-  surprise: '驚き',
-  emotion: '感動',
-  praise: '称賛',
-  death: '死亡',
-  victory: '勝利',
-  scream: '叫び',
-  flag: 'フラグ',
-  other: 'その他',
 };
 
 const CATEGORY_COLORS: Record<ReactionCategory, string> = {
@@ -85,28 +69,31 @@ function groupByCategory(samples: ScoreSample[]): FillSegment[] {
   return out;
 }
 
-// Three discrete drag intents, all decided at mousedown time based on
-// `e.button`:
-//   * 'left-pending' → click-vs-live-seek (left button; promotes to
-//      'left-live' on movement, fires plain seek on mouseup-without-move)
-//   * 'segment-pending' → may promote to segment-move/resize/* once the
-//      user drags ≥ 5 px. Plain click on a segment bar still seeks (so
-//      the bars never block playhead jumps).
-//   * 'right-select' → right-button drag, builds a range that auto-adds
-//      a clip segment on release (≥ MIN_SEGMENT_SEC width).
+// State machine — left button fires seek immediately on mousedown so
+// there is no perceptible click-vs-drag latency. Right button stays
+// pending until 3 px of movement so a stray right-click doesn't insert
+// a tiny segment by accident.
 //
-// 'left-pending' demotes its hit-test only when the press lands on a
-// segment bar — that's how we keep "click on bar → seek" working.
+// Left mousedown on a segment bar still seeks immediately, then waits
+// in 'segment-pending' for movement before promoting to move/resize.
+// If the user releases without moving, the segment just gets selected
+// (and the seek already fired).
 type DragMode =
-  | { kind: 'left-pending'; downSec: number; downClientX: number; downClientY: number; pendingHit: { id: string; mode: 'left' | 'right' | 'middle' } | null }
-  | { kind: 'left-live'; }
+  | { kind: 'left-live' }
+  | { kind: 'segment-pending'; id: string; mode: 'left' | 'right' | 'middle'; downSec: number; downClientX: number; downClientY: number; originStartSec: number; originEndSec: number }
   | { kind: 'segment-move'; id: string; offsetSec: number; originStartSec: number; originEndSec: number; spanSec: number }
   | { kind: 'segment-resize-left'; id: string; originStartSec: number; originEndSec: number }
   | { kind: 'segment-resize-right'; id: string; originStartSec: number; originEndSec: number }
+  | { kind: 'right-pending'; downSec: number; downClientX: number; downClientY: number; segmentId: string | null }
   | { kind: 'right-select'; startSec: number; currentSec: number };
 
 const MIN_SEGMENT_SEC = 5;
-const DRAG_THRESHOLD_PX = 5;
+const DRAG_THRESHOLD_PX = 3;
+const HOVER_TOOLTIP_DELAY_MS = 150;
+// Tooltip offset from the cursor — keeps the tooltip from sitting
+// directly under the pointer where it would block the waveform.
+const TOOLTIP_OFFSET_X = 12;
+const TOOLTIP_OFFSET_Y = 12;
 
 export default function CommentAnalysisGraph({
   analysis,
@@ -115,18 +102,22 @@ export default function CommentAnalysisGraph({
   onSeek,
   onAddSegmentRequested,
   onMutateSegment,
-  onRemoveSegment,
   onSelectSegment,
   selectedSegmentId,
+  onSegmentContextMenu,
 }: Props) {
   const currentSec = useEditorStore((s) => s.currentSec);
   const containerRef = useRef<HTMLDivElement>(null);
-  const [hoverSample, setHoverSample] = useState<{ sample: ScoreSample; x: number } | null>(null);
+  const [hoverPos, setHoverPos] = useState<{ sample: ScoreSample; x: number; y: number } | null>(null);
   const [drag, setDrag] = useState<DragMode | null>(null);
-  // Transient warning shown over the waveform when right-drag-add fails
-  // (limit / duplicate). Self-clears after a couple of seconds.
   const [warning, setWarning] = useState<string | null>(null);
   const warningTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const hoverTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // RAF batching for live seek so a fast mousemove doesn't fire 200
+  // setState/seek calls per second — only the latest position survives
+  // until the next paint.
+  const seekRafRef = useRef<number | null>(null);
+  const pendingSeekTimeRef = useRef<number | null>(null);
 
   const showWarning = useCallback((msg: string) => {
     setWarning(msg);
@@ -156,6 +147,25 @@ export default function CommentAnalysisGraph({
     const ratio = Math.max(0, Math.min(1, x / rect.width));
     return ratio * durationSec;
   }, [durationSec]);
+
+  // Coalesces seek requests onto a single rAF tick so live-seek mousemove
+  // doesn't thrash the <video> currentTime setter.
+  const scheduleSeek = useCallback((time: number) => {
+    pendingSeekTimeRef.current = time;
+    if (seekRafRef.current != null) return;
+    seekRafRef.current = requestAnimationFrame(() => {
+      seekRafRef.current = null;
+      const t = pendingSeekTimeRef.current;
+      pendingSeekTimeRef.current = null;
+      if (t != null) onSeek?.(t);
+    });
+  }, [onSeek]);
+
+  useEffect(() => () => {
+    if (seekRafRef.current != null) cancelAnimationFrame(seekRafRef.current);
+    if (warningTimerRef.current) clearTimeout(warningTimerRef.current);
+    if (hoverTimerRef.current) clearTimeout(hoverTimerRef.current);
+  }, []);
 
   const sampleAt = useCallback((timeSec: number): ScoreSample | null => {
     if (samples.length === 0) return null;
@@ -242,9 +252,8 @@ export default function CommentAnalysisGraph({
   }, [segments, durationSec]);
 
   const handleContextMenu = (e: MouseEvent<HTMLDivElement>) => {
-    // Suppress the native menu so right-button drag can be repurposed
-    // for range selection. Without this, the user gets a stray context
-    // menu the moment they release the right button.
+    // Block the native menu unconditionally — we'll surface our own
+    // context menu for segment bars from the mouseup handler.
     e.preventDefault();
   };
 
@@ -255,24 +264,48 @@ export default function CommentAnalysisGraph({
     const time = getTimeAtX(x);
 
     if (e.button === 2) {
-      // Right button → range drag for segment selection.
+      // Right button → either segment context menu (if on a bar) or
+      // potentially a right-drag range. Both decisions happen on
+      // mousemove/mouseup; record the press position now.
       e.preventDefault();
-      setDrag({ kind: 'right-select', startSec: time, currentSec: time });
+      const hit = hitTestSegment(time);
+      setDrag({
+        kind: 'right-pending',
+        downSec: time,
+        downClientX: e.clientX,
+        downClientY: e.clientY,
+        segmentId: hit?.id ?? null,
+      });
       return;
     }
     if (e.button !== 0) return;
 
-    // Left button → start in pending. Promote to live-seek (drag) or
-    // segment-* drag (if hit) once the user moves; release without
-    // movement seeks via mouseup.
+    // Left button → seek IMMEDIATELY at mousedown for click-feel
+    // responsiveness (no movement-threshold gate).
+    scheduleSeek(time);
+
     const hit = hitTestSegment(time);
-    setDrag({
-      kind: 'left-pending',
-      downSec: time,
-      downClientX: e.clientX,
-      downClientY: e.clientY,
-      pendingHit: hit,
-    });
+    if (hit) {
+      onSelectSegment?.(hit.id);
+      const seg = segments.find((s) => s.id === hit.id);
+      if (!seg) return;
+      // Wait for movement before promoting to move/resize. If the user
+      // releases without moving, the seek above already happened.
+      setDrag({
+        kind: 'segment-pending',
+        id: hit.id,
+        mode: hit.mode,
+        downSec: time,
+        downClientX: e.clientX,
+        downClientY: e.clientY,
+        originStartSec: seg.startSec,
+        originEndSec: seg.endSec,
+      });
+    } else {
+      // Empty waveform → enter live-seek immediately. mousemove keeps
+      // updating the seek position until mouseup.
+      setDrag({ kind: 'left-live' });
+    }
   };
 
   const handleMouseMove = (e: MouseEvent<HTMLDivElement>) => {
@@ -281,50 +314,43 @@ export default function CommentAnalysisGraph({
     const x = e.clientX - rect.left;
     const time = getTimeAtX(x);
 
-    if (drag?.kind === 'left-pending') {
-      const dx = Math.abs(e.clientX - drag.downClientX);
-      const dy = Math.abs(e.clientY - drag.downClientY);
-      if (dx + dy < DRAG_THRESHOLD_PX) {
-        const sample = sampleAt(time);
-        if (sample) {
-          const sampleCentre = sample.timeSec + windowSec / 2;
-          setHoverSample({ sample, x: durationSec > 0 ? (sampleCentre / durationSec) * rect.width : 0 });
-        } else {
-          setHoverSample(null);
-        }
-        return;
-      }
-      // Promote.
-      const hit = drag.pendingHit;
-      if (hit) {
-        const seg = segments.find((s) => s.id === hit.id);
-        if (seg) {
-          onSelectSegment?.(seg.id);
-          if (hit.mode === 'left') {
-            setDrag({ kind: 'segment-resize-left', id: seg.id, originStartSec: seg.startSec, originEndSec: seg.endSec });
-          } else if (hit.mode === 'right') {
-            setDrag({ kind: 'segment-resize-right', id: seg.id, originStartSec: seg.startSec, originEndSec: seg.endSec });
-          } else {
-            setDrag({
-              kind: 'segment-move',
-              id: seg.id,
-              offsetSec: drag.downSec - seg.startSec,
-              originStartSec: seg.startSec,
-              originEndSec: seg.endSec,
-              spanSec: seg.endSec - seg.startSec,
-            });
-          }
-          return;
-        }
-      }
-      // No segment hit → promote to live-seek.
-      onSeek?.(time);
-      setDrag({ kind: 'left-live' });
+    if (drag?.kind === 'left-live') {
+      scheduleSeek(time);
+      setHoverPos(null);
       return;
     }
 
-    if (drag?.kind === 'left-live') {
-      onSeek?.(time);
+    if (drag?.kind === 'segment-pending') {
+      const dx = Math.abs(e.clientX - drag.downClientX);
+      const dy = Math.abs(e.clientY - drag.downClientY);
+      if (dx + dy < DRAG_THRESHOLD_PX) return;
+      // Promote to actual segment drag.
+      if (drag.mode === 'left') {
+        setDrag({ kind: 'segment-resize-left', id: drag.id, originStartSec: drag.originStartSec, originEndSec: drag.originEndSec });
+      } else if (drag.mode === 'right') {
+        setDrag({ kind: 'segment-resize-right', id: drag.id, originStartSec: drag.originStartSec, originEndSec: drag.originEndSec });
+      } else {
+        setDrag({
+          kind: 'segment-move',
+          id: drag.id,
+          offsetSec: drag.downSec - drag.originStartSec,
+          originStartSec: drag.originStartSec,
+          originEndSec: drag.originEndSec,
+          spanSec: drag.originEndSec - drag.originStartSec,
+        });
+      }
+      return;
+    }
+
+    if (drag?.kind === 'right-pending') {
+      const dx = Math.abs(e.clientX - drag.downClientX);
+      const dy = Math.abs(e.clientY - drag.downClientY);
+      if (dx + dy < DRAG_THRESHOLD_PX) return;
+      // Promote to range-select. Even if we started over a segment
+      // bar, we let the drag proceed — overlap detection in mouseup
+      // will reject it, so the user gets a toast rather than a silent
+      // no-op.
+      setDrag({ kind: 'right-select', startSec: drag.downSec, currentSec: time });
       return;
     }
 
@@ -360,18 +386,23 @@ export default function CommentAnalysisGraph({
       onMutateSegment?.(drag.id, { endSec: newEnd });
     }
 
-    // Hover updates while idle or right-selecting.
+    // Hover tooltip — only update while idle (not dragging anything
+    // active). Delay 150 ms before showing to avoid flicker as the
+    // cursor sweeps across the waveform.
     if (!drag || drag.kind === 'right-select') {
       const sample = sampleAt(time);
       if (sample) {
         const sampleCentre = sample.timeSec + windowSec / 2;
-        setHoverSample({ sample, x: durationSec > 0 ? (sampleCentre / durationSec) * rect.width : 0 });
-      } else {
-        setHoverSample(null);
+        const xOnContainer = durationSec > 0 ? (sampleCentre / durationSec) * rect.width : 0;
+        if (hoverTimerRef.current) clearTimeout(hoverTimerRef.current);
+        hoverTimerRef.current = setTimeout(() => {
+          setHoverPos({ sample, x: xOnContainer, y: e.clientY - rect.top });
+        }, HOVER_TOOLTIP_DELAY_MS);
+        return;
       }
-    } else {
-      setHoverSample(null);
     }
+    if (hoverTimerRef.current) clearTimeout(hoverTimerRef.current);
+    setHoverPos(null);
   };
 
   const handleMouseUp = (e: MouseEvent<HTMLDivElement>) => {
@@ -381,21 +412,27 @@ export default function CommentAnalysisGraph({
     const x = e.clientX - rect.left;
     const time = getTimeAtX(x);
 
-    if (drag.kind === 'left-pending') {
-      // Plain click → seek. Always — even when the click landed on an
-      // existing segment overlay bar.
-      onSeek?.(drag.downSec);
-      if (drag.pendingHit) onSelectSegment?.(drag.pendingHit.id);
+    if (drag.kind === 'left-live') {
+      // Final position snap. The rAF batch may still have an unfired
+      // update queued — flush it synchronously so the playhead lands
+      // exactly where the user released.
+      onSeek?.(time);
+    } else if (drag.kind === 'segment-pending') {
+      // Released without moving past threshold. Seek already happened
+      // at mousedown, segment was already selected — nothing else to
+      // do.
+    } else if (drag.kind === 'right-pending') {
+      // Right click without drag. If on a segment bar → context menu;
+      // otherwise no-op (per spec).
+      if (drag.segmentId) {
+        onSegmentContextMenu?.(drag.segmentId, e.clientX, e.clientY);
+      }
     } else if (drag.kind === 'right-select') {
       const start = Math.min(drag.startSec, time);
       const end = Math.max(drag.startSec, time);
       if (end - start < MIN_SEGMENT_SEC) {
-        // Too short — discard silently. Right-click without drag also
-        // ends here and is effectively a no-op (matches spec: "右クリ
-        // ック単発: 何もしない").
+        // Too short — discard silently.
       } else {
-        // Reject overlap with any existing segment so the new bar
-        // doesn't immediately collapse against its neighbour.
         const overlap = segments.some((s) => s.startSec < end && s.endSec > start);
         if (overlap) {
           showWarning('既存区間と重複しています');
@@ -417,16 +454,22 @@ export default function CommentAnalysisGraph({
   };
 
   const handleMouseLeave = () => {
-    if (drag?.kind === 'left-pending' || drag?.kind === 'right-select' || drag?.kind === 'left-live') {
+    if (drag?.kind === 'left-live' || drag?.kind === 'right-pending' || drag?.kind === 'right-select' || drag?.kind === 'segment-pending') {
       setDrag(null);
     }
-    setHoverSample(null);
+    if (hoverTimerRef.current) clearTimeout(hoverTimerRef.current);
+    setHoverPos(null);
   };
 
   const inflightRange = drag?.kind === 'right-select' ? {
     start: Math.min(drag.startSec, drag.currentSec),
     end: Math.max(drag.startSec, drag.currentSec),
   } : null;
+
+  // Tooltip is only visible while the user is hovering with no active
+  // drag. left-live and segment-* drags hide it so it doesn't flicker
+  // along with the playhead.
+  const showTooltip = hoverPos != null && (drag === null || drag.kind === 'right-select');
 
   return (
     <div className={styles.container}>
@@ -483,7 +526,6 @@ export default function CommentAnalysisGraph({
           <path d={strokePath} className={styles.waveformPath} />
         </svg>
 
-        {/* In-flight right-drag selection overlay */}
         {inflightRange && (
           <div
             className={styles.selectionOverlay}
@@ -497,7 +539,6 @@ export default function CommentAnalysisGraph({
           </div>
         )}
 
-        {/* Selected clip-segment overlay bars */}
         {segments.map((seg, i) => {
           const cat = seg.dominantCategory ?? 'other';
           return (
@@ -513,71 +554,43 @@ export default function CommentAnalysisGraph({
             >
               <div className={`${styles.segmentResizeHandle} ${styles.segmentResizeHandleLeft}`} />
               <span className={styles.segmentNumber}>{i + 1}</span>
-              {selectedSegmentId === seg.id && onRemoveSegment && (
-                <button
-                  type="button"
-                  onMouseDown={(e) => e.stopPropagation()}
-                  onClick={(e) => { e.stopPropagation(); onRemoveSegment(seg.id); }}
-                  style={{
-                    marginLeft: 'auto', background: 'rgba(0,0,0,0.6)', border: 'none',
-                    borderRadius: 4, color: 'white', cursor: 'pointer', padding: '2px 4px',
-                    display: 'inline-flex', alignItems: 'center',
-                  }}
-                  title="この区間を削除"
-                >
-                  <Trash2 size={11} />
-                </button>
-              )}
               <div className={`${styles.segmentResizeHandle} ${styles.segmentResizeHandleRight}`} />
             </div>
           );
         })}
 
-        {hoverSample && (drag === null || drag.kind === 'left-pending' || drag.kind === 'right-select') && (
-          <div className={styles.hoverLine} style={{ left: hoverSample.x }} />
+        {showTooltip && hoverPos && (
+          <div className={styles.hoverLine} style={{ left: hoverPos.x }} />
         )}
 
         <div className={styles.cursor} style={{ left: `${currentPercent}%` }} />
 
-        {hoverSample && (drag === null || drag.kind === 'left-pending') && (
-          <div
-            className={styles.tooltip}
-            style={{
-              left: hoverSample.x,
-              transform: `translateX(${hoverSample.x > (containerRef.current?.clientWidth || 0) - 180 ? '-100%' : '0'})`,
-            }}
-          >
-            <div className={styles.tooltipTime}>
-              {formatHMS(hoverSample.sample.timeSec)} 〜 {formatHMS(hoverSample.sample.timeSec + hoverSample.sample.windowSec)}
+        {showTooltip && hoverPos && (() => {
+          // Compact 1-line tooltip. Position it diagonally off the
+          // cursor so it doesn't sit on top of the waveform itself.
+          // Flip horizontally near the right edge.
+          const containerW = containerRef.current?.clientWidth ?? 0;
+          const cursorX = hoverPos.x + TOOLTIP_OFFSET_X;
+          const flipLeft = cursorX > containerW - 220;
+          return (
+            <div
+              className={styles.tooltipCompact}
+              style={{
+                left: flipLeft ? hoverPos.x - TOOLTIP_OFFSET_X : cursorX,
+                top: hoverPos.y + TOOLTIP_OFFSET_Y,
+                transform: flipLeft ? 'translateX(-100%)' : undefined,
+              }}
+            >
+              <span className={styles.tooltipTimeInline}>{formatHMS(hoverPos.sample.timeSec)}</span>
+              <span className={styles.tooltipDot}>·</span>
+              <span>スコア {(hoverPos.sample.total * 100).toFixed(0)}</span>
+              <span className={styles.tooltipDot}>·</span>
+              <span>{hoverPos.sample.messageCount}コメ</span>
             </div>
-            <div className={styles.tooltipTotal}>
-              <span>スコア</span>
-              <span>{(hoverSample.sample.total * 100).toFixed(0)}</span>
-            </div>
-            <div className={styles.tooltipDetail}>
-              <div className={styles.categoryGrid}>
-                {(Object.keys(hoverSample.sample.categoryHits) as ReactionCategory[]).map(cat => {
-                  const val = hoverSample.sample.categoryHits[cat];
-                  if (val <= 0) return null;
-                  return (
-                    <div key={cat} className={styles.categoryRow}>
-                      <span className={styles.categoryDot} style={{ background: CATEGORY_COLORS[cat] }} />
-                      <span className={styles.categoryLabel}>{CATEGORY_NAMES[cat]}</span>
-                      <span className={styles.categoryValue}>{val}</span>
-                    </div>
-                  );
-                })}
-              </div>
-              <div className={styles.msgStats}>
-                コメント: {hoverSample.sample.messageCount}件
-              </div>
-            </div>
-          </div>
-        )}
+          );
+        })()}
 
-        {warning && (
-          <div className={styles.warningToast}>{warning}</div>
-        )}
+        {warning && <div className={styles.warningToast}>{warning}</div>}
       </div>
     </div>
   );

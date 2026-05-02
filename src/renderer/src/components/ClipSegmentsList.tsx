@@ -1,4 +1,4 @@
-import { useState, type DragEvent } from 'react';
+import { useEffect, useState, type DragEvent } from 'react';
 import { Trash2, GripVertical, Edit2, Check, EyeOff, Eye } from 'lucide-react';
 import type { ClipSegment, Eyecatch, ReactionCategory } from '../../../common/types';
 import styles from './ClipSegmentsList.module.css';
@@ -52,6 +52,12 @@ type Props = {
   eyecatches: Eyecatch[];
   maxSegments: number;
   selectedSegmentId: string | null;
+  // External "please open the title editor for this segment" trigger.
+  // Set by the parent when the user picks "タイトル編集" from the
+  // waveform's right-click context menu. The list watches this value
+  // via useEffect; the parent should clear it after handling.
+  editTitleRequestId?: string | null;
+  onEditTitleRequestHandled?: () => void;
   onSelectSegment: (id: string) => void;
   onUpdateSegment: (id: string, patch: Partial<Omit<ClipSegment, 'id'>>) => void;
   onRemoveSegment: (id: string) => void;
@@ -65,6 +71,8 @@ export default function ClipSegmentsList({
   eyecatches,
   maxSegments,
   selectedSegmentId,
+  editTitleRequestId,
+  onEditTitleRequestHandled,
   onSelectSegment,
   onUpdateSegment,
   onRemoveSegment,
@@ -83,6 +91,24 @@ export default function ClipSegmentsList({
     setEditingTitleId(s.id);
     setTitleDraft(s.title ?? '');
   };
+
+  // External trigger from the waveform context menu. We also scroll the
+  // card into view so the user doesn't have to hunt for it.
+  useEffect(() => {
+    if (!editTitleRequestId) return;
+    const seg = segments.find((s) => s.id === editTitleRequestId);
+    if (seg) {
+      setEditingTitleId(seg.id);
+      setTitleDraft(seg.title ?? '');
+      // Defer scroll until the input is mounted.
+      requestAnimationFrame(() => {
+        const card = document.querySelector(`[data-segment-id="${seg.id}"]`);
+        card?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      });
+    }
+    onEditTitleRequestHandled?.();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [editTitleRequestId]);
   const commitTitle = () => {
     if (editingTitleId) {
       onUpdateSegment(editingTitleId, { title: titleDraft.trim() === '' ? null : titleDraft.trim() });
@@ -168,6 +194,7 @@ export default function ClipSegmentsList({
             return (
               <div key={seg.id}>
                 <div
+                  data-segment-id={seg.id}
                   className={`${styles.card} ${isSelected ? styles.cardSelected : ''} ${dragOverId === seg.id ? styles.dropTarget : ''}`}
                   draggable
                   onDragStart={handleDragStart(seg.id)}
