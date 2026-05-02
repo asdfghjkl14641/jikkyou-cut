@@ -36,7 +36,7 @@
   - PROBE_DURATION_TOLERANCE_SEC = 5 秒のしきい値(短すぎる動画では狭すぎるかも)
   - ffprobe 失敗時の挙動(現状: warn + skip validation で DL 成功扱い)
 - 影響: src/main/urlDownload.ts(`--abort-on-unavailable-fragment` + retries 30 + `probeDurations()` + post-DL validation)
-- コミット: (未定)
+- コミット: `e3a60ad`
 
 ## 2026-05-02 20:30 - 動画音声不再生バグの根本修正(yt-dlp 出力での音声強制 AAC 化 + audioTracks defensive enable)
 
