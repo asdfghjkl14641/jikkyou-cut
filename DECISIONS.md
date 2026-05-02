@@ -15,6 +15,14 @@
 
 ---
 
+## 2026-05-02 19:30 - LiveCommentFeed の行密度を再調整(40 → 32 px)
+
+- 誰が: Claude Code
+- 何を: `ROW_HEIGHT` 40 → 32、`BUFFER_ROWS` 8 → 10、`.row` の padding 6/12 → 3/10、font-size 13 → 12、line-height 1.4 → 1.3、gap 10 → 8、時刻列 48 → 44 px(font-size 11 px 維持、`width: 44px` 追加で `H:MM:SS` 文字列でも崩れないように pin)
+- 理由: Part A で 60 → 40 に下げたが、配信動画(数千件のチャット)を実機で見るとまだ 9 行程度しか入らずスカスカ感。1 画面 ~15 行(約 1.5-2 倍密度)に再調整
+- 影響: src/renderer/src/components/LiveCommentFeed.{tsx,module.css}
+- コミット: (未定)
+
 ## 2026-05-02 19:00 - AI タイトル要約(Anthropic Claude Haiku 統合)Phase 2
 
 - 誰が: Claude Code

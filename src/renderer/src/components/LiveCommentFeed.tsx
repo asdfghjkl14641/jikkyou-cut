@@ -22,12 +22,13 @@ const CATEGORY_COLORS: Record<ReactionCategory, string> = {
   other: 'var(--reaction-other)',
 };
 
-// Compacted from 60 → 40 so 4000+ comment streams stay readable without
-// scrolling fatigue. Author column was dropped at the same time — the
-// time + message text alone gives enough context, and the extra width
-// makes the message itself wrap less often.
-const ROW_HEIGHT = 40;
-const BUFFER_ROWS = 8;
+// Compacted progressively: 60 → 40 → 32 px. Even at 40 the feed
+// looked sparse on a typical 1080p clip-select layout (~9 rows
+// visible). 32 px lands ~15 rows in the same viewport while still
+// leaving the time column readable at 11 px. CSS padding / line-height
+// follow suit; the constants here only control virtual-scroll math.
+const ROW_HEIGHT = 32;
+const BUFFER_ROWS = 10;
 // "Current" highlight band, in seconds either side of currentSec.
 const CURRENT_BAND_SEC = 5;
 // Tolerance for distinguishing programmatic scrollTop from user wheel.

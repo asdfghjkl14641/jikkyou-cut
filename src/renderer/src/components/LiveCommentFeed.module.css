@@ -75,13 +75,15 @@
 .row {
   display: grid;
   /* time | text — author column dropped to give the message body more
-     breathing room at ROW_HEIGHT 40px. */
-  grid-template-columns: 48px 1fr;
+     breathing room. ROW_HEIGHT (in .tsx) is 32 px; padding + font
+     here have to hit that exactly or the virtual-scroll math falls
+     out of alignment with the rendered rows. */
+  grid-template-columns: 44px 1fr;
   align-items: center;
-  gap: 10px;
-  padding: 6px 12px;
-  font-size: 13px;
-  line-height: 1.4;
+  gap: 8px;
+  padding: 3px 10px;
+  font-size: 12px;
+  line-height: 1.3;
   cursor: pointer;
   border-left: 3px solid transparent;
   transition: background var(--transition-fast);
@@ -110,6 +112,9 @@
   color: var(--text-muted);
   font-size: 11px;
   text-align: right;
+  /* Matches grid-template-columns above; pinned so a 1-hour-plus video
+     with `H:MM:SS` time strings doesn't blow the column out. */
+  width: 44px;
 }
 
 .rowText {
