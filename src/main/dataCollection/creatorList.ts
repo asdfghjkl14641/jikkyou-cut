@@ -9,12 +9,18 @@ import path from 'node:path';
 // Schema:
 //   { creators: [{ name: string, channelId: string | null, group: string | null }] }
 //
-// `group` was added 2026-05-03 alongside the seed-40 list. It tags
-// each creator as 'nijisanji' / 'hololive' / 'streamer' so Phase 2
-// analytics can compare across groups. User-added creators (via
-// Settings) get `null` and are still fully functional.
+// `group` was added 2026-05-03 alongside the seed list. It tags
+// each creator as 'nijisanji' / 'hololive' / 'vspo' / 'neoporte' /
+// 'streamer' so Phase 2 analytics can compare across groups. User-
+// added creators (via Settings) get `null` and are still fully
+// functional. The list expanded 40 → 75 same day with vspo + neoporte.
 
-export type CreatorGroup = 'nijisanji' | 'hololive' | 'streamer';
+export type CreatorGroup =
+  | 'nijisanji'
+  | 'hololive'
+  | 'vspo'
+  | 'neoporte'
+  | 'streamer';
 
 export type CreatorEntry = {
   name: string;
@@ -26,7 +32,11 @@ const filePath = (): string =>
   path.join(app.getPath('userData'), 'data-collection', 'creators.json');
 
 const isCreatorGroup = (s: unknown): s is CreatorGroup =>
-  s === 'nijisanji' || s === 'hololive' || s === 'streamer';
+  s === 'nijisanji' ||
+  s === 'hololive' ||
+  s === 'vspo' ||
+  s === 'neoporte' ||
+  s === 'streamer';
 
 export async function loadCreatorList(): Promise<CreatorEntry[]> {
   try {

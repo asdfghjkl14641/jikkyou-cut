@@ -192,6 +192,16 @@ export function listCreators(): CreatorRow[] {
     .all() as CreatorRow[];
 }
 
+// Backfill the `creator_group` column only when it's currently NULL.
+// Used by the seed-or-update step so a previously seeded creator
+// (with group already set) is never overwritten by a stale value, but
+// rows that existed before the column was introduced still get tagged.
+export function setCreatorGroupIfNull(name: string, group: string): void {
+  openDb()
+    .prepare('UPDATE creators SET creator_group = ? WHERE name = ? AND creator_group IS NULL')
+    .run(group, name);
+}
+
 // ---- Video upsert (atomic across video + peaks + chapters) ----------------
 
 export function upsertVideoFull(args: {

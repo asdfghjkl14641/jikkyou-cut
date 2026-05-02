@@ -18,7 +18,7 @@ import * as urlDownload from './urlDownload';
 import * as commentAnalysis from './commentAnalysis';
 import * as aiSummary from './aiSummary';
 import { dataCollectionManager } from './dataCollection';
-import { seedCreatorsIfEmpty } from './dataCollection/seedCreators';
+import { seedOrUpdateCreators } from './dataCollection/seedCreators';
 import * as creatorList from './dataCollection/creatorList';
 import type { AppConfig } from '../common/config';
 import type {
@@ -306,11 +306,13 @@ app.whenReady().then(async () => {
   registerIpcHandlers();
   createWindow();
 
-  // Seed creators.json (idempotent — only fires when the file is
-  // empty). This must run before the manager touches the list so the
-  // first batch already has the curated 40-creator targeting set.
+  // Seed-or-update creators.json (idempotent diff-merge — adds names
+  // that aren't yet present and backfills missing group tags, but
+  // never removes a hand-edited entry or overwrites a resolved
+  // channelId). This must run before the manager touches the list so
+  // the first batch already sees the full curated targeting set.
   try {
-    await seedCreatorsIfEmpty();
+    await seedOrUpdateCreators();
   } catch (err) {
     console.warn('[data-collection] seed step failed:', err);
   }

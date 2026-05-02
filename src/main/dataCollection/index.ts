@@ -23,7 +23,14 @@ import { logError, logInfo, logWarn } from './logger';
 
 type ManagerState = 'idle' | 'running' | 'paused';
 
-const COLLECTION_INTERVAL_MS = 60 * 60 * 1000;       // 1 hour between cycles
+// Cycle interval — bumped 1h → 2h on 2026-05-03 alongside the seed
+// expansion to 75 creators. With per-creator multi-angle queries
+// (75 × 3 = 225 search.list = 22.5K units / cycle plus broad +
+// channelId resolve), a 1-hour cadence would burn through the
+// 50-key 500K daily budget after ~12 cycles. 2 hours = 12 cycles/day
+// for ~285K, leaving comfortable headroom for one-off resolution
+// passes and 403/quota-exceeded retries.
+const COLLECTION_INTERVAL_MS = 2 * 60 * 60 * 1000;   // 2 hours between cycles
 const STARTUP_DELAY_MS = 5_000;                       // delay after start()
 const MAX_VIDEOS_PER_BATCH = 200;                     // cap a single cycle
 const NETWORK_RETRY_COOLDOWN_MS = 5 * 60 * 1000;      // 5 min between hard fails
@@ -138,7 +145,9 @@ class DataCollectionManager {
     const creators = await loadCreatorList();
     for (const c of creators) {
       if (this.cancelRequested) return;
-      for (const q of buildPerCreatorQueries(c.name)) {
+      let creatorTotalHits = 0;
+      const queries = buildPerCreatorQueries(c.name);
+      for (const q of queries) {
         if (this.cancelRequested) return;
         const items = await searchVideos(q, {
           maxResults: SEARCH_DEFAULTS.maxResultsPerQuery,
@@ -147,12 +156,26 @@ class DataCollectionManager {
           relevanceLanguage: SEARCH_DEFAULTS.relevanceLanguage,
         });
         logInfo(`search per-creator "${q}" → ${items.length} items`);
+        creatorTotalHits += items.length;
         for (const it of items) {
           if (!candidateIds.has(it.videoId)) {
             candidateIds.add(it.videoId);
             candidateMeta.set(it.videoId, { creatorName: c.name });
           }
         }
+      }
+      // Across all angles for this creator, no hits at all is a
+      // strong signal of a typo / outdated handle. Loud-warn so the
+      // user can spot it in the API management → 収集ログ tab and
+      // fix creators.json. We don't auto-correct — the right
+      // replacement is a human judgement call (especially for fluid
+      // groups like neoporte).
+      if (creatorTotalHits === 0) {
+        logWarn(
+          `creator "${c.name}" は全 ${queries.length} クエリで 0 件 — ` +
+            `表記揺れ / 脱退 / 改名の可能性。creators.json を見直してください` +
+            (c.group ? ` (group=${c.group})` : ''),
+        );
       }
     }
 
