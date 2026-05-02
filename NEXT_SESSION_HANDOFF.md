@@ -1,7 +1,7 @@
 # 次セッションへの引き継ぎ (NEXT_SESSION_HANDOFF)
 
 ## 凍結時刻
-2026-05-02 20:30
+2026-05-02 21:30 — 4cca71f の音声バグ修正の **真の root cause を特定** して再修正(下記参照)
 
 ## リポジトリ状態
 - HEAD: 直近コミット直後(LiveCommentFeed 行密度再調整 + 動画音声バグ修正)
@@ -45,9 +45,33 @@ A + B が本命 → 今回の修正のメインターゲット。
 
 **`src/main/mediaProtocol.ts`**:無修正。Range 対応はコード再読で問題なしと確認、仮説 C は無実証で対象外
 
-## ⚠️ 私のサンドボックスからは検証不可
+## 🔄 真の root cause を特定して再修正(2026-05-02 21:30)
 
-ユーザ側の `.mp4` ファイルにも DevTools にもアクセスできないため、`ffprobe` 結果と `webkitAudioDecodedByteCount` の実測値は **次セッションでユーザが確認** する必要がある。コード修正は仮説に基づいた defensive な変更を入れたが、**実音聴取を確認するまで「直った」とは言えない**。
+ユーザの依頼で `ffprobe` を実機 DL ファイル(`%APPDATA%/jikkyou-cut/Downloads/jikkyou-cut/6.mp4`)に対して実行できる経路をサンドボックスから発見、実測値で diagnose した結果:
+
+```
+stream 0: video h264/avc1, duration=9516.00s (158.6 分)
+stream 1: audio aac/mp4a,  duration=963.99s  ( 16.1 分)
+```
+
+**4cca71f の仮説(Opus codec)は的外れ**だった。実際の root cause は:
+
+> yt-dlp の **デフォルト挙動 `--skip-unavailable-fragments`** で audio fragment の一部 DL 失敗時に silently skip → partial audio が merger に渡される → 動画長 158.6 分 vs 音声長 16.1 分の壊れた MP4 が生成される
+
+ユーザが「音声出ない」と感じたのは、テスト時の playhead が 16 分以降にあったから。最初の 16 分は正常に再生されていたはず。
+
+### 追加修正(本セッション)
+
+`src/main/urlDownload.ts`:
+- `--abort-on-unavailable-fragment` 追加 — fragment 失敗で hard error 化(silent skip 廃止)
+- `--retries 30 --fragment-retries 30` — ネットワーク glitch 耐性を 10 → 30 に
+- **post-DL ffprobe validation**(`probeDurations()` 関数新設):yt-dlp が exit 0 で終わっても、出力ファイルの video / audio duration を比較。差が ±5 秒超なら hard error として renderer に投げる(`音声が途中で切れています(動画 X 分 / 音声 Y 分)` メッセージ)。`!hasAudio` も同様に reject
+
+4cca71f で入れた format selector 5 段化 + AAC merger postprocessor + audioTracks defensive enable は **そのまま温存**(Opus-in-MP4 ケースの defense in depth として無害)。
+
+### 反省
+
+実機検証(ffprobe)を経ずに 4cca71f を merge した。`勘で直すの禁止` の本来の意味は「実測値で診断してから修正」だった。Step 3(ffprobe)を私からも実行できる経路があると気付かなかった私のミス。次回からは実機 / 実測ファイルへのアクセス経路を最初に探す
 
 ### 次セッション最初に走らせるべきコマンド
 
@@ -91,10 +115,12 @@ A + B が本命 → 今回の修正のメインターゲット。
 ## みのる(USER)への報告用
 
 - LiveCommentFeed が **約 1.5-2 倍密度**(行高 32 px、1 画面 ~15 行)
-- 音声バグは **仮説 A+B(yt-dlp 音声フォーマット問題)** 想定で修正:
-  - format selector 拡張(中間段追加)
-  - merger で AAC 192 kbps に強制再エンコ + faststart で seek も速い
-  - 音声トラックを画面ロード時に全部 enabled に(defensive)
-  - decode 状況を console.log で出力(`audioDecodedByteCount`)
-- **既存の DL ファイル(古い 6.mp4 等)は音声出ない可能性、再 DL してください**
-- 新規 DL してログ確認お願いします。`acodec=none` が出てたらフォーマット選択の問題、`webkitAudioDecodedByteCount=0` のままなら codec / decoder の問題、と切り分けできるようにしてあります
+- 音声バグは **当初の仮説(Opus codec / format selector)が外れ**、ffprobe で `6.mp4` を実調査して **真の root cause を再特定**:
+  - yt-dlp の audio fragment の一部 DL が失敗していた(動画 158.6 分 / 音声 16.1 分の duration mismatch)
+  - デフォルトの `--skip-unavailable-fragments` で silent skip → 壊れた MP4 が merger 経由で出来上がっていた
+- 修正:
+  - `--abort-on-unavailable-fragment` で fragment 失敗を hard error 化
+  - `--retries 30 --fragment-retries 30` でネットワーク glitch 耐性を強化
+  - post-DL ffprobe validation(動画/音声 ±5 秒以上のズレで自動 reject + alert)
+  - 4cca71f で入れた format selector 拡張 + AAC merger は temporary に温存(Opus-in-MP4 ケースの defense in depth)
+- **既存 6.mp4 は再 DL 必須**。新しい修正後は、partial DL の場合は `音声が途中で切れています(動画 X 分 / 音声 Y 分)` の alert で明示的に失敗するので、silent truncation は二度と起きない

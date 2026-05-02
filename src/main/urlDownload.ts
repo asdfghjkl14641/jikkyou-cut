@@ -4,6 +4,90 @@ import { promises as fs } from 'node:fs';
 import { spawn, ChildProcess } from 'child_process';
 import type { UrlDownloadProgress } from '../common/types';
 
+// Post-DL sanity check: run ffprobe and verify video.duration ≈
+// audio.duration. This is the second-line defence against the
+// "truncated audio fragment" bug — even with --abort-on-unavailable-
+// fragment in the yt-dlp args, a network glitch could still produce a
+// duration-mismatched mp4 in edge cases (HLS manifest weirdness, server
+// returning short fragments etc.). If we detect mismatch we surface it
+// as a hard error so the user re-downloads instead of getting a file
+// that plays video-only past some midway point.
+const PROBE_DURATION_TOLERANCE_SEC = 5;
+
+type ProbeStream = {
+  index: number;
+  codec_type: 'video' | 'audio' | string;
+  codec_name?: string;
+  duration?: string;
+};
+
+type ProbeOutput = {
+  streams?: ProbeStream[];
+};
+
+async function probeDurations(filePath: string): Promise<{
+  videoDuration: number | null;
+  audioDuration: number | null;
+  audioCodec: string | null;
+  hasAudio: boolean;
+}> {
+  return new Promise((resolve) => {
+    const ffprobeArgs = [
+      '-v', 'error',
+      '-show_streams',
+      '-show_entries', 'stream=index,codec_type,codec_name,duration',
+      '-of', 'json',
+      filePath,
+    ];
+    // ffprobe is on PATH per the project's "system-installed FFmpeg 8.1"
+    // requirement. We don't bundle our own copy — same as how export.ts
+    // and audioExtraction.ts call ffmpeg.
+    const proc = spawn('ffprobe', ffprobeArgs, { windowsHide: true });
+    let stdout = '';
+    let stderr = '';
+    proc.stdout.on('data', (b) => { stdout += b.toString(); });
+    proc.stderr.on('data', (b) => { stderr += b.toString(); });
+    proc.on('exit', (code) => {
+      if (code !== 0) {
+        // Don't fail the DL just because ffprobe choked — the user's
+        // file might still be usable. Log the error and skip
+        // validation rather than rejecting a healthy DL.
+        console.warn('[url-download] ffprobe failed (skipping validation):', stderr.slice(0, 200));
+        resolve({ videoDuration: null, audioDuration: null, audioCodec: null, hasAudio: false });
+        return;
+      }
+      try {
+        const json = JSON.parse(stdout) as ProbeOutput;
+        let videoDuration: number | null = null;
+        let audioDuration: number | null = null;
+        let audioCodec: string | null = null;
+        for (const s of json.streams ?? []) {
+          const dur = s.duration ? parseFloat(s.duration) : NaN;
+          if (s.codec_type === 'video' && Number.isFinite(dur) && videoDuration == null) {
+            videoDuration = dur;
+          } else if (s.codec_type === 'audio' && Number.isFinite(dur) && audioDuration == null) {
+            audioDuration = dur;
+            audioCodec = s.codec_name ?? null;
+          }
+        }
+        resolve({
+          videoDuration,
+          audioDuration,
+          audioCodec,
+          hasAudio: audioDuration != null,
+        });
+      } catch (err) {
+        console.warn('[url-download] ffprobe JSON parse failed:', err);
+        resolve({ videoDuration: null, audioDuration: null, audioCodec: null, hasAudio: false });
+      }
+    });
+    proc.on('error', (err) => {
+      console.warn('[url-download] ffprobe spawn failed:', err);
+      resolve({ videoDuration: null, audioDuration: null, audioCodec: null, hasAudio: false });
+    });
+  });
+}
+
 let currentProcess: ChildProcess | null = null;
 
 function getYtDlpPath(): string {
@@ -116,6 +200,21 @@ export async function downloadVideo(args: {
     '--no-playlist',
     '--no-warnings',
     '--restrict-filenames',
+    // Resilience for fragment-based downloads (DASH / HLS, which is
+    // every YouTube DL with separate streams). yt-dlp's defaults are:
+    //   * --retries 10        — entire-DL retries
+    //   * --fragment-retries 10 — per-fragment retries
+    //   * --skip-unavailable-fragments (DEFAULT) → skip a fragment that
+    //     keeps failing and continue with the rest. ★ This is the load-
+    //     bearing default that produced the 16-min-audio-vs-2.5-hour-
+    //     video file the user reported. The merger then ran on the
+    //     truncated audio and produced a silent-tail mp4.
+    // Bumping retries higher and forcing abort-on-unavailable means a
+    // partial fragment failure now surfaces as a hard error to the
+    // renderer (alert dialog) instead of a silent truncation.
+    '--retries', '30',
+    '--fragment-retries', '30',
+    '--abort-on-unavailable-fragment',
     '--print', 'after_move:filepath',
     '--print', 'title',
   ]);
@@ -185,16 +284,61 @@ export async function downloadVideo(args: {
   });
 
   return new Promise((resolve, reject) => {
-    ytDlpProcess.on('exit', (code: number | null) => {
+    ytDlpProcess.on('exit', async (code: number | null) => {
       currentProcess = null;
       console.log('[url-download] yt-dlp exit code:', code, 'path:', outputFilePath);
-      if (code === 0 && outputFilePath) {
-        resolve({ filePath: outputFilePath, title: videoTitle || path.basename(outputFilePath) });
-      } else if (code === 0 && !outputFilePath) {
-        reject(new Error('Download finished but output file path was not captured.'));
-      } else {
+      if (code !== 0) {
         reject(new Error(`yt-dlp exited with code ${code}`));
+        return;
       }
+      if (!outputFilePath) {
+        reject(new Error('Download finished but output file path was not captured.'));
+        return;
+      }
+
+      // Post-DL validation: ffprobe the output and confirm video / audio
+      // durations line up. The user's earlier "音声出ない" report was
+      // actually this exact failure mode — yt-dlp finished with exit 0
+      // but produced a file with 16-min audio and 2h-38m video, because
+      // a fragment had silently been skipped. With the new
+      // --abort-on-unavailable-fragment arg this should be unreachable,
+      // but we keep the check as a belt-and-braces second line.
+      try {
+        const probe = await probeDurations(outputFilePath);
+        console.log(
+          '[url-download] post-DL probe:',
+          `video=${probe.videoDuration?.toFixed(1) ?? 'none'}s`,
+          `audio=${probe.audioDuration?.toFixed(1) ?? 'none'}s`,
+          `acodec=${probe.audioCodec ?? 'none'}`,
+        );
+        if (!probe.hasAudio) {
+          reject(new Error(
+            'ダウンロード完了しましたが、音声トラックがありません。' +
+            '同じURLでもう一度試してください。',
+          ));
+          return;
+        }
+        if (
+          probe.videoDuration != null &&
+          probe.audioDuration != null &&
+          Math.abs(probe.videoDuration - probe.audioDuration) > PROBE_DURATION_TOLERANCE_SEC
+        ) {
+          const vMin = (probe.videoDuration / 60).toFixed(1);
+          const aMin = (probe.audioDuration / 60).toFixed(1);
+          reject(new Error(
+            `ダウンロード完了しましたが、音声が途中で切れています(動画 ${vMin} 分 / 音声 ${aMin} 分)。` +
+            'ネットワーク不具合で一部フラグメントを取得できなかった可能性があります。' +
+            '同じURLでもう一度試してください。',
+          ));
+          return;
+        }
+      } catch (err) {
+        console.warn('[url-download] post-DL validation error (continuing):', err);
+        // ffprobe failure shouldn't block a successful DL — log and
+        // proceed so the user isn't stuck on probe issues.
+      }
+
+      resolve({ filePath: outputFilePath, title: videoTitle || path.basename(outputFilePath) });
     });
 
     ytDlpProcess.on('error', (err: Error) => {

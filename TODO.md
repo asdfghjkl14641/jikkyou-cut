@@ -100,7 +100,8 @@
 
 ### 2026-05-02
 
-- 動画音声不再生バグの根本修正 — yt-dlp の format selector を 3 → 5 段に拡張、merger postprocessor で `-c:v copy -c:a aac -b:a 192k -movflags +faststart` を強制(Opus-in-MP4 を AAC に再エンコ、`<video>` の audio drop を解消)。VideoPlayer に audioTracks defensive enable + 診断ログ(`webkitAudioDecodedByteCount` を canplay/loadedmetadata で dump)。`b8eb4b6` の muted/volume 対策と合わせて root-cause 修正完了。**既存 DL ファイルは再 DL 必須**
+- 動画音声不再生バグの **真の** 根本原因特定・修正 — `6.mp4` を `ffprobe` で実調査した結果、4cca71f の仮説(Opus codec)は誤りで、**真因は yt-dlp の `--skip-unavailable-fragments` デフォルト挙動** で audio fragment 部分 DL 失敗時に partial audio を merger に渡して silent truncation していた(動画 158.6 分 vs 音声 16.1 分)。`--abort-on-unavailable-fragment` + `--retries 30 --fragment-retries 30` + post-DL ffprobe validation(±5 秒の duration mismatch を hard error 化)を追加。4cca71f の format selector + AAC postprocessor + audioTracks enable は defense in depth で温存
+- 動画音声不再生バグの **当初** 根本修正(format selector + AAC postprocessor) — 後の調査で目当ての仮説が外れていたと判明、ただし副次的な防御策として温存(Opus-in-MP4 等の codec ケース対応)
 - LiveCommentFeed 行密度再調整(40 → 32 px) — ROW_HEIGHT 32、padding 3/10、font 12px、line-height 1.3、時刻列 44px。Part A 後の実機確認でまだスカスカ感
 - AI タイトル要約(Anthropic Claude Haiku 4.5 統合) — `secureStorage` を Gladia/Anthropic 2 スロット化、`aiSummary.ts` を新設(3 並列 + 429/5xx リトライ + per-request 30 秒タイムアウト + AbortController キャンセル)、`userData/comment-analysis/<key>-summaries.json` キャッシュ(2 桁丸めキーで sub-frame ドリフト吸収)、Settings UI を Gladia/Anthropic 2 セクション化、ClipSegmentsList に「AI でタイトル生成」ボタン + 進捗表示。1-token validation ping で キー検証。プロンプトは「15 文字以内のキャッチータイトル、ネタバレ歓迎」。区間→bucket-message slicing は ClipSelectView 側
 - 操作感改善(左クリック即時シーク + ホバー圧縮 + コメント行コンパクト化 + 区間バー右クリックメニュー)— mousedown 時点で即発火 + RAF coalesce、ツールチップを 4 行 → 1 行(`時刻 · スコア · 件数`)、ROW_HEIGHT 60→40 + author 列削除、`SegmentContextMenu` 新規(削除 / タイトル編集 → 編集はリストの inline 編集を発火 + scrollIntoView)

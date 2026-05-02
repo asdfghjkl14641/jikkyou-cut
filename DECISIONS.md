@@ -15,6 +15,29 @@
 
 ---
 
+## 2026-05-02 21:30 - 動画音声不再生バグの **真の** 根本原因を特定・修正(audio fragment 不完全 DL → silent 切断)
+
+- 誰が: Claude Code
+- 何を: 既存の `6.mp4` を `ffprobe` で実調査した結果、4cca71f で立てた仮説 A/B(format selector / Opus codec)は **的外れ** だったことが判明。**真の root cause は yt-dlp のデフォルト挙動 `--skip-unavailable-fragments`** で、audio fragment の一部 DL 失敗時に **silently skip して merger に partial audio を渡し**、結果として動画 158.6 分 vs 音声 16.1 分の duration mismatch ファイルが生成されていた
+- ffprobe 実測値(`6.mp4`):
+  ```
+  stream 0: video h264/avc1, duration=9516.00s (158.6 分)
+  stream 1: audio aac/mp4a,  duration=963.99s  ( 16.1 分)
+  ```
+  ユーザが「音声出ない」と感じたのは、テスト時の playhead が 16 分以降にあった(or 終盤付近)せい。最初の 16 分は正常に再生されるはずだが、長尺動画の後ろで silence になっていた
+- 修正:
+  - **`--abort-on-unavailable-fragment`**: fragment の一つでも DL 失敗したら **silently skip ではなく hard error** として exit。partial audio が merger に渡らないように
+  - **`--retries 30 --fragment-retries 30`**: ネットワーク glitch に対して粘る。デフォルト 10 → 30 に
+  - **post-DL ffprobe validation**: yt-dlp が exit 0 で終わっても、出力ファイルを `ffprobe -of json` で読んで video / audio duration を比較。差が ±5 秒を超えたら hard error として renderer に投げる(belt-and-braces second line of defence)。`!hasAudio` も同様に reject
+  - 4cca71f で入れた format selector 5 段化 + AAC merger postprocessor + audioTracks defensive enable は **そのまま温存**(Opus-in-MP4 ケースの defense in depth として無害)
+- 判明した経緯: ユーザが Step 3(`ffprobe`)を私に実行依頼 → サンドボックスから `$APPDATA/jikkyou-cut/Downloads/jikkyou-cut/6.mp4` に到達 → ffprobe で duration mismatch を実測値で発見。4cca71f は **Opus codec という存在しない問題** を直そうとしていた。実機検証(or それに準ずる実測)を経ずに修正をマージしたのが反省点
+- **既存 DL ファイルへの注意**: 引き続き再 DL 必須。本修正後の DL であれば、partial DL の場合は alert dialog で報告される(silently truncate しなくなる)
+- 開放されている設計判断:
+  - PROBE_DURATION_TOLERANCE_SEC = 5 秒のしきい値(短すぎる動画では狭すぎるかも)
+  - ffprobe 失敗時の挙動(現状: warn + skip validation で DL 成功扱い)
+- 影響: src/main/urlDownload.ts(`--abort-on-unavailable-fragment` + retries 30 + `probeDurations()` + post-DL validation)
+- コミット: (未定)
+
 ## 2026-05-02 20:30 - 動画音声不再生バグの根本修正(yt-dlp 出力での音声強制 AAC 化 + audioTracks defensive enable)
 
 - 誰が: Claude Code
