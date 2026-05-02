@@ -77,8 +77,15 @@ class DataCollectionManager {
     return this.state === 'running';
   }
 
-  getStatsSnapshot(): CollectionStats & { isRunning: boolean } {
-    return { ...getStats(), isRunning: this.state === 'running' };
+  getStatsSnapshot(): CollectionStats & { isRunning: boolean; isPaused: boolean } {
+    // 3-way state for the UI (running / paused / idle). isRunning and
+    // isPaused are mutually exclusive — both false ⇒ idle (no API
+    // keys configured, or never started).
+    return {
+      ...getStats(),
+      isRunning: this.state === 'running',
+      isPaused: this.state === 'paused',
+    };
   }
 
   // ---- Internals ----------------------------------------------------------

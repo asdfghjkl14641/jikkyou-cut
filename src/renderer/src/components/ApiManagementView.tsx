@@ -15,7 +15,12 @@ import styles from './ApiManagementView.module.css';
 // Reachable from menu "API 管理" / Ctrl+Shift+A. The store's
 // openApiManagement() / closeApiManagement() handle the phase swap.
 
-const MAX_YT_KEYS = 10;
+// Bumped 10 → 50 (2026-05-03). Heavy users can hold 30+ keys for
+// quota rotation; the previous 10-row UI cap was the actual cause of
+// the "30 keys saved → only some persist" report — the editor never
+// let the user input beyond row 10. Defensive cap on the storage side
+// is `YT_KEYS_JSON_MAX_BYTES` (100 KB ≈ 1500 keys) in secureStorage.
+const MAX_YT_KEYS = 50;
 const YT_DAILY_QUOTA_PER_KEY = 10_000;
 
 type Tab = 'keys' | 'log';
@@ -331,13 +336,20 @@ function YoutubeKeysSection() {
       setError('少なくとも 1 つのキーを入力してください');
       return;
     }
+    // Diagnostic log so we can correlate with [secureStorage] entries
+    // when investigating "key count drops on reload" reports. We only
+    // log counts, not the keys themselves.
+    console.log(`[ApiManagement] saving ${cleaned.length} YouTube keys (draft rows: ${draft.length})`);
     setBusy(true);
     try {
       await window.api.youtubeApiKeys.setKeys(cleaned);
+      const reloadCount = await window.api.youtubeApiKeys.getKeyCount();
+      console.log(`[ApiManagement] save complete; getKeyCount=${reloadCount}`);
       setDraft(['']);
       setEditing(false);
-      setKeyCount(await window.api.youtubeApiKeys.getKeyCount());
+      setKeyCount(reloadCount);
     } catch (err) {
+      console.warn('[ApiManagement] save failed:', err);
       setError(err instanceof Error ? err.message : String(err));
     } finally {
       setBusy(false);
@@ -419,35 +431,37 @@ function YoutubeKeysSection() {
 
       {editing && (
         <div className={styles.multiKeyEditor}>
-          {draft.map((key, i) => (
-            <div key={i} className={styles.multiKeyRow}>
-              <input
-                type="password"
-                className={styles.input}
-                value={key}
-                onChange={(e) =>
-                  setDraft((prev) => {
-                    const next = [...prev];
-                    next[i] = e.target.value;
-                    return next;
-                  })
-                }
-                placeholder={`キー ${i + 1}`}
-                spellCheck={false}
-                autoComplete="off"
-                disabled={busy}
-              />
-              <button
-                type="button"
-                className={styles.smallButton}
-                onClick={() => setDraft((prev) => prev.filter((_, idx) => idx !== i))}
-                disabled={busy || draft.length === 1}
-                title="この行を削除"
-              >
-                <X size={12} />
-              </button>
-            </div>
-          ))}
+          <div className={styles.multiKeyRows}>
+            {draft.map((key, i) => (
+              <div key={i} className={styles.multiKeyRow}>
+                <input
+                  type="password"
+                  className={styles.input}
+                  value={key}
+                  onChange={(e) =>
+                    setDraft((prev) => {
+                      const next = [...prev];
+                      next[i] = e.target.value;
+                      return next;
+                    })
+                  }
+                  placeholder={`キー ${i + 1}`}
+                  spellCheck={false}
+                  autoComplete="off"
+                  disabled={busy}
+                />
+                <button
+                  type="button"
+                  className={styles.smallButton}
+                  onClick={() => setDraft((prev) => prev.filter((_, idx) => idx !== i))}
+                  disabled={busy || draft.length === 1}
+                  title="この行を削除"
+                >
+                  <X size={12} />
+                </button>
+              </div>
+            ))}
+          </div>
           <div className={styles.multiKeyActions}>
             <button
               type="button"
@@ -458,7 +472,7 @@ function YoutubeKeysSection() {
               disabled={busy || draft.length >= MAX_YT_KEYS}
             >
               <Plus size={12} />
-              キーを追加
+              キーを追加({draft.length} / {MAX_YT_KEYS})
             </button>
             <button
               type="button"

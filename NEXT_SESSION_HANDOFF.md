@@ -1,7 +1,7 @@
 # 次セッションへの引き継ぎ (NEXT_SESSION_HANDOFF)
 
 ## 凍結時刻
-2026-05-03 02:00 — API 管理画面のモーダル→全画面フェーズ化(`ead5db5` の続き)
+2026-05-03 03:00 — API 管理画面 3 修正(キー上限 50 / 保存バグ / 収集開始停止)
 
 ## リポジトリ状態
 - HEAD: 直近コミット直後
@@ -9,7 +9,35 @@
 
 ## 直前の状況サマリ
 
-`ead5db5` で実装した「API 管理」モーダルが背景透過で「別画面に切り替わった感」が薄かったため、**全画面フェーズ swap** に作り直した。
+API 管理画面に対する 3 修正:
+
+### 修正 1: YouTube API キー上限 10 → 50
+
+ユーザは API キーを 30 個保有。`MAX_YT_KEYS = 10` を `50` に。secureStorage 側にも defensive cap として `YT_KEYS_JSON_MAX_BYTES = 100_000`(JSON 化で約 1500 キー相当)。
+
+### 修正 2: 「30 個保存しても全部出ない」バグの真因特定 + 修正
+
+**真因**:UI 側「+ キーを追加」ボタンの disabled 条件が `draft.length >= MAX_YT_KEYS`(=10)で、**編集中の入力行を 10 行までしか増やせなかった**。secureStorage / DPAPI / IPC 側に容量問題は **無く**、純粋に UI 入力制限。`MAX_YT_KEYS = 50` 化で完治。
+
+副次:
+- secureStorage に diagnostic log(`saveYoutubeApiKeys: received=N cleaned=M`、JSON 長、書き込みバイト数)— キー値そのものは出さない
+- Set による dedupe(同じキーを 2 回入力したらまとめる)
+- 100 KB defensive cap
+
+### 修正 3: データ収集の開始 / 停止ボタン
+
+`DataCollectionManager` の `state` が既に 3-way(running / paused / idle)だったが、UI には `isRunning` だけ公開してた。`isPaused` も追加し、UI で:
+- 🟢 実行中 → 「停止」ボタン → `pause()`
+- ⏸ 一時停止中 → 「再開」ボタン → `resume()`
+- ⚫ 停止中 / 未起動 → 「開始」ボタン → `resume()`(裏で `start()` 呼ぶ)
+
+「今すぐ実行」ボタンは現状維持(オフサイクル手動 1 バッチ)。
+
+---
+
+## 1 つ前の前提(変更前の文脈)
+
+`ead5db5` で実装した「API 管理」モーダルが背景透過で「別画面に切り替わった感」が薄かったため、**全画面フェーズ swap** に作り直した(`662be56`)。
 
 ### 変更点
 

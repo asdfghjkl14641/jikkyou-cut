@@ -306,6 +306,11 @@
   display: flex;
   flex-direction: column;
   gap: 4px;
+  /* When the user has 50 keys, 50 rows × ~22 px = 1100 px would push
+     the rest of the screen off-view. Cap the panel at ~280 px (≈12 rows
+     visible) and let it scroll. */
+  max-height: 280px;
+  overflow-y: auto;
 }
 
 .quotaBarRow {
@@ -346,6 +351,17 @@
   flex-direction: column;
   gap: 6px;
   margin: 8px 0;
+}
+
+/* The actual scrolling container for the input rows — capped so a
+   50-row editor doesn't dominate the screen. multiKeyActions stays
+   outside this so the Save / Add buttons remain visible. */
+.multiKeyRows {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  max-height: 320px;
+  overflow-y: auto;
 }
 
 .multiKeyRow {

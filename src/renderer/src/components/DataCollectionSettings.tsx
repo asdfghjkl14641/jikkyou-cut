@@ -17,6 +17,7 @@ type Stats = {
   creatorCount: number;
   quotaUsedToday: number;
   isRunning: boolean;
+  isPaused: boolean;
   lastCollectedAt: string | null;
 };
 
@@ -87,7 +88,12 @@ export default function DataCollectionSettings() {
     }
   };
 
-  const handlePauseResume = async () => {
+  // Three-way control. Maps the visible state to the right manager
+  // action without making the user think about the distinction:
+  //   running  → pause()    (stop after current batch)
+  //   paused   → resume()
+  //   idle     → resume()    (start() under the hood, no-op if no keys)
+  const handleToggleCollection = async () => {
     setBusy(true);
     try {
       if (stats?.isRunning) {
@@ -150,9 +156,21 @@ export default function DataCollectionSettings() {
         </div>
         <div>
           <span style={{ color: 'var(--text-muted)' }}>状態</span>:&nbsp;
-          <span style={{ color: stats?.isRunning ? 'var(--accent-success)' : 'var(--text-muted)' }}>
-            {stats?.isRunning ? '実行中' : keyCount === 0 ? '未起動(API キー未登録)' : '停止中'}
-          </span>
+          {(() => {
+            // 3 visible states. isRunning / isPaused are mutually
+            // exclusive in the manager; the "no keys" idle case is
+            // distinguished from "user-paused via button" here.
+            if (stats?.isRunning) {
+              return <span style={{ color: 'var(--accent-success)' }}>🟢 実行中</span>;
+            }
+            if (stats?.isPaused) {
+              return <span style={{ color: 'var(--accent-warning)' }}>⏸ 一時停止中</span>;
+            }
+            if (keyCount === 0) {
+              return <span style={{ color: 'var(--text-muted)' }}>⚫ 未起動(API キー未登録)</span>;
+            }
+            return <span style={{ color: 'var(--text-muted)' }}>⚫ 停止中</span>;
+          })()}
         </div>
         <div style={{ gridColumn: '1 / -1' }}>
           <span style={{ color: 'var(--text-muted)' }}>最終収集</span>:&nbsp;
@@ -175,12 +193,21 @@ export default function DataCollectionSettings() {
         <button
           type="button"
           className={styles.cancelButton}
-          onClick={handlePauseResume}
+          onClick={handleToggleCollection}
           disabled={busy || keyCount === 0}
+          title={
+            keyCount === 0
+              ? '先に API 管理画面で YouTube キーを登録してください'
+              : stats?.isRunning
+              ? 'バックグラウンド収集を一時停止'
+              : stats?.isPaused
+              ? 'バックグラウンド収集を再開'
+              : 'バックグラウンド収集を開始'
+          }
           style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}
         >
           {stats?.isRunning ? <Pause size={12} /> : <Play size={12} />}
-          {stats?.isRunning ? '一時停止' : '再開'}
+          {stats?.isRunning ? '停止' : stats?.isPaused ? '再開' : '開始'}
         </button>
       </div>
 

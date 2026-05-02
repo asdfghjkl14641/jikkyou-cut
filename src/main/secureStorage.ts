@@ -77,23 +77,62 @@ export const hasAnthropicSecret = () => existsAt(anthropicPath());
 // the whole set together (paste 10 keys, save, done).
 const youtubeKeysPath = () => path.join(app.getPath('userData'), 'youtubeApiKeys.bin');
 
+// Defensive cap. DPAPI itself can handle MB-scale payloads, but we want
+// a sanity ceiling so a UI bug or malicious paste can't fill the disk.
+// 50 keys × ~50 chars ≈ 2.5 KB; 100 KB leaves 40× headroom.
+const YT_KEYS_JSON_MAX_BYTES = 100_000;
+
 export async function saveYoutubeApiKeys(keys: string[]): Promise<void> {
-  const cleaned = keys.map((k) => k.trim()).filter((k) => k.length > 0);
+  // Trim + dedupe + drop empties. Set preserves first-seen order so the
+  // user's intended ordering survives.
+  const cleaned = Array.from(new Set(keys.map((k) => k.trim()).filter((k) => k.length > 0)));
+  console.log(
+    `[secureStorage] saveYoutubeApiKeys: received=${keys.length} cleaned=${cleaned.length}`,
+  );
   if (cleaned.length === 0) {
     await deleteAt(youtubeKeysPath());
+    console.log('[secureStorage] saveYoutubeApiKeys: cleared (empty input)');
     return;
   }
-  await saveAt(youtubeKeysPath(), JSON.stringify(cleaned));
+  const json = JSON.stringify(cleaned);
+  console.log(`[secureStorage] saveYoutubeApiKeys: JSON length=${json.length} chars`);
+  if (json.length > YT_KEYS_JSON_MAX_BYTES) {
+    throw new Error(
+      `YouTube API keys payload too large: ${json.length} chars (max ${YT_KEYS_JSON_MAX_BYTES})`,
+    );
+  }
+  await saveAt(youtubeKeysPath(), json);
+  // Sanity check what landed on disk — confirms encryption + write
+  // both succeeded, surfaces "X went in but Y came out" mismatches.
+  try {
+    const stat = await fs.stat(youtubeKeysPath());
+    console.log(
+      `[secureStorage] saveYoutubeApiKeys: written ${stat.size} bytes for ${cleaned.length} keys`,
+    );
+  } catch {
+    /* ignore — primary write already succeeded */
+  }
 }
 
 export async function loadYoutubeApiKeys(): Promise<string[]> {
   const raw = await loadAt(youtubeKeysPath());
-  if (!raw) return [];
+  if (!raw) {
+    console.log('[secureStorage] loadYoutubeApiKeys: file missing → []');
+    return [];
+  }
   try {
     const parsed = JSON.parse(raw) as unknown;
-    if (!Array.isArray(parsed)) return [];
-    return parsed.filter((k): k is string => typeof k === 'string' && k.length > 0);
-  } catch {
+    if (!Array.isArray(parsed)) {
+      console.warn(
+        '[secureStorage] loadYoutubeApiKeys: parsed but not array → []',
+      );
+      return [];
+    }
+    const out = parsed.filter((k): k is string => typeof k === 'string' && k.length > 0);
+    console.log(`[secureStorage] loadYoutubeApiKeys: loaded ${out.length} keys (raw JSON ${raw.length} chars)`);
+    return out;
+  } catch (err) {
+    console.warn('[secureStorage] loadYoutubeApiKeys: JSON parse failed:', err);
     return [];
   }
 }

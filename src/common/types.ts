@@ -505,6 +505,10 @@ export type IpcApi = {
       creatorCount: number;
       quotaUsedToday: number;
       isRunning: boolean;
+      // Mutually exclusive with isRunning. Both false ⇒ idle (no
+      // keys / not started). Used by the Settings UI to show
+      // 🟢 実行中 / ⏸ 停止中 / ⚫ 未起動 separately.
+      isPaused: boolean;
       lastCollectedAt: string | null;
     }>;
     triggerNow: () => Promise<void>;

@@ -15,6 +15,27 @@
 
 ---
 
+## 2026-05-03 03:00 - API 管理画面 3 修正(キー上限 50 / 保存バグ修正 / 収集開始停止)
+
+- 誰が: Claude Code
+- 何を: 直前 `662be56` の API 管理画面に対する 3 修正:
+  1. **YouTube API キー上限 10 → 50**(`MAX_YT_KEYS = 50`)
+  2. **「30 個保存しても全部表示されない」バグの真因特定 + 修正**:UI 側「+ キーを追加」ボタンの disabled 条件が `draft.length >= MAX_YT_KEYS`(=10)で **編集行を 10 行までしか追加できなかった**。secureStorage / IPC / DPAPI 側に容量問題はなく、純粋に UI 入力の上限。`MAX_YT_KEYS` を 50 にする 1 行で完治
+  3. **データ収集の開始 / 停止ボタン**:DataCollectionManager の `state` を UI に 3-way で公開(running / paused / idle)、ボタンが「停止」「再開」「開始」を文脈で切り替え
+- 検証: `grep` で `MAX_YT_KEYS` の参照を全洗い出して、disabled 条件 + 表示メッセージの 2 箇所が同じ定数を読む構造であることを確認。secureStorage 側は念のため diagnostic log(件数 / JSON 長 / 書き込みバイト数)+ defensive cap(`YT_KEYS_JSON_MAX_BYTES = 100000`、~1500 キー相当)+ Set による dedupe を追加
+- 副次:
+  - **secureStorage diagnostic logs**:`saveYoutubeApiKeys` / `loadYoutubeApiKeys` で count / JSON 長 / 書き込みバイト数を console に出力(キー値そのものは絶対ログに出さない)。これで「30 個入れたつもりが N 個しか保存されてない」みたいな差異があったら一発で特定可能
+  - **handleSave 側にも対応するログ**:`[ApiManagement] saving N YouTube keys (draft rows: M)` + `getKeyCount=` をリロードで確認して整合性検証
+  - **per-key クォータバー / multi-key editor 双方を `max-height + overflow-y: auto`** で 50 行レンダリング時の UI 崩れ防止。Save / Add ボタンは scroll 領域の外に出して常に見える位置
+- 理由: ユーザは YouTube API キーを 30 個保有しているが、UI 入力の 10 行制限で実際には 10 個しか入らなかった。報告は「30 個保存したのに全部表示されない」だったが、実態は「30 個入れる手段が無かった」。spec の「勘で直さず実機ログで真因確定」を踏襲してログ仕込みも入れたが、コード読み だけで真因(`MAX_YT_KEYS = 10` の disabled 条件)が確定したので合わせて修正
+- 開放されている設計判断:
+  - キー個別の API 検証(50 個に 50 回 API 叩くの重い、現状は実行時に 401/403 で個別 disable する既存仕様維持)
+  - キーのインポート / エクスポート機能
+  - 詳細なスケジュール設定(現状 1 時間固定)
+- 影響: src/main/secureStorage.ts(diagnostic log + dedupe + 100KB cap)、src/main/dataCollection/index.ts(`getStatsSnapshot` に `isPaused` 追加)、src/common/types.ts(`isPaused` 追加)、src/renderer/src/components/ApiManagementView.{tsx,module.css}(`MAX_YT_KEYS` 50 + handleSave log + per-key 行数表示 + scrollable 行コンテナ)、src/renderer/src/components/DataCollectionSettings.tsx(3-way ステータス表示 + 停止/再開/開始 ボタン)
+- ⚠️ 実機検証はユーザ環境で必要(50 キー入力 + 保存 + 再起動で全件復元 / 開始停止ボタン動作)
+- コミット: (未定)
+
 ## 2026-05-03 02:00 - API 管理画面をモーダルから全画面フェーズに変更
 
 - 誰が: Claude Code

@@ -104,6 +104,7 @@
 
 ### 2026-05-02
 
+- API 管理画面 3 修正 — (1) YouTube API キー上限 10→50(`MAX_YT_KEYS`)、(2) 「30 個保存しても全部出ない」の真因特定:UI の「+ キーを追加」 disabled 条件が `draft.length >= 10` で入力欄を 10 行までしか追加できなかった、secureStorage / DPAPI / IPC 側に容量問題なし、`MAX_YT_KEYS=50` 化で完治。secureStorage に diagnostic log(件数 / JSON 長 / 書き込みバイト)+ Set dedupe + 100KB cap を defense-in-depth で追加、(3) データ収集に開始/停止/再開の 3-way ボタン(running / paused / idle 状態を UI 表示)
 - API 管理画面をモーダルから全画面フェーズに変更 — `phase` に `'api-management'` 追加、`ApiManagementDialog`(モーダル)を `ApiManagementView`(全画面)に置換、`previousPhase` で戻り先保持、Esc + 戻るボタン両対応。load / clip-select / edit のいずれからでも遷移可能、データ保持
 - 「API 管理」専用画面の新設(全 API キー統合 + 収集ログビューア) — トップメニュー「API 管理」+ Ctrl+Shift+A、`ApiManagementDialog` でタブ式(API キー / 収集ログ)管理。Gladia / Anthropic / YouTube(複数)を統合、YouTube は per-key クォータバー表示。`CollectionLogViewer` は虚スクロール + レベル別フィルタ + エラー赤色強調 + 5 秒自動更新 + 「ファイルを開く」ボタン。`logger.ts` で ISO 8601 `[LEVEL] message` 形式統一、既存 console.log を全部 logger 経由に。`SettingsDialog` から API キー部分を完全削除、ハンドオフリンクのみ
 - 切り抜き動画データ収集パイプライン Phase 1(蓄積基盤) — `better-sqlite3` ベース SQLite DB(WAL モード、5 テーブル)+ YouTube Data API クライアント(キー最大 10 個ローテーション、daily 10K unit クォータ管理)+ yt-dlp で heatmap 上位 3 ピーク / chapters / サムネ抽出。アプリ起動 5 秒後にバックグラウンドで 1 時間ごと自動収集、`Settings → 切り抜きデータ収集` で API キー登録 + 配信者リスト編集 + ステータス確認 + 手動トリガー。MAX 200 動画 / バッチ、200 ms 間隔で yt-dlp に優しく。実機検証は API キー登録後にユーザ側で。Phase 2 / Phase 3 への入力データ生成役
