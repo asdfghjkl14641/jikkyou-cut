@@ -35,7 +35,7 @@
   - 仮説 C (mediaProtocol) は無実証で「触らない」判断。もし新規 DL でも再現したらここを再検討
 - 影響: src/main/urlDownload.ts (format selector + postprocessor + 診断 print)、src/renderer/src/components/VideoPlayer.tsx (audioTracks enable + canplay/loadedmetadata diagnostic logs)
 - ⚠️ 実機検証はユーザ環境で必要(私のサンドボックスから ffprobe / DevTools へアクセス不可)
-- コミット: (未定)
+- コミット: `4cca71f`
 
 ## 2026-05-02 19:30 - LiveCommentFeed の行密度を再調整(40 → 32 px)
 
