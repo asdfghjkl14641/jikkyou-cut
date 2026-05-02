@@ -35,7 +35,7 @@
   - 仮想スクロールのライブラリ採用(現状は独自実装)
   - 左ドラッグライブシークのフレームレート抑制(`<video>.currentTime` 書き込みを 60 fps から 30 fps へ throttle、現状は無制限)
 - 影響: src/common/types.ts (`allMessages` 追加)、src/main/commentAnalysis/scoring.ts (`analyze()` で defensive sort + 返却)、src/renderer/src/components/CommentAnalysisGraph.{tsx,module.css}(マウスステートマシン刷新 + warningToast)、src/renderer/src/components/CommentAnalysisGraph.mock.ts (`allMessages: []`)、src/renderer/src/components/ClipSelectView.{tsx,module.css}(2-column / `selectedPeak` 削除)、src/renderer/src/components/PeakDetailPanel.{tsx,module.css}(削除)、src/renderer/src/components/LiveCommentFeed.{tsx,module.css}(新規)
-- コミット: (未定)
+- コミット: `baef8ad`
 
 ## 2026-05-02 16:00 - 複数区間選択 + 感情 9 カテゴリ拡張 + 区間色塗り + アイキャッチ枠
 
