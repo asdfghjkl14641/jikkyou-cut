@@ -2,7 +2,7 @@
 
 > このファイルは「寝る前の状態を凍結」するためのドキュメント。
 > 次のセッション開始時に **冒頭をそのままコピペ** して Claude Code に貼ると即再開できる。
-> 作成: 2026-05-02 00:50(初版) / 更新: 06:50 / 07:15(URL DL 進捗修正)/ 09:00(プログレッシブ DL spike)/ 11:30(コメント分析バックエンド完成)
+> 作成: 2026-05-02 00:50(初版) / 更新: 06:50 / 07:15(URL DL 進捗修正)/ 09:00(プログレッシブ DL spike)/ 11:30(コメント分析バックエンド完成)/ 12:30(ClipSelectView の onDuration 未配線修正)
 
 ---
 
@@ -54,6 +54,16 @@
 ### 5. ドキュメント整理(`076240f`)
 - `IDEAS.md`(17 項目の長期構想)+ `docs/COMMENT_ANALYSIS_DESIGN.md`(次フェーズ MVP 設計)新規
 - `HANDOFF.md` 全面書き直し、`TODO.md` セクション再編
+
+### 8. 緊急修正: ClipSelectView の onDuration/onCurrentTime 未配線(`<NEW_HASH>`)
+- 症状(URL DL 後): video コントロール消失 / 再生で末尾に飛ぶ / 分析グラフ真っ黒
+- 根本: ClipSelectView の `<VideoPlayer>` に `onDuration`/`onCurrentTime` prop が抜けていて、`editorStore.durationSec` が clip-select 中ずっと null
+  - 症状 2: VideoPlayer の preview-skip rAF が `cues=[]+durationSec=null` で `decidePreviewSkip='end'` → 再生開始即末尾シーク
+  - 症状 3: グラフが mockAnalysis(0) → samples=[] → バー 1 本も出ず黒い帯
+  - 症状 1: 上記の副次効果(metadata 詰まりで Chromium がコントロール非表示)、ただし完治しない場合は media:// 失敗等の別要因
+- 修正: `<VideoPlayer onDuration={setDuration} onCurrentTime={setCurrentSec}>` を追加(App.tsx の edit 相と同じ配線)
+- 副次: `mediaProtocol.ts` に 404/416 警告ログ、`commentAnalysis/index.ts` に各 phase のログを追加(以後のログ駆動デバッグの土台)
+- 経緯: `1678746` で ClipSelectView 新設時から抜けていた配線。`1533d31` で実分析が入ったことで mock の samples=[] が常態化し、症状が目立つようになって発覚
 
 ### 7. コメント分析: 実データ取得 + スコア計算(`1533d31`)
 - モック → 実データに置換、3 要素統合スコア(コメント密度 + 視聴者増加 + キーワード)を実 yt-dlp + playboard.co スクレイピング + ハードコード辞書から計算

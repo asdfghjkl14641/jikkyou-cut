@@ -91,6 +91,7 @@
 
 ### 2026-05-02
 
+- 緊急修正: ClipSelectView の `onDuration`/`onCurrentTime` 未配線 — 3 症状(`<video>` コントロール消失 + 再生ボタンで末尾に飛ぶ + 分析グラフ真っ黒)の共通根本。`durationSec` が clip-select 中ずっと null のままで、preview-skip ロジックが `decidePreviewSkip='end'` を返したり、mock fallback が samples=0 を生成していた。`1678746`(ClipSelectView 新設)時点からの抜け漏れ、`1533d31`(実分析)で表面化。副次的に mediaProtocol と commentAnalysis にログ追加
 - コメント分析: 実データ取得 + スコア計算ロジック実装 — yt-dlp チャットリプレイ(YT live_chat / Twitch rechat)+ playboard.co スクレイピング + ハードコード辞書 + 5 秒バケット 3 要素統合スコア。`src/main/commentAnalysis/*` を新設、IPC 統合済み、ClipSelectView がモック→実分析に切替(失敗時はモック fallback)。`editorStore.sourceUrl` 追加、URL DL 完了時に capture
 - プログレッシブ DL + 並行文字起こしの技術検証(spike) — 4 論点(yt-dlp シーク追従 / `<video>` buffered / Gladia 並行 / プロセス管理)を実機 + 公式ドキュメントで検証、`docs/PROGRESSIVE_DL_SPIKE_REPORT.md` にまとめた。本実装は未着手、設計選択肢をユーザ判断待ちにエスカレート
 - URL DL 進捗 0.0% 固着の真因を実機ログで特定 → `--progress` 追加 — yt-dlp は `--print` 指定時に暗黙 quiet モードに入り、`--progress-template` 単独ではテンプレートを使うだけで出力自体は抑制されたまま。`--progress`(quiet モードでも進捗を強制表示するフラグ)を明示追加で解決。生 stdout に `JCUT_PROGRESS` 行が流れることを実 DL で確認

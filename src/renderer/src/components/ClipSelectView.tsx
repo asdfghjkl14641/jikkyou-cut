@@ -28,6 +28,18 @@ export default function ClipSelectView() {
   const filePath = useEditorStore((s) => s.filePath);
   const sourceUrl = useEditorStore((s) => s.sourceUrl);
   const durationSec = useEditorStore((s) => s.durationSec);
+  // These two are CRITICAL for ClipSelectView. Without them piped through:
+  //   1. durationSec stays null forever → comment-analysis useEffect is
+  //      gated and never runs → the graph shows mockAnalysis(0) which
+  //      generates 0 samples → "黒い帯のまま波形ゼロ" symptom.
+  //   2. VideoPlayer's preview-skip rAF tick sees cues=[], durationSec=
+  //      null → deriveKeptRegions returns [] → decidePreviewSkip returns
+  //      'end' the moment the user hits play → "再生ボタン押すと末尾に
+  //      飛ばされる" symptom.
+  // App.tsx's edit-phase VideoPlayer wires these; clip-select had been
+  // missing them since the phase reorg landed.
+  const setDuration = useEditorStore((s) => s.setDuration);
+  const setCurrentSec = useEditorStore((s) => s.setCurrentSec);
   const clearFile = useEditorStore((s) => s.clearFile);
   const setPhase = useEditorStore((s) => s.setPhase);
   const setClipRange = useEditorStore((s) => s.setClipRange);
@@ -160,6 +172,8 @@ export default function ClipSelectView() {
             <VideoPlayer
               ref={videoRef}
               filePath={filePath}
+              onDuration={setDuration}
+              onCurrentTime={setCurrentSec}
             />
           </div>
         </div>

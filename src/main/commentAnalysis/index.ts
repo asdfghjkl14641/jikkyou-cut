@@ -31,12 +31,19 @@ export async function analyzeComments(
   args: CommentAnalysisStartArgs,
   onProgress: (p: CommentAnalysisProgress) => void,
 ): Promise<CommentAnalysis> {
+  console.log(
+    `[comment-analysis] start url=${args.sourceUrl} duration=${args.durationSec.toFixed(1)}s`,
+  );
   onProgress({ phase: 'chat', percent: 0 });
   const messages = await fetchChatReplay(args.sourceUrl);
+  console.log(`[comment-analysis] chat: ${messages.length} messages`);
   onProgress({ phase: 'chat', percent: 100 });
 
   onProgress({ phase: 'viewers', percent: 0 });
   const viewers = await fetchViewerStats(args.sourceUrl);
+  console.log(
+    `[comment-analysis] viewers: source=${viewers.source} samples=${viewers.samples.length}`,
+  );
   onProgress({ phase: 'viewers', percent: 100 });
 
   onProgress({ phase: 'scoring', percent: 0 });
@@ -45,6 +52,9 @@ export async function analyzeComments(
     viewers,
     durationSec: args.durationSec,
   });
+  console.log(
+    `[comment-analysis] scoring done: ${analysis.samples.length} buckets, hasViewerStats=${analysis.hasViewerStats}`,
+  );
   onProgress({ phase: 'scoring', percent: 100 });
 
   return analysis;

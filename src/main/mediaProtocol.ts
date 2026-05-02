@@ -47,6 +47,11 @@ export function handleMediaProtocol() {
     try {
       stat = await fsPromises.stat(filePath);
     } catch {
+      // Surface 404s — these almost always mean the path passed to
+      // setFile() is wrong (encoding, drive letter, missing file). User
+      // sees `<video>` "controls disappear" because Chromium hides them
+      // when the source fails to load.
+      console.warn('[mediaProtocol] 404 Not Found:', filePath);
       return new Response('Not Found', { status: 404 });
     }
     const fileSize = stat.size;
@@ -63,6 +68,9 @@ export function handleMediaProtocol() {
             : fileSize - 1;
 
         if (start >= fileSize || start > end) {
+          console.warn(
+            `[mediaProtocol] 416 Range Not Satisfiable: range=${range}, fileSize=${fileSize}, file=${filePath}`,
+          );
           return new Response(null, {
             status: 416,
             headers: { 'Content-Range': `bytes */${fileSize}` },

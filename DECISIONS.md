@@ -15,6 +15,22 @@
 
 ---
 
+## 2026-05-02 12:30 - 緊急修正: ClipSelectView の onDuration/onCurrentTime 未配線が 3 症状の共通根本
+
+- 誰が: Claude Code
+- 何を: `ClipSelectView.tsx` の `<VideoPlayer>` に `onDuration={setDuration}` と `onCurrentTime={setCurrentSec}` を追加(App.tsx の edit 相と同じ配線)。3 症状全てが「`editorStore.durationSec` が clip-select 中ずっと null」が共通原因
+  - **症状 1(`<video>` コントロール消失)**: video が metadata 取得段階で詰まる場合 Chromium がコントロール非表示 — 副作用的にこう見える(本症状は media:// 失敗等の別要因の可能性も残る、後述ログで切り分け)
+  - **症状 2(再生ボタン押すと末尾に飛ぶ)**: VideoPlayer の preview-skip rAF tick が、`cues=[]` + `durationSec=null` → `deriveKeptRegions = []` → `decidePreviewSkip = 'end'` を返し、再生開始の瞬間に `currentTime = duration` + `pause()` を実行。**確実に root cause**
+  - **症状 3(コメント分析グラフ真っ黒・波形ゼロ)**: ClipSelectView のグラフは loading/error/no-source 時に `mockAnalysis = generateMockAnalysis(durationSec ?? 0)` を表示するが、`durationSec` が null だと `0` 渡し → mock は samples 0 個を返す → バーが 1 本も描画されない。**確実に root cause**
+- 経緯: `1678746` で Antigravity が ClipSelectView を新設したときに `onDuration` 配線が抜けていた。誰も気付かなかったのは、当時のグラフはモックで「durationSec が null でも 1 バケットだけは出る」挙動で、症状が目立たなかったため。`1533d31` で実分析パスを差し込んで mock fallback の `samples: []` 状態が常態化し、グラフが完全に黒く見えるようになって初めて表面化
+- 副次対応(ログ駆動デバッグの土台):
+  - `mediaProtocol.ts` に **404 Not Found** + **416 Range Not Satisfiable** の警告ログを追加(本症状で video 読み込み失敗が起きていれば即特定できる)
+  - `commentAnalysis/index.ts` に start/chat/viewers/scoring 各 phase のログを追加(`[comment-analysis] start url=... duration=...`、`messages=N`、`source=playboard samples=N`、`buckets=N hasViewerStats=bool`)
+- 後続検証(ユーザ環境): 本修正で症状 2/3 は完治するはず。症状 1(コントロール消失)が残った場合は新ログ出力(`[mediaProtocol] 404 Not Found:` など)で原因切り分け
+- 反省: spec で「Step 1 で取得したログから原因特定」を求められたが、本サンドボックスから renderer DevTools にアクセスできず実機ログ取得不可。コード監査で `setFile`→`durationSec` の経路を追ったところ ClipSelectView の prop 欠落が見つかり、症状 2/3 の挙動が論理的に再構成できた。次回以降は実機ログ取得手段を確保したうえで debug する
+- 影響: `src/renderer/src/components/ClipSelectView.tsx`(2 props 追加)、`src/main/mediaProtocol.ts`(警告ログ 2 件)、`src/main/commentAnalysis/index.ts`(進行ログ 4 件)
+- コミット: (未定)
+
 ## 2026-05-02 11:30 - コメント分析: 実データ取得 + スコア計算ロジック実装
 
 - 誰が: Claude Code
