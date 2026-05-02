@@ -41,7 +41,7 @@
   - 既存動画の view_count 再取得ループ(週次)— 現状は collected_at 上書きするだけで履歴なし
 - 影響: src/main/dataCollection/* (新規 6 ファイル)、src/main/secureStorage.ts (YouTube キー BYOK 追加)、src/main/index.ts (IPC + auto-start)、src/preload/index.ts、src/common/types.ts (IpcApi 拡張)、src/renderer/src/components/{SettingsDialog,DataCollectionSettings}.tsx、package.json (better-sqlite3 + @types)
 - ⚠️ 実機検証はユーザ環境で必要(API キー登録 → 1 時間放置 → DB に件数蓄積されとるか確認)
-- コミット: (未定)
+- コミット: `799eb3d`(本体)+ `c3ab9c5`(試作 URL 変更:O5gI5cIM4Yc に固定、本タスクと並行のユーザ要望)
 
 ## 2026-05-02 22:30 - 切り抜き候補の自動抽出(ハイブリッド方式 + 1 ボタン全自動)
 
