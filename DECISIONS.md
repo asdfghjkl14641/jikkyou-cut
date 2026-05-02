@@ -15,6 +15,28 @@
 
 ---
 
+## 2026-05-03 05:30 - YouTube API キー保存バグ 真因特定 + 完治(3 周目)
+
+- 誰が: Claude Code
+- 何を: 2 度の修正(`5298725` の上限 50 化、`240dc50` の getKeys + useEffect seed)を経てもユーザ実機で「1 個しか登録できない」状態が続いていた問題を、**ログ駆動デバッグで真因確定 → UX モデル全面刷新**で完治
+- 流れ:
+  1. **デバッグコミット `e1811d5`**:`[YT-DEBUG]` / `[SS-DEBUG]` / `[IPC-DEBUG]` 接頭辞で全動線(render / useEffect / toggle / add-row / onChange / handleSave / IPC / secureStorage / read-back integrity check)に件数ログを仕込み。挙動は一切変えず push、ユーザに DevTools Console + ターミナル両方のログ採取を依頼
+  2. **ユーザがログ提供** → `[YT-DEBUG] add-row button clicked` ログが **1 度も出てない**ことが確定。代わりに `input onChange index: 0 valueLength: 0` → `valueLength: 39` の遷移のみ → ユーザは「+ キーを追加」を押さず、**既存キーが masked 表示された 1 行目をそのまま全消し → 新キー貼り付け → 保存**していた
+  3. 真因 = **`240dc50` で seed した既存キーが password input(masked dot 表示)に入るため、ユーザは「これは空欄だな」と認識して上書きしてしまう**。コードは設計通り動いていたが UX が破綻
+  4. **修正コミット `b04f64d`**:UI モデル変更
+- 修正後の構造:
+  - **既存キー**:read-only chip(`AIza••••••••XYZ12` で先頭 6 + 末尾 4 だけ平文表示、中間は dot)+ × ボタンで削除マーク(再押下で取消)。input ではないので **物理的に編集不可**
+  - **新規キー**:別セクションの input 行(初期 1 行、+ 新規行を追加で増やせる)
+  - 保存時 = `(残った既存) + (新規 trim 非空)` を Set で dedupe → IPC `setKeys`
+  - これで「既存を誤って消す」経路がコードレベルで除去される
+- ログ駆動デバッグの教訓(memory に保存済):
+  - 「コード読みで仮説選択」は失敗を 2 回繰り返した。3 周目で初めて **ログ仕込み(挙動変えず)→ ユーザ実機で採取 → 真因確定 → 修正** の 2 段階分離を実行
+  - ユーザの最初の指示「ログ駆動でやってくれ」「defensive 修正 + 動いた気がします報告は NG」を最初から守るべきだった
+- クリーンアップコミット `e43f275`:検証成功後、`[SS-DEBUG]` / `[IPC-DEBUG]` 系の verbose ログを撤去。`saveYoutubeApiKeys` の **read-back integrity check** だけは残置(成功時無音、ズレた時のみ console.warn)— 将来の暗号化 / 書き込みリグレッションを静かに監視する防御層
+- 影響: src/renderer/src/components/ApiManagementView.{tsx,module.css}、src/main/secureStorage.ts、src/main/index.ts
+- 実機検証: ✅ ユーザ確認済み(`b04f64d` 適用後、既存 1 個 → 新規追加 → 保存で 2 個に増えた)
+- コミット: `e1811d5`(debug ログ仕込み)→ `b04f64d`(UX 修正)→ `e43f275`(ログ片付け)
+
 ## 2026-05-03 04:00 - YouTube API キー複数追加 UI バグ修正(load-on-edit-mode-entry)
 
 - 誰が: Claude Code
