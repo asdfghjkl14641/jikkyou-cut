@@ -4,9 +4,10 @@
 2026-05-02 14:30
 
 ## リポジトリ状態
-- HEAD: `d13638a` 直後に **未コミット差分あり**(後述)
-- Working Tree: dirty(コメント分析の rolling window 化 + W スライダー UI など)
-- Antigravity の WIP も同居:`PeakDetailPanel.{tsx,module.css}` 新規 + `keywords.ts` カテゴリ追加 + `scoring.ts` の旧構造などが交ざっている。**コミット前に必ず差分を分けて取り出す**
+- HEAD: `7f41a02`(rolling window コミット直後)
+- Working Tree: dirty(URL save WIP + Antigravity の WIP — 後述)。これらは別コミットすべき
+- Antigravity の残 WIP: `keywords.ts`(カテゴリ別キーワード追加)、`urlDownload.ts`(ログ 1 行追加)
+- 前タスクの URL save WIP: `src/common/config.ts`、`src/main/config.ts`、`src/renderer/src/App.tsx`、`src/renderer/src/components/DropZone.tsx`(`lastDownloadUrl` 追加 + DropZone で prefill)— 前タスク完了時にコミット可否未確認のまま継続中
 
 ## 直前の状況サマリ
 
