@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
-import { ChevronLeft, CheckCircle, Edit2, Trash2, Plus, X, KeyRound, FileText } from 'lucide-react';
+import { ChevronLeft, CheckCircle, Edit2, Trash2, Plus, X, KeyRound, FileText, Database } from 'lucide-react';
 import CollectionLogViewer from './CollectionLogViewer';
+import DataCollectionSettings from './DataCollectionSettings';
 import { useEditorStore } from '../store/editorStore';
 import styles from './ApiManagementView.module.css';
 
@@ -23,7 +24,7 @@ import styles from './ApiManagementView.module.css';
 const MAX_YT_KEYS = 50;
 const YT_DAILY_QUOTA_PER_KEY = 10_000;
 
-type Tab = 'keys' | 'log';
+type Tab = 'keys' | 'collection' | 'log';
 
 type Props = {
   hasGladia: boolean;
@@ -94,6 +95,14 @@ export default function ApiManagementView({
         </button>
         <button
           type="button"
+          className={`${styles.tab} ${tab === 'collection' ? styles.tabActive : ''}`}
+          onClick={() => setTab('collection')}
+        >
+          <Database size={13} />
+          データ収集
+        </button>
+        <button
+          type="button"
           className={`${styles.tab} ${tab === 'log' ? styles.tabActive : ''}`}
           onClick={() => setTab('log')}
         >
@@ -103,7 +112,7 @@ export default function ApiManagementView({
       </div>
 
       <main className={styles.body}>
-        {tab === 'keys' ? (
+        {tab === 'keys' && (
           <KeysTab
             hasGladia={hasGladia}
             hasAnthropic={hasAnthropic}
@@ -114,7 +123,18 @@ export default function ApiManagementView({
             onSaveAnthropic={onSaveAnthropic}
             onClearAnthropic={onClearAnthropic}
           />
-        ) : (
+        )}
+        {tab === 'collection' && (
+          // Hosts the same DataCollectionSettings the user used to find
+          // hidden in the Settings dialog — moved here so the data-
+          // collection controls (有効化 / 1 回だけ取得 / 取得を停止)
+          // sit alongside the API keys + collection log tabs that
+          // they're conceptually grouped with.
+          <div className={styles.collectionTab}>
+            <DataCollectionSettings />
+          </div>
+        )}
+        {tab === 'log' && (
           // The viewer lives inside a flex:1 container, so its
           // CollectionLogViewer's `flex:1; min-height:0` chain reaches
           // the screen edge automatically.

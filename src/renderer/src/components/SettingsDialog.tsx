@@ -1,13 +1,13 @@
 import { useEffect, useRef } from 'react';
-import { X, KeyRound } from 'lucide-react';
-import DataCollectionSettings from './DataCollectionSettings';
+import { X, KeyRound, Database } from 'lucide-react';
 import styles from './SettingsDialog.module.css';
 
-// Trimmed-down Settings dialog. As of the API-management refactor, all
-// API-key entry has moved into the dedicated ApiManagementDialog
-// (menu: API 管理 / Ctrl+Shift+A). This dialog now hosts the
-// per-creator targeting list + collection-status summary, plus a hand-
-// off button to the API management screen.
+// Trimmed-down Settings dialog. As of the API-management refactor +
+// the data-collection tab move (2026-05-03), this dialog is now
+// effectively a thin shell that points users at the API management
+// screen for everything related to API keys, data collection
+// controls, and the creator targeting list. Kept around so users who
+// reach for "Settings" out of habit still find a way in.
 
 type Props = {
   open: boolean;
@@ -43,31 +43,43 @@ export default function SettingsDialog({ open, onClose, onOpenApiManagement }: P
       </div>
 
       <div className={styles.body}>
-        {/* Hand-off banner so users who came here looking for API key
-            entry get pointed at the new dedicated screen. */}
+        {/* Single hand-off section. Both API keys and data-collection
+            controls (有効化 / 1 回だけ取得 / 取得を停止 / 配信者リスト)
+            now live in the API 管理 screen. The Settings dialog is
+            mostly a discoverability fallback. */}
         <div className={styles.section}>
-          <label className={styles.label}>API キーの設定</label>
+          <label className={styles.label}>API キー / データ収集の設定</label>
           <div className={styles.help} style={{ marginTop: 0, marginBottom: 8 }}>
-            Gladia / Anthropic / YouTube の各 API キーは「API 管理」画面に移動しました(メニュー → API 管理、または Ctrl+Shift+A)。
+            Gladia / Anthropic / YouTube の API キー、データ収集の開始 / 停止、配信者リストはすべて「API 管理」画面に集約されています(メニュー → API 管理、または Ctrl+Shift+A)。
           </div>
-          <button
-            type="button"
-            className={styles.saveButton}
-            onClick={() => {
-              onClose();
-              onOpenApiManagement();
-            }}
-            style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}
-          >
-            <KeyRound size={14} />
-            API 管理画面を開く
-          </button>
+          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+            <button
+              type="button"
+              className={styles.saveButton}
+              onClick={() => {
+                onClose();
+                onOpenApiManagement();
+              }}
+              style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}
+            >
+              <KeyRound size={14} />
+              API キー画面を開く
+            </button>
+            <button
+              type="button"
+              className={styles.saveButton}
+              onClick={() => {
+                onClose();
+                onOpenApiManagement();
+              }}
+              style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}
+              title="API 管理画面の「データ収集」タブで開始 / 停止できます"
+            >
+              <Database size={14} />
+              データ収集画面を開く
+            </button>
+          </div>
         </div>
-
-        {/* Data-collection: per-creator list + status panel. The API key
-            section inside DataCollectionSettings has been removed; that
-            component now hosts only the creator list + manager controls. */}
-        <DataCollectionSettings />
       </div>
 
       <div className={styles.footer}>

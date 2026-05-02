@@ -123,6 +123,15 @@
   overflow-y: auto;
 }
 
+/* Same scrolling pattern as keysTab — the data-collection panel can
+   easily exceed the viewport when the creator list reaches 75 entries. */
+.collectionTab {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  overflow-y: auto;
+}
+
 /* ---- Single-key + multi-key shared shell --------------------------------- */
 /* Same shapes as the previous ApiManagementDialog.module.css — only
    the outer view chrome differs. */
