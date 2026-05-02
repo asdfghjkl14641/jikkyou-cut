@@ -389,14 +389,22 @@ export default function CommentAnalysisGraph({
     // Hover tooltip — only update while idle (not dragging anything
     // active). Delay 150 ms before showing to avoid flicker as the
     // cursor sweeps across the waveform.
+    //
+    // The `x` we use for the visible hover-line is the **actual cursor
+    // x**, not the matched sample's window-centre. Earlier we used
+    // `(sampleCentre / durationSec) * rect.width` which made the line
+    // visibly snap to bucket boundaries — feels like the line "lags"
+    // the cursor. The data shown in the tooltip still comes from the
+    // matched sample (it's the right granularity for "what's
+    // happening here?"); only the line position follows the cursor.
     if (!drag || drag.kind === 'right-select') {
       const sample = sampleAt(time);
       if (sample) {
-        const sampleCentre = sample.timeSec + windowSec / 2;
-        const xOnContainer = durationSec > 0 ? (sampleCentre / durationSec) * rect.width : 0;
+        const cursorX = x;
+        const cursorY = e.clientY - rect.top;
         if (hoverTimerRef.current) clearTimeout(hoverTimerRef.current);
         hoverTimerRef.current = setTimeout(() => {
-          setHoverPos({ sample, x: xOnContainer, y: e.clientY - rect.top });
+          setHoverPos({ sample, x: cursorX, y: cursorY });
         }, HOVER_TOOLTIP_DELAY_MS);
         return;
       }
