@@ -15,6 +15,46 @@
 
 ---
 
+## 2026-05-03 11:30 - データモデル根本修正: uploaders テーブル分離 + creators 純化(migration 001)
+
+- 誰が: Claude Code
+- 何を: 直前の DB 診断で「creators 325 件 = seed 75 + auto-add 切り抜き投稿者 250」と判明したのを受け、データモデルを 2 テーブル分離
+- 新スキーマ:
+  - `uploaders`(id / channel_id / channel_name UNIQUE / first_seen_at / video_count キャッシュ)
+  - `videos.uploader_id`(FK to uploaders.id)
+  - `creators` は純化(`is_target=1` のみ残す)
+- 単一トランザクションで完結する migration 001:
+  1. uploaders + indexes 作成 + videos.uploader_id 列追加
+  2. videos.channel_name の DISTINCT を uploaders へ一括投入(各 name の最初の non-null channel_id を集約)
+  3. is_target=0 creators で videos に出てこない孤児も uploaders へ移送(belt-and-braces)
+  4. videos.uploader_id を channel_name JOIN で backfill
+  5. videos.creator_id を NULL に(is_target=0 由来分のみ — broad-search hits は seed creator が不明のため)
+  6. is_target=0 creators を DELETE
+  7. uploaders.video_count を再集計
+- 安全装置:
+  - 冪等性 → `PRAGMA user_version` で管理(target=1)
+  - 実行前に `PRAGMA wal_checkpoint(TRUNCATE)` で WAL flush → タイムスタンプ付き .bak ファイル自動作成
+  - 既存行は移送のみで削除前に新テーブルへ書き込み(失敗時 transaction で全 rollback)
+- 収集ロジック修正:
+  - broad-search 由来の `upsertCreator(channelTitle, ...)` を撤廃
+  - `_collectBatch` で各 video について `upsertUploader(channelId, channelName)` を呼んで uploader 登録
+  - `creatorHint` ありの video のみ `getCreatorIdByName` で creator_id 解決(per-creator hint なら is_target=1 行を引く、なければ NULL)
+- UI:`DataCollectionSettings` ステータスパネルに「切り抜きチャンネル」追加、「配信者」→「配信者(seed)」リネーム
+- 開放されている設計判断:
+  - uploader と creator のクロス参照(配信者本人投稿の切り抜き)
+  - per-creator search のチャンネル ID 自動補完(seed creators の channel_id 利用度向上)
+  - uploaders の手動編集 UI(現状は read-only data)
+  - 既存 creators テーブルの NULL group 2 件の調査(2 人 nijisanji + streamer から削れた可能性、別タスク)
+- 影響: `migrations.ts`(新規)、`database.ts`(`upsertUploader` / `bumpUploaderVideoCount` / `getCreatorIdByName` / VideoUpsert.uploader_id / getStats 拡張)、`index.ts`(_collectBatch refactor)、`main/index.ts`(runMigrations 起動時呼出)、`diagnose.ts`(Q10-Q14)、`types.ts`(uploaderCount)、`DataCollectionSettings.tsx`(UI)
+- 実機検証 ✅(user の実 DB に対して):
+  - user_version: 0 → 1
+  - creators: 325 → 75(全て is_target=1)
+  - uploaders: 0 → 252(channel_id 全件解決済み)
+  - videos.uploader_id: 全 347 件紐付け成功
+  - videos.creator_id: per-creator 由来 3 件のみ残存(broad は NULL)
+  - バックアップ `data-collection.db.bak.20260502T123359` 自動生成 + ユーザの手動 backup `*.bak.20260502T212737` も別途確保
+- コミット: `280ad6c`
+
 ## 2026-05-03 10:30 - 緊急: better-sqlite3 ネイティブモジュール読み込み失敗の真因確定 + 再発防止
 
 - 誰が: Claude Code

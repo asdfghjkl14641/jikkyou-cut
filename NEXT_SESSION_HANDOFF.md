@@ -1,82 +1,119 @@
 # 次セッションへの引き継ぎ (NEXT_SESSION_HANDOFF)
 
 ## 凍結時刻
-2026-05-03 10:30 — better-sqlite3 ネイティブ読み込みエラー調査完了(transient cache 破損、現状自然回復済み)+ 再発防止 external pin。**配信者 325 件問題の診断はこれから**(diag メニュー押下 → 結果待ち)。
+2026-05-03 11:30 — uploaders テーブル分離 + creators 純化(migration 001)完了。データモデル整備済み。**データ収集の有効化はユーザの操作待ち**。
 
 ## ⚠️ 次セッションの Claude Code が最初に読むこと
 
-`CLAUDE.md` 冒頭の「アプリ起動時の絶対ルール」を厳守。`npm run start` は使わず `npm run dev` を使う。詳細は `CLAUDE.md` 冒頭参照。
-
-`npm install` を新たに実行した場合は `npx @electron/rebuild -f -w better-sqlite3` を必ず叩く(Electron 33 ABI に向けて rebuild)。
+`CLAUDE.md` 冒頭の「アプリ起動時の絶対ルール」を厳守:
+- ✅ `npm run dev` / `npm run dev:fresh` を使う
+- ❌ `npm run start` は禁止(古いビルドを実行する)
+- `npm install` 後は `npx @electron/rebuild -f -w better-sqlite3` を必ず叩く
 
 ## リポジトリ状態
-- HEAD: `5160da8`(fix(build): better-sqlite3 + bindings external 明示ピン)
-- 直前: `fca786a`(diag(data-collection): DB 診断スクリプト + 一時メニュー)
+- HEAD: `280ad6c`(feat(data-collection): uploaders テーブル分離 + creators 純化)
+- 直前: `03960ef`(docs: better-sqlite3 ロード失敗の調査結果)
 - docs commit 後 clean
 
 ## 直前の状況サマリ
 
-### 今回(緊急対応):better-sqlite3 ロード失敗エラー調査
+直前タスクの DB 診断で creators が「seed 75 + 切り抜き投稿者 250 = 325」と確定していた件を、**データモデル分離で根本修正**。
 
-ユーザ実機の `collection.log` で「`Could not dynamically require "<root>/build/better_sqlite3.node" / @rollup/plugin-commonjs`」エラーが報告され、緊急調査。
+### 新スキーマ(2 テーブル分離)
 
-**結論**:
-- エラーは **2026-05-02 09:29Z〜10:11Z の時間帯に 7 件集中、それ以降は出ていない**(自然回復済み)
-- 真因は **一時的な build cache 破損**(`bindings` が bundled された瞬間があり、rollup-commonjs の runtime stub が throw)
-- 「動画 347 件 / 配信者 325 件」表示は **エラー停止後の正常 batch run で蓄積されたデータ** = データ自体は健在
-- 念のため再発防止に `electron.vite.config.ts` の `main.build.rollupOptions.external` に `better-sqlite3` と `bindings` を明示ピン(`externalizeDepsPlugin` は direct deps のみ → transitive の `bindings` が漏れる可能性を物理的に潰す)
+| テーブル | 内容 | 件数 |
+|---|---|---|
+| `creators` | seed 配信者のみ(`is_target=1`)+ `creator_group` で分類 | 75 |
+| `uploaders`(NEW) | 切り抜き動画の投稿チャンネル(channel_id / video_count キャッシュ) | 252 |
+| `videos.creator_id` | per-creator 検索由来の動画のみ非 null | 3 |
+| `videos.uploader_id`(NEW 列) | 全動画に紐付け | 347 |
 
-### 残タスク:配信者 325 件問題の診断(`fca786a` の diag メニュー使う)
+### Migration 001 の挙動
 
-直前の commit `fca786a` で `diagnose.ts` + 「デバッグ → DB 診断(データ収集)」メニューを投入済み。**ユーザが押すと SQL 実行結果がターミナルに出る**(9 個のクエリで creators テーブル / videos テーブル / クォータの実態確認)。
+`src/main/dataCollection/migrations.ts` の `runMigrations()` を `app.whenReady` から `seedOrUpdateCreators` の前に呼ぶ。
 
-コード読みでの仮説:`_collectBatch` (index.ts:278) で broad search 由来の各 video の `channelTitle` (= 切り抜き **アップローダー**) を `upsertCreator` で auto INSERT (`is_target=0`、`creator_group=null`)。`getStats.creatorCount` は `SELECT COUNT(*) FROM creators` で全件カウントするので 75 (seed) + 250 (auto-add) = 325 と推定。これを SQL で確認すべし。
+- `PRAGMA user_version` で冪等性管理(target=1)
+- 実行前:WAL checkpoint(TRUNCATE) → タイムスタンプ付き .bak 作成
+- 単一トランザクションで:
+  1. uploaders + indexes 作成 + videos.uploader_id 列追加
+  2. videos.channel_name の DISTINCT を uploaders へ一括投入
+  3. is_target=0 creators で videos に出てこない孤児も移送
+  4. videos.uploader_id を channel_name JOIN で backfill
+  5. videos.creator_id を NULL(is_target=0 由来分)
+  6. is_target=0 creators を DELETE
+  7. uploaders.video_count を再集計
 
-## 主要変更ファイル(直近)
+### 収集ロジック修正
 
-### `5160da8`(緊急対応)
-- `electron.vite.config.ts` — `main.build.rollupOptions.external` に `better-sqlite3` + `bindings`
-- 並行で `out/` クリーン rebuild + `npx @electron/rebuild -f -w better-sqlite3` 実行(node_modules の `.node` 状態確認、rebuild は no-op で既に Electron 33 ABI に向いてた)
+`_collectBatch`(index.ts):
+- broad-search 由来の `upsertCreator(channelTitle, ...)` 経路を **撤廃**
+- 各 video について `upsertUploader(channelId, channelName)` で uploader 登録 + `bumpUploaderVideoCount` で video_count 加算
+- per-creator hint ありの video のみ `getCreatorIdByName` で creator_id 解決(broad は creator_id = NULL)
 
-### `fca786a`(診断スクリプト)
-- `src/main/dataCollection/diagnose.ts`(新規、readonly DB 開いて 9 クエリ実行)
-- `src/main/menu.ts`(一時的に「デバッグ」サブメニュー + 「DB 診断(データ収集)」項目)
+### UI 表示
 
-### `d79e312`(直前)
-- `src/renderer/src/components/ApiManagementView.tsx` — 3 番目のタブ「データ収集」追加(DataCollectionSettings をホスト)
-- `src/renderer/src/components/SettingsDialog.tsx` — DataCollectionSettings 撤去 + ハンドオフリンク 2 つに
+`DataCollectionSettings` のステータスパネル:
+```
+動画                  : 347
+配信者(seed)        :  75
+切り抜きチャンネル    : 252
+本日のクォータ        : 33,000 / 500,000
+自動収集              : 🔴 無効  [有効化する]
+状態                  : ⏸ 待機中
+```
 
-## 動作確認
+### 実機検証結果(Python sqlite3 で直接確認)
 
-### ✅ 済
-- `npm run dev` clean boot:port 3001 / `creators already populated (75) — no seed delta`
-- bundle 内 `import Database from "better-sqlite3"` のみ、bindings 参照 / dynamic require stub なし
+```
+user_version: 1
+creators total: 75
+creators by is_target: [(1, 75)]    ← 全て is_target=1
+creators by group: hololive=15, neoporte=5, nijisanji=19, streamer=19, vspo=15, NULL=2
+uploaders total: 252                 ← 全て channel_id 解決済み
+videos uploader_id NOT NULL: 347     ← 全動画 OK
+videos creator_id NOT NULL: 3        ← per-creator 由来のみ
+videos total: 347                    ← データ消失なし
+```
 
-### ⏳ ユーザに依頼中
-- メニュー「**デバッグ → DB 診断(データ収集)**」を押下 → ターミナル出力をチャットに貼り付け → 配信者 325 件の真因確定
+バックアップ:
+- `data-collection.db.bak.20260502T123359`(migration 自動生成、UTC ts)
+- `data-collection.db.bak.20260502T212737`(着手前の手動 backup、JST ts)
+
+## 主要変更ファイル(直近 = `280ad6c`)
+
+- `src/main/dataCollection/migrations.ts`(新規、`runMigrations()` + migration 001)
+- `src/main/dataCollection/database.ts`(`upsertUploader` / `bumpUploaderVideoCount` / `getCreatorIdByName` 追加、`VideoUpsert.uploader_id` 列、`getStats` 拡張)
+- `src/main/dataCollection/index.ts`(`_collectBatch` の broad-search auto-add を撤廃、uploader 登録に切替)
+- `src/main/dataCollection/diagnose.ts`(Q10-Q14 追加 — uploaders / video link / user_version)
+- `src/main/index.ts`(`runMigrations()` を `app.whenReady` の seed step 前に呼ぶ)
+- `src/common/types.ts`(`uploaderCount` を IPC 戻り値に追加)
+- `src/renderer/src/components/DataCollectionSettings.tsx`(「配信者(seed)」/「切り抜きチャンネル」表示)
 
 ## 既知の地雷・注意点
 
-- **better-sqlite3 のネイティブ rebuild**:`npm install` 後は `npx @electron/rebuild -f -w better-sqlite3` を必ず実行(Electron ABI 不一致防止)。HANDOFF.md セクション 9 に追記済み
-- **build cache 破損の再発防止**:`electron.vite.config.ts` の `external` に `better-sqlite3` + `bindings` 明示ピン。`externalizeDepsPlugin` だけに頼らない
-- **collection.log の過去エラー**:09:29Z〜10:11Z の 7 件はユーザの記憶に残ってるかもしれんが、現状は問題なし(以後 INFO のみで data 蓄積成功してた)
-- **「配信者 325 件」表示の真因はまだ未確定**:仮説は seed 75 + auto-add 250 だが SQL で要確認。修正方針(表示だけ直す or データモデル直す)はユーザ判断待ち
-- **デバッグメニューは一時的**:`fca786a` で投入した「デバッグ」サブメニューは原因確定 + 修正完了後に削除予定。残しておくと配布版にも出てしまう
+- **`creators` の NULL group 2 件**:`creator_group` が NULL の creator が 2 つ存在(本来 nijisanji 20 / streamer 20 のはずが 19 / 19 + NULL 2)。原因不明、別タスクで調査 — Settings UI の手動 add 由来か、name の表記揺れで seed match に失敗してる可能性。Phase 2 集計には影響なし(group filter で is_target=1 → 73 + uncategorised 2 として扱える)
+- **migration の rollback**:現状はコードでは戻せない。`.bak.<timestamp>` を `.db` にリネームで手動復元可。dev サーバを止めてからやる必要あり
+- **デバッグメニュー残置**:`fca786a` で投入した「デバッグ → DB 診断」は引き続き利用可能。Phase 2 着手後に撤去予定
+- **uploader と creator のクロス参照**:配信者本人がアップロードした切り抜きの場合、creator も uploader も同じ人。現状はそれぞれ独立行で持つ(`creators.channel_id` と `uploaders.channel_id` が一致するケースは Phase 2 でクロス分析時に検出)
+- **per-creator 由来の動画が 3 件と少ない**:今までの batch run で per-creator search 経由で取れた video が 3 件しかない、という意味。これは **元 DB の状態**で、broad search 経由が大半だったため。今後 batch を回せば per-creator 由来も増える
 
 ## 次タスク候補
 
-1. **【ユーザ操作】**:メニュー「デバッグ → DB 診断(データ収集)」を押下 → ターミナル出力をチャットに貼り付け
-2. 結果を見て「配信者 325 件」の真因確定 → 修正方針提示(2 案):
-   - **案 A(表示だけ修正)**:`getStats.creatorCount` を `WHERE is_target = 1` に絞る(= 75 表示)。データモデルはそのまま、auto-add 250 件は内部に保持
-   - **案 B(データモデル変更)**:`_collectBatch` で broad search 由来の uploader を `creators` に upsert しない。`channel_id` / `channel_name` は `videos` 内に保持、creators テーブルは seed のみに
-3. ユーザ承認後、修正コミット
-4. デバッグメニュー + diagnose.ts を撤去
-5. **Phase 2(蓄積データ分析)**:そのまま継続
+1. **【ユーザ操作】**:アプリ起動 → Settings → 切り抜きデータ収集 → 「**有効化する**」を押す → 1 週間放置
+2. 1 サイクル後に「DB 診断」を再度実行して、**新規収集分が uploaders に正しく入るか**確認(broad-search 由来なのに creators に入る回帰がないこと)
+3. `creators` の NULL group 2 件の調査(seed 名を確認 + Settings UI で group 補完するか、自動 backfill するか)
+4. **Phase 2(蓄積データ分析)**:
+   - グループ別(にじさんじ / ホロ / vspo / neoporte / ストリーマー)再生数分布
+   - 上位 uploader が伸ばす動画の特徴(タイトルパターン / サムネ)
+   - per-creator × per-uploader のクロス分析
+5. デバッグメニュー + diagnose.ts の最終撤去(Phase 2 着手後)
 
 ## みのる(USER)への報告用
 
-- 「全バッチで失敗」エラー → **既に直っとる**(09:29Z〜10:11Z の時間帯のみ、以降は正常稼働)
-- 真因は **一時的なビルドキャッシュ破損**。原因経路を `electron.vite.config.ts` で明示 external 化して再発防止済み
-- 「動画 347 件 / 配信者 325 件」のデータは **生き残っとる**(エラー停止後の batch で蓄積された分)
-- **次の一手**:メニュー「**デバッグ → DB 診断(データ収集)**」を押して、ターミナルに出る診断ログを貼り付け
-- 押すと creators テーブルの内訳(seed 由来 vs auto-add 由来)が見える → 「配信者 325 件」の真因確定 → 修正方針 2 案 提示 → ユーザ判断
+- データモデル分離 ✅
+  - 配信者(seed): **75 人**(なくならず保持)
+  - 切り抜きチャンネル: **252 個**(新テーブルへ自動移送)
+  - 動画: **347 件**(全部 uploader 紐付け済み、データ消失なし)
+- バックアップ自動生成 + 手動 backup 両方確保
+- UI に「切り抜きチャンネル」表示追加(配信者 75 と分離して見える)
+- **次の一手**:Settings → 切り抜きデータ収集 → 「**有効化する**」を押して 1 週間放置 → Phase 2 着手判断

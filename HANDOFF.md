@@ -120,13 +120,15 @@ jikkyou-cut/
     │   ├── aiSummary.ts       # Anthropic Claude Haiku で区間タイトル生成 + 1-ボタン自動抽出
     │   ├── commentAnalysis/   # コメント分析オーケストレータ + 実装(peakDetection.ts も含む)
     │   └── dataCollection/    # 切り抜き動画データ収集 Phase 1(SQLite + YouTube API + yt-dlp)
-    │       ├── index.ts       # DataCollectionManager(バックグラウンド 1 時間ループ)
-    │       ├── database.ts    # better-sqlite3 ラッパ + スキーマ + upsert + per-key クォータ + creator_group migration
+    │       ├── index.ts       # DataCollectionManager(バックグラウンド 2 時間ループ)
+    │       ├── database.ts    # better-sqlite3 ラッパ + スキーマ + upsert + per-key クォータ + creator_group migration + upsertUploader / bumpUploaderVideoCount / getCreatorIdByName
+    │       ├── migrations.ts  # PRAGMA user_version ベースのマイグレーション(001: creators → uploaders 分離、自動 WAL checkpoint + .bak 生成)
     │       ├── youtubeApi.ts  # search.list / videos.list / channels.list + キーローテーション + クォータ管理
     │       ├── ytDlpExtractor.ts # heatmap + chapters + サムネ + 上位 3 ピーク抽出
     │       ├── searchQueries.ts  # ブロード検索クエリ + per-creator 多角化クエリ(切り抜き / 神回 / 名場面)
-    │       ├── seedCreators.ts # 配信者 40 人 seed + seedCreatorsIfEmpty + resolveCreatorChannelIds
+    │       ├── seedCreators.ts # 配信者 75 人 seed + seedOrUpdateCreators(差分マージ)+ resolveCreatorChannelIds
     │       ├── creatorList.ts # userData/data-collection/creators.json の CRUD(group フィールド対応)
+    │       ├── diagnose.ts    # 一時的な DB 診断(デバッグメニュー、Q1〜Q14)
     │       ├── logger.ts      # ISO 8601 [LEVEL] message 形式の append + console echo
     │       └── logReader.ts   # collection.log の末尾 N 行読み出し + パース
     │       ├── index.ts       # analyze({chat→viewers→scoring})オーケストレータ
@@ -217,7 +219,7 @@ type EditorState = {
 - `aiSummary.{autoExtract, onAutoExtractProgress}` — 1 ボタン全自動。`{videoKey, buckets, windowSec, hasViewerStats, videoDurationSec, targetCount}` を渡すと、Stage 1(`peakDetection.ts` のアルゴリズム)→ Stage 2(Claude Haiku 4.5 で 10 → N に refine、JSON 出力)→ Stage 4(`generateSegmentTitles` 再利用)を順次実行。Stage 2 結果は `userData/comment-analysis/<videoKey>-extractions.json` にキャッシュ。失敗時はスコア順フォールバック + warning。進捗は `{phase: 'detect'|'refine'|'titles', percent}` で 3 段階発火
 - `youtubeApiKeys.{hasKeys, getKeyCount, setKeys, clear}` — YouTube Data API キー BYOK(複数、**最大 50 個**)。`userData/youtubeApiKeys.bin` に DPAPI 暗号化保存。**renderer には件数だけ返し、生キーは戻さない**(Gladia / Anthropic と同パターン)。secureStorage 側に 100KB の defensive cap + Set による dedupe + diagnostic log(件数 / JSON 長 / 書き込みバイト数)あり
 - `creators.{list, add, remove}` — 配信者ターゲットリスト。`userData/data-collection/creators.json` の JSON CRUD。Settings UI から編集 + 手動編集どちらも可能
-- `dataCollection.{getStats, triggerNow, pause, resume, cancelCurrent, isEnabled, setEnabled}` — Phase 1 蓄積パイプラインのコントロール。`getStats` は `{videoCount, creatorCount, quotaUsedToday, isRunning, isPaused, isEnabled, isBatchActive, nextBatchAtSec, lastCollectedAt}` を返す。`isEnabled` は `AppConfig.dataCollectionEnabled` を反映する**永続マスタースイッチ**(再起動を跨ぐ、デフォルト `false`)。`app.whenReady()` の自動開始は `isEnabled === true` の時だけ。`setEnabled(true)` は config 保存 + `start()`、`setEnabled(false)` は config 保存 + `pause()`(進行中バッチ即停止)。`cancelCurrent` は **永続状態を変えずに進行中バッチだけ止める**(`cancelRequested = true` を立てるのみ、規定スケジュールはそのまま続く)。UI 上は「有効化 / 無効化(永続)」「1 回だけ取得(off-cycle 1 サイクル)」「取得を停止(進行中キャンセル)」の 3 ボタンに分離されている
+- `dataCollection.{getStats, triggerNow, pause, resume, cancelCurrent, isEnabled, setEnabled}` — Phase 1 蓄積パイプラインのコントロール。`getStats` は `{videoCount, creatorCount, uploaderCount, quotaUsedToday, isRunning, isPaused, isEnabled, isBatchActive, nextBatchAtSec, lastCollectedAt}` を返す(2026-05-03 11:30: `uploaderCount` 追加 + `creatorCount` を `WHERE is_target = 1` に絞り込み)。`isEnabled` は `AppConfig.dataCollectionEnabled` を反映する**永続マスタースイッチ**(再起動を跨ぐ、デフォルト `false`)。`app.whenReady()` の自動開始は `isEnabled === true` の時だけ。`setEnabled(true)` は config 保存 + `start()`、`setEnabled(false)` は config 保存 + `pause()`(進行中バッチ即停止)。`cancelCurrent` は **永続状態を変えずに進行中バッチだけ止める**(`cancelRequested = true` を立てるのみ、規定スケジュールはそのまま続く)。UI 上は「有効化 / 無効化(永続)」「1 回だけ取得(off-cycle 1 サイクル)」「取得を停止(進行中キャンセル)」の 3 ボタンに分離されている
 - `collectionLog.{read, openInExplorer, getQuotaPerKey}` — 収集ログビューア用。`read(limit)` で末尾 N 行(デフォルト 5000)を `LogEntry[]`(`{timestamp, level, message}`)で返す。`openInExplorer` は `shell.openPath` で OS デフォルトエディタ。`getQuotaPerKey` は per-key の今日の消費量を返す(API 管理画面のキー別バー用)
 
 ---
@@ -303,3 +305,4 @@ type EditorState = {
 - **better-sqlite3 のネイティブモジュール** (2026-05-03 10:30): `node_modules/better-sqlite3/build/Release/better_sqlite3.node` を `bindings` 経由で require。`npm install` 後にネイティブが Node.js ABI のままになることがあるので、**Electron ABI に向けて rebuild する**:`npx @electron/rebuild -f -w better-sqlite3`。`electron.vite.config.ts` の `main.build.rollupOptions.external` に `better-sqlite3` と `bindings` を明示ピン済み(`externalizeDepsPlugin` は package.json の direct deps しか externalize しないため transitive の `bindings` を物理的に守る belt-and-braces)。過去 1 回 build cache が一時的に破損して `Could not dynamically require "<root>/build/better_sqlite3.node"` が batch error を吐き続けた事例あり、現在は再発防止済み。
 - **データ収集はデフォルト無効** (2026-05-03 06:30): `AppConfig.dataCollectionEnabled` が永続マスタースイッチで、デフォルト `false`。アプリ起動時の自動開始はこの flag が `true` の時のみ。ユーザが「API 管理 / 切り抜きデータ収集 → 有効化する」を明示的に押さない限りバックグラウンドで何も走らない設計(検索クエリ戦略未確定でクォータを浪費しないため)。**`isPaused` / `isRunning` はセッション内のモードに過ぎず、再起動を跨ぐ ON/OFF はこの flag を見る**。
 - **配信者リストは差分マージで投入** (2026-05-03 08:30): `seedOrUpdateCreators()` が 75 人(にじ 20 / ホロ 15 / ぶいすぽ 15 / ネオポルテ 5 / ストリーマー 20)を起動時に差分追加する。**既存名は触らず保持**(channelId / 順序保持、null group のみ backfill)、新規名のみ append。ユーザが Settings UI で手動追加 / 削除した結果も尊重。channelId は各バッチ先頭で `searchChannelByName` により未解決のみ解決(no-op fastpath、初回のみ +35 × 100u)。`creators.creator_group` は `'nijisanji' \| 'hololive' \| 'vspo' \| 'neoporte' \| 'streamer' \| null`。per-creator クエリは「切り抜き / 神回 / 名場面」の 3 角化。**サイクル間隔は 2 時間**(75 × 3 = 22.5K/サイクル + 周辺で ~23.75K → 12 サイクル/日 = 285K で 50 キー × 500K/日 予算に余裕)。creator の全 3 クエリで 0 件なら collection.log に警告(neoporte 等の流動箱の表記揺れ検出用)。
+- **creators / uploaders 2 テーブル分離** (2026-05-03 11:30): migration 001 で `creators` を seed 配信者専用(`is_target=1`)に純化、切り抜き投稿チャンネルは新 `uploaders` テーブルへ。`videos.creator_id` は per-creator 検索由来のみ非 null、`videos.uploader_id` は全動画に紐付け。Phase 2 のグループ別集計と「どの切り抜きチャンネルが伸びてる動画を出しとるか」分析を独立に行える。マイグレーションは `src/main/dataCollection/migrations.ts` の `PRAGMA user_version` ベースで冪等、実行前に WAL checkpoint + 自動 `.bak` 生成(`data-collection.db.bak.YYMMDDTHHMMSS`)。**ロールバックしたい場合は dev サーバ停止 → アプリ閉じ → `.bak.<timestamp>` を `.db` にリネームで復元可能**。

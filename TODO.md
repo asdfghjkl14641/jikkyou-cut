@@ -28,8 +28,9 @@
   - [x] **切り抜き候補の自動抽出(ハイブリッド + 1 ボタン全自動)**(Stage 1 algorithm peak detection → Stage 2 AI refine → Stage 4 title generation、ClipSelectView ヘッダの ✨ ボタン + 件数 select 3/4/5 + 3-step 進捗 modal、Stage 2 キャッシュ、フォールバック付き)
   - [x] **データ収集パイプライン Phase 1(蓄積基盤)**(better-sqlite3 + YouTube Data API + yt-dlp で切り抜き動画メタ + heatmap 上位 3 ピーク + chapters + サムネを蓄積。Settings UI に API キー(複数)+ 配信者リスト + ステータス表示。1 時間ごとのバックグラウンド収集、起動 5 秒後にスタート)
   - [x] **配信者 40 人 seed + 検索クエリ多角化**(VTuber 25 + ストリーマー 15、3 クエリ/人、channelId 自動解決、creator_group カラム)
-  - [ ] **次**: ユーザが「有効化する」押してデータ蓄積開始 → 1 週間放置 → 1 万件規模
-  - [ ] データ収集 Phase 2(蓄積データの分析、サムネ + タイトルパターン抽出、グループ別集計)
+  - [x] **uploaders テーブル分離 + creators 純化(migration 001)**(切り抜き投稿者を別テーブル化、Phase 2 のジャンル別集計に備える)
+  - [ ] **次**: ユーザがデータ収集を有効化 → 1 週間放置 → 1 万件規模 → Phase 2 着手判断
+  - [ ] データ収集 Phase 2(蓄積データの分析、サムネ + タイトルパターン抽出、creators × uploaders のクロス分析)
   - [ ] データ収集 Phase 3(分析結果を ClipSelectView の自動抽出にフィードバック)
   - [ ] アイキャッチの実体動画化(FFmpeg で黒画面 + テキスト合成)
   - [ ] 編集画面での clipSegments 適用
@@ -106,6 +107,7 @@
 
 ### 2026-05-02
 
+- データモデル根本修正:uploaders テーブル分離 + creators 純化(`280ad6c`)— 直前診断で確定した「creators 325 = seed 75 + auto-add 切り抜き投稿者 250」を 2 テーブル分離。新 `uploaders` テーブル(channel_id / channel_name UNIQUE / video_count キャッシュ)、`videos.uploader_id` 追加、`migrations.ts` で `PRAGMA user_version` 管理 + WAL checkpoint + .bak 自動生成 + 単一トランザクションで安全に移送。`_collectBatch` の broad-search 由来 `upsertCreator` 経路を撤廃し、`upsertUploader` で uploader 登録 + `getCreatorIdByName` で per-creator hint のみ creator_id 解決。UI は「配信者(seed): 75」「切り抜きチャンネル: 252」を併記。実機検証で creators 325→75 / uploaders 0→252 / videos 347 全件 uploader_id 紐付け / バックアップ 2 個確保 を確認
 - 緊急修正: better-sqlite3 ネイティブモジュール読み込み失敗の再発防止(`5160da8`)— ユーザ実機 `collection.log` で 09:29Z〜10:11Z に 7 件発生していた `Could not dynamically require "<root>/build/better_sqlite3.node" / @rollup/plugin-commonjs` エラーを調査。**10:11Z 以降は INFO のみで自然回復済み**(transient なビルドキャッシュ破損が真因と確定)。`out/` クリーン rebuild + `npx @electron/rebuild -f -w better-sqlite3` で現状の bundle / `.node` を確認し、念のため `electron.vite.config.ts` の `main.build.rollupOptions.external` に `better-sqlite3` と `bindings` を明示ピン(belt-and-braces)。`externalizeDepsPlugin` は direct deps のみ externalize するため transitive の `bindings` が bundled される一瞬があり得るので、それを物理的に防ぐ。なお「動画 347 件 / 配信者 325 件」表示はエラー停止後の正常 batch で蓄積されたデータ
 - データ収集の制御ボタン整理 + npm run dev 必須を CLAUDE.md に明文化(`c54ba71` + `b95240b`)— ボタン名「今すぐ実行」→「1 回だけ取得」リネーム、「取得を停止」ボタン新設(進行中バッチを永続状態を変えずにキャンセル)。Manager に `cancelCurrentBatch()` + `nextBatchAt`(待機時間表示用)+ `isBatchActive`(IPC 公開)。UI ステータス表示も優先度刷新(取得中 → 待機中(次まで N 分)→ 停止中 等の 4 way)。並行で **`npm run start` で古いビルドを掴む事故対策** に CLAUDE.md 冒頭(概要より上)へ「⚠️ アプリ起動時の絶対ルール」セクション追加(✅ `npm run dev` / ✅ `npm run dev:fresh` / ❌ `npm run start` / 古い electron プロセス掃除コマンド)+ package.json に `dev:fresh` script 追加(node -e で out/ を消してから dev、外部依存なし)
 - 配信者リスト 40 → 75 拡張(`cde28b0`)— ユーザ精査最終リストを反映:にじ 20 / ホロ 15 / ぶいすぽ 15(新グループ)/ ネオポルテ 5(新グループ、★ 柊ツルギ含む)/ ストリーマー 20。`CreatorGroup` 型に `'vspo'` / `'neoporte'` 追加。`seedCreatorsIfEmpty` → `seedOrUpdateCreators`(差分マージ)に進化:既存名は触らず channelId / 順序を保持、既存 group が null なら seed の group を backfill(`setCreatorGroupIfNull`)、新規名のみ append。サイクル間隔 1h → 2h(75 × 3 = 22.5K/サイクル相当のクォータ消費を 12 サイクル/日 = 285K/日 で予算余裕)。creator の全 3 クエリで 0 件ならログ警告(neoporte 等の流動箱の表記揺れ検出用)

@@ -29,19 +29,30 @@
 
 ファイル: `userData/data-collection.db`(WAL モード、`synchronous = NORMAL`)
 
-5 テーブル:
+6 テーブル:
 
 | テーブル | 役割 |
 |---|---|
-| `creators` | 配信者(配信者名 / channel_id / is_target / `creator_group`(`'nijisanji'\|'hololive'\|'streamer'\|null`)) |
-| `videos` | 切り抜き動画のメタデータ + 統計 + サムネパス + raw API レスポンス |
+| `creators` | **seed 配信者のみ**(配信者名 / channel_id / `is_target=1` / `creator_group`(`'nijisanji'\|'hololive'\|'vspo'\|'neoporte'\|'streamer'\|null`))。migration 001 で `is_target=0` を全部削除して純化済み |
+| `uploaders` | **切り抜き動画の投稿チャンネル**(channel_id / channel_name UNIQUE / first_seen_at / video_count キャッシュ)。creators とは別テーブルで Phase 2 のクロス分析に対応(2026-05-03 migration 001 で導入) |
+| `videos` | 切り抜き動画のメタデータ + 統計 + サムネパス + raw API レスポンス + `creator_id`(seed 由来時のみ) + `uploader_id`(全動画) |
 | `heatmap_peaks` | 各動画の上位 3 ピーク(start/end/value/chapter_title) |
 | `chapters` | 動画のチャプター(全件、Phase 2 でタイトルパターン分析に使う) |
 | `api_quota_log` | キーごとの日次クォータ消費量(`UNIQUE(api_key_index, date)`) |
 
 主要インデックス:
 - `idx_videos_view ON videos(view_count DESC)` — Phase 2 で「再生数上位」を即引きできるように
-- `idx_videos_creator ON videos(creator_id)` — per-creator 集計用
+- `idx_videos_creator ON videos(creator_id)` — per-creator(seed)集計用
+- `idx_videos_uploader ON videos(uploader_id)` — per-uploader(投稿チャンネル)集計用
+- `idx_uploaders_video_count ON uploaders(video_count DESC)` — top uploader 即引き用
+
+## マイグレーション履歴
+
+| version | 日付 | 内容 |
+|---|---|---|
+| 001 | 2026-05-03 | creators から切り抜き投稿者を `uploaders` テーブルに分離(`is_target=0` の 250 件を移送 + creators から削除)、`videos.uploader_id` 列追加し全動画にバックフィル |
+
+`src/main/dataCollection/migrations.ts` の `runMigrations()` が `PRAGMA user_version` を見て未適用分のみ実行(冪等)。各 migration は単一トランザクション、実行前に `PRAGMA wal_checkpoint(TRUNCATE)` + `.db` ファイルを `.bak.YYMMDDTHHMMSS` にコピー。
 
 ## 検索クエリ戦略
 
