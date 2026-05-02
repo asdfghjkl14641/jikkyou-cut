@@ -8,8 +8,9 @@ import {
 import { hasYoutubeApiKeys } from '../secureStorage';
 import { fetchVideoDetails, parseIsoDuration, refreshKeys, searchVideos } from './youtubeApi';
 import { extractVideoData } from './ytDlpExtractor';
-import { BROAD_QUERIES, SEARCH_DEFAULTS, buildPerCreatorQuery } from './searchQueries';
+import { BROAD_QUERIES, SEARCH_DEFAULTS, buildPerCreatorQueries } from './searchQueries';
 import { loadCreatorList } from './creatorList';
+import { resolveCreatorChannelIds } from './seedCreators';
 import { logError, logInfo, logWarn } from './logger';
 
 // Background data-collection orchestrator. Single instance per main
@@ -116,27 +117,41 @@ class DataCollectionManager {
     const startedAt = Date.now();
     logInfo('batch start');
 
+    // Step 0: backfill missing channelIds for seeded creators. No-op
+    // when everything is already resolved (the helper skips creators
+    // whose channelId is non-null), so steady-state cost is zero.
+    try {
+      const resolved = await resolveCreatorChannelIds();
+      if (resolved > 0) logInfo(`channelId resolution: ${resolved} new`);
+    } catch (err) {
+      logWarn(`channelId resolution failed: ${err instanceof Error ? err.message : String(err)}`);
+    }
+
     // Step 1: search to build a candidate ID pool.
     const candidateIds = new Set<string>();
     const candidateMeta = new Map<string, { creatorName: string | null }>();
 
     // Per-creator queries first — these are the targeted slice the
     // user explicitly cares about, so they get priority budget.
+    // Three angles per creator (切り抜き / 神回 / 名場面) — see
+    // searchQueries.buildPerCreatorQueries for rationale.
     const creators = await loadCreatorList();
     for (const c of creators) {
       if (this.cancelRequested) return;
-      const q = buildPerCreatorQuery(c.name);
-      const items = await searchVideos(q, {
-        maxResults: SEARCH_DEFAULTS.maxResultsPerQuery,
-        order: SEARCH_DEFAULTS.order,
-        regionCode: SEARCH_DEFAULTS.regionCode,
-        relevanceLanguage: SEARCH_DEFAULTS.relevanceLanguage,
-      });
-      logInfo(`search per-creator "${q}" → ${items.length} items`);
-      for (const it of items) {
-        if (!candidateIds.has(it.videoId)) {
-          candidateIds.add(it.videoId);
-          candidateMeta.set(it.videoId, { creatorName: c.name });
+      for (const q of buildPerCreatorQueries(c.name)) {
+        if (this.cancelRequested) return;
+        const items = await searchVideos(q, {
+          maxResults: SEARCH_DEFAULTS.maxResultsPerQuery,
+          order: SEARCH_DEFAULTS.order,
+          regionCode: SEARCH_DEFAULTS.regionCode,
+          relevanceLanguage: SEARCH_DEFAULTS.relevanceLanguage,
+        });
+        logInfo(`search per-creator "${q}" → ${items.length} items`);
+        for (const it of items) {
+          if (!candidateIds.has(it.videoId)) {
+            candidateIds.add(it.videoId);
+            candidateMeta.set(it.videoId, { creatorName: c.name });
+          }
         }
       }
     }

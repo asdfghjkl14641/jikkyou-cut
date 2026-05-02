@@ -20,6 +20,10 @@ CREATE TABLE IF NOT EXISTS creators (
   name TEXT NOT NULL UNIQUE,
   channel_id TEXT,
   is_target INTEGER DEFAULT 0,
+  -- Affiliation tag for analytics: 'nijisanji' | 'hololive' | 'streamer'
+  -- | null. Set on seed; not overwritten on upsert. Column name avoids
+  -- the SQL GROUP reserved word.
+  creator_group TEXT,
   created_at TEXT DEFAULT CURRENT_TIMESTAMP
 );
 
@@ -84,8 +88,19 @@ export function openDb(): Database.Database {
   handle.pragma('journal_mode = WAL');
   handle.pragma('synchronous = NORMAL');
   handle.exec(SCHEMA);
+  migrateSchema(handle);
   db = handle;
   return handle;
+}
+
+// Apply additive migrations for tables that pre-existed before a column
+// was added. SQLite's `ALTER TABLE ADD COLUMN` is idempotent only if we
+// gate on `PRAGMA table_info`.
+function migrateSchema(handle: Database.Database): void {
+  const cols = handle.prepare('PRAGMA table_info(creators)').all() as Array<{ name: string }>;
+  if (!cols.some((c) => c.name === 'creator_group')) {
+    handle.exec('ALTER TABLE creators ADD COLUMN creator_group TEXT');
+  }
 }
 
 export function closeDb(): void {
@@ -102,6 +117,7 @@ export type CreatorRow = {
   name: string;
   channel_id: string | null;
   is_target: number;
+  creator_group: string | null;
   created_at: string;
 };
 
@@ -140,7 +156,12 @@ export type ChapterInsert = {
 
 // ---- Creator helpers -------------------------------------------------------
 
-export function upsertCreator(name: string, channelId: string | null, isTarget: boolean): number {
+export function upsertCreator(
+  name: string,
+  channelId: string | null,
+  isTarget: boolean,
+  group: string | null = null,
+): number {
   const conn = openDb();
   const existing = conn
     .prepare('SELECT id, channel_id, is_target FROM creators WHERE name = ?')
@@ -150,6 +171,9 @@ export function upsertCreator(name: string, channelId: string | null, isTarget: 
       (channelId && existing.channel_id !== channelId) ||
       (isTarget ? 1 : 0) !== existing.is_target
     ) {
+      // Group is set on first insert and intentionally not overwritten
+      // here — a per-video upsert for a random clip uploader shouldn't
+      // wipe the affiliation tag set by the seed step.
       conn
         .prepare('UPDATE creators SET channel_id = COALESCE(?, channel_id), is_target = ? WHERE id = ?')
         .run(channelId, isTarget ? 1 : 0, existing.id);
@@ -157,8 +181,8 @@ export function upsertCreator(name: string, channelId: string | null, isTarget: 
     return existing.id;
   }
   const result = conn
-    .prepare('INSERT INTO creators (name, channel_id, is_target) VALUES (?, ?, ?)')
-    .run(name, channelId, isTarget ? 1 : 0);
+    .prepare('INSERT INTO creators (name, channel_id, is_target, creator_group) VALUES (?, ?, ?, ?)')
+    .run(name, channelId, isTarget ? 1 : 0, group);
   return Number(result.lastInsertRowid);
 }
 

@@ -7,15 +7,26 @@ import path from 'node:path';
 // Settings UI is the canonical entry point.
 //
 // Schema:
-//   { creators: [{ name: string, channelId: string | null }] }
+//   { creators: [{ name: string, channelId: string | null, group: string | null }] }
+//
+// `group` was added 2026-05-03 alongside the seed-40 list. It tags
+// each creator as 'nijisanji' / 'hololive' / 'streamer' so Phase 2
+// analytics can compare across groups. User-added creators (via
+// Settings) get `null` and are still fully functional.
+
+export type CreatorGroup = 'nijisanji' | 'hololive' | 'streamer';
 
 export type CreatorEntry = {
   name: string;
   channelId: string | null;
+  group: CreatorGroup | null;
 };
 
 const filePath = (): string =>
   path.join(app.getPath('userData'), 'data-collection', 'creators.json');
+
+const isCreatorGroup = (s: unknown): s is CreatorGroup =>
+  s === 'nijisanji' || s === 'hololive' || s === 'streamer';
 
 export async function loadCreatorList(): Promise<CreatorEntry[]> {
   try {
@@ -23,12 +34,13 @@ export async function loadCreatorList(): Promise<CreatorEntry[]> {
     const parsed = JSON.parse(raw) as { creators?: unknown };
     if (!Array.isArray(parsed.creators)) return [];
     return parsed.creators
-      .filter((c): c is { name: string; channelId?: string | null } =>
+      .filter((c): c is { name: string; channelId?: string | null; group?: unknown } =>
         c != null && typeof c === 'object' && typeof (c as { name?: unknown }).name === 'string',
       )
       .map((c) => ({
         name: c.name,
         channelId: typeof c.channelId === 'string' ? c.channelId : null,
+        group: isCreatorGroup(c.group) ? c.group : null,
       }));
   } catch {
     return [];
@@ -46,7 +58,11 @@ export async function saveCreatorList(creators: CreatorEntry[]): Promise<void> {
     const name = c.name.trim();
     if (!name || seen.has(name)) continue;
     seen.add(name);
-    cleaned.push({ name, channelId: c.channelId?.trim() || null });
+    cleaned.push({
+      name,
+      channelId: c.channelId?.trim() || null,
+      group: c.group ?? null,
+    });
   }
   await fs.writeFile(p, JSON.stringify({ creators: cleaned }, null, 2), 'utf8');
 }
@@ -54,7 +70,9 @@ export async function saveCreatorList(creators: CreatorEntry[]): Promise<void> {
 export async function addCreator(name: string, channelId: string | null): Promise<void> {
   const list = await loadCreatorList();
   if (list.some((c) => c.name === name.trim())) return;
-  list.push({ name: name.trim(), channelId });
+  // User-added creators have no group tag — analytics treats them as
+  // "uncategorised" until the user manually edits creators.json.
+  list.push({ name: name.trim(), channelId, group: null });
   await saveCreatorList(list);
 }
 

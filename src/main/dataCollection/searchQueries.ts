@@ -31,6 +31,19 @@ export const SEARCH_DEFAULTS = {
   relevanceLanguage: 'ja',
 } as const;
 
-export function buildPerCreatorQuery(creatorName: string): string {
-  return `${creatorName} 切り抜き`;
+// Multi-angle per-creator queries. "切り抜き" alone leaves long-tail
+// gold (神回, 名場面, 伝説回 etc.) on the table — the YouTube algorithm
+// surfaces different videos for each phrase even when they describe
+// the same content. With 50 keys and 500K daily quota, the extra
+// search.list cost is comfortable.
+//
+// Order matters: the first query tends to dominate the candidate pool
+// (we cap each batch at MAX_VIDEOS_PER_BATCH globally), so put the
+// highest-recall phrase first.
+export function buildPerCreatorQueries(creatorName: string): string[] {
+  return [
+    `${creatorName} 切り抜き`,
+    `${creatorName} 神回`,
+    `${creatorName} 名場面`,
+  ];
 }

@@ -305,6 +305,16 @@ app.whenReady().then(async () => {
   registerIpcHandlers();
   createWindow();
 
+  // Seed creators.json (idempotent — only fires when the file is
+  // empty). This must run before the manager touches the list so the
+  // first batch already has the curated 40-creator targeting set.
+  try {
+    const { seedCreatorsIfEmpty } = await import('./dataCollection/seedCreators');
+    await seedCreatorsIfEmpty();
+  } catch (err) {
+    console.warn('[data-collection] seed step failed:', err);
+  }
+
   // Background data-collection. Gated by the persisted master switch
   // so a fresh install does NOT start consuming quota until the user
   // explicitly opts in. The manager itself also no-ops without keys,

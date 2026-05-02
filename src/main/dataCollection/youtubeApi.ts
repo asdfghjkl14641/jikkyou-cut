@@ -176,6 +176,44 @@ export async function searchVideos(
   return items;
 }
 
+// ---- search (channel) -----------------------------------------------------
+// One-shot channel-id resolution by display name. Uses search.list with
+// type=channel — same 100-unit cost as a video search but returns
+// channel rows. Heuristic: take the first hit (relevance order +
+// regionCode JP works well for famous Japanese VTubers and streamers).
+//
+// Caller is expected to dedupe / cache (we run this per creator once
+// at batch start, only when channelId is still null).
+
+type ChannelSearchResp = {
+  items?: Array<{
+    id?: { channelId?: string };
+    snippet?: { title?: string; channelId?: string };
+  }>;
+};
+
+export async function searchChannelByName(
+  name: string,
+): Promise<{ channelId: string; channelTitle: string } | null> {
+  const params = new URLSearchParams({
+    part: 'snippet',
+    type: 'channel',
+    q: name,
+    maxResults: '5',
+    regionCode: 'JP',
+    relevanceLanguage: 'ja',
+  });
+  const json = await callApi<ChannelSearchResp>(`search?${params.toString()}`, COST_SEARCH_LIST);
+  if (!json) return null;
+  for (const it of json.items ?? []) {
+    const cid = it.id?.channelId ?? it.snippet?.channelId;
+    if (cid) {
+      return { channelId: cid, channelTitle: it.snippet?.title ?? '' };
+    }
+  }
+  return null;
+}
+
 // ---- videos.list -----------------------------------------------------------
 
 type VideosApiResp = {
