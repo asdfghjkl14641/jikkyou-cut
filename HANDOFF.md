@@ -216,7 +216,7 @@ type EditorState = {
 - `aiSummary.{autoExtract, onAutoExtractProgress}` — 1 ボタン全自動。`{videoKey, buckets, windowSec, hasViewerStats, videoDurationSec, targetCount}` を渡すと、Stage 1(`peakDetection.ts` のアルゴリズム)→ Stage 2(Claude Haiku 4.5 で 10 → N に refine、JSON 出力)→ Stage 4(`generateSegmentTitles` 再利用)を順次実行。Stage 2 結果は `userData/comment-analysis/<videoKey>-extractions.json` にキャッシュ。失敗時はスコア順フォールバック + warning。進捗は `{phase: 'detect'|'refine'|'titles', percent}` で 3 段階発火
 - `youtubeApiKeys.{hasKeys, getKeyCount, setKeys, clear}` — YouTube Data API キー BYOK(複数、**最大 50 個**)。`userData/youtubeApiKeys.bin` に DPAPI 暗号化保存。**renderer には件数だけ返し、生キーは戻さない**(Gladia / Anthropic と同パターン)。secureStorage 側に 100KB の defensive cap + Set による dedupe + diagnostic log(件数 / JSON 長 / 書き込みバイト数)あり
 - `creators.{list, add, remove}` — 配信者ターゲットリスト。`userData/data-collection/creators.json` の JSON CRUD。Settings UI から編集 + 手動編集どちらも可能
-- `dataCollection.{getStats, triggerNow, pause, resume}` — Phase 1 蓄積パイプラインのコントロール。`getStats` は `{videoCount, creatorCount, quotaUsedToday, isRunning, isPaused, lastCollectedAt}` を返す(`isRunning`/`isPaused` は mutually exclusive、両方 false で idle)。`app.whenReady()` で `dataCollectionManager.start()` を呼ぶが、API キー未設定なら no-op。設定済みなら 5 秒後に最初のバッチ → 1 時間ごとに継続
+- `dataCollection.{getStats, triggerNow, pause, resume, isEnabled, setEnabled}` — Phase 1 蓄積パイプラインのコントロール。`getStats` は `{videoCount, creatorCount, quotaUsedToday, isRunning, isPaused, isEnabled, lastCollectedAt}` を返す(`isRunning`/`isPaused` は mutually exclusive、両方 false で idle)。`isEnabled` は `AppConfig.dataCollectionEnabled` を反映する**永続マスタースイッチ**(再起動を跨ぐ、デフォルト `false`)。`app.whenReady()` の自動開始は `isEnabled === true` の時だけ。`setEnabled(true)` は config 保存 + `start()`、`setEnabled(false)` は config 保存 + `pause()`(進行中バッチ即停止)
 - `collectionLog.{read, openInExplorer, getQuotaPerKey}` — 収集ログビューア用。`read(limit)` で末尾 N 行(デフォルト 5000)を `LogEntry[]`(`{timestamp, level, message}`)で返す。`openInExplorer` は `shell.openPath` で OS デフォルトエディタ。`getQuotaPerKey` は per-key の今日の消費量を返す(API 管理画面のキー別バー用)
 
 ---
@@ -299,3 +299,4 @@ type EditorState = {
 - **Google Fonts**: Google Fonts API から TTF を動的に取得し `userData/fonts` に保存。
 - **プロジェクト保存**: 動画と同じ階層に `<basename>.jcut.json` として自動保存。
 - **Gladia API**: 文字起こしに使用。APIキーは `safeStorage` で保存。
+- **データ収集はデフォルト無効** (2026-05-03 06:30): `AppConfig.dataCollectionEnabled` が永続マスタースイッチで、デフォルト `false`。アプリ起動時の自動開始はこの flag が `true` の時のみ。ユーザが「API 管理 / 切り抜きデータ収集 → 有効化する」を明示的に押さない限りバックグラウンドで何も走らない設計(検索クエリ戦略未確定でクォータを浪費しないため)。**`isPaused` / `isRunning` はセッション内のモードに過ぎず、再起動を跨ぐ ON/OFF はこの flag を見る**。

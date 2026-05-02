@@ -1,89 +1,83 @@
 # 次セッションへの引き継ぎ (NEXT_SESSION_HANDOFF)
 
 ## 凍結時刻
-2026-05-03 05:30 — YouTube API キー保存バグ 3 周目で完治、API 管理画面が本番品質に到達
+2026-05-03 06:30 — データ収集に永続マスタースイッチ追加(デフォルト無効)、ユーザは検索クエリ戦略を詰めるフェーズへ
 
 ## リポジトリ状態
-- HEAD: `e43f275`(chore: API キー保存パスのデバッグログ片付け)
-- Working Tree: clean(コミット時点)
+- HEAD: `2dca5bd`(feat(data-collection): 自動収集に永続マスタースイッチを追加)
+- 直後に docs コミット予定(本ファイル + DECISIONS.md + TODO.md + HANDOFF.md)
+- Working Tree: docs commit 後 clean
 
 ## 直前の状況サマリ
 
-YouTube API キー保存バグを **ログ駆動デバッグ**で完治させた。3 周目にしてようやく「コード読み仮説選択」をやめて「ログ仕込み → ユーザ実機採取 → 真因確定 → 修正」の 2 段階分離を実行。
+API キー保存周りが本番品質に到達(`b04f64d` + `e43f275`)した直後、ユーザが**「これから検索クエリ戦略を詰めるフェーズに入るので、それまで自動収集を止めたい」**と要望。クォータ消費を防ぐため、データ収集に**永続マスタースイッチ**を追加した。
 
-### 真因(ログから 100% 確定)
+### 追加した設計レイヤ
 
-`240dc50` で「編集モード ON 時に既存キーを draft に seed」する修正を入れたが、seed された既存キーは **password input(masked dot 表示)に入るため、ユーザは「空欄だな」と認識して上書きしてしまう**。コードは設計通り動いていたが UX が破綻していた。
+| 軸 | 名前 | 永続性 | 役割 |
+|---|---|---|---|
+| 永続マスタースイッチ | `AppConfig.dataCollectionEnabled` | ✅ 再起動跨ぐ(`config.json`) | デフォルト `false`。アプリ起動時の自動開始 / 有効化時の `start()` 呼出をガード |
+| セッション内モード | `dataCollectionManager.state` (`'idle' \| 'running' \| 'paused'`) | ❌ メモリのみ | 有効状態下で動作中 / 一時停止を制御 |
 
-ユーザログ:
-```
-[YT-DEBUG] useEffect[editing] setDraft seeding with 1 rows
-[YT-DEBUG] input onChange index: 0 valueLength: 0           ← 全消し
-[YT-DEBUG] input onChange index: 0 valueLength: 39          ← 新キー貼り付け
-[YT-DEBUG] handleSave: cleaned.length: 1                    ← 1 個で上書き保存
-```
+「永続的な ON/OFF」と「セッション内の一時停止」を別レイヤにしたのが要点。
 
-`[YT-DEBUG] add-row button clicked` ログが 1 度も出てない = ユーザは「+ キーを追加」を押してなかった。
+### 修正
 
-### 修正(`b04f64d`)
+- `src/common/config.ts` — `AppConfig` に `dataCollectionEnabled: boolean`(default `false`)
+- `src/main/config.ts` — load/save 双方で field を扱う、既存 install フォールバック付き
+- `src/main/index.ts`:
+  - `app.whenReady()` の `dataCollectionManager.start()` を `cfg.dataCollectionEnabled === true` でガード
+  - IPC `dataCollection:isEnabled` / `setEnabled(boolean)` 新設(後者は config 保存 + start/pause)
+  - `dataCollection:getStats` の戻り値に `isEnabled` を追加(UI 反映用)
+- `src/common/types.ts` — `IpcApi.dataCollection` 拡張
+- `src/preload/index.ts` — bridge 追加
+- `src/renderer/src/components/DataCollectionSettings.tsx`:
+  - `Stats` 型に `isEnabled` 追加
+  - ステータス行に「自動収集: 🔴 無効 / 🟢 有効」項目を追加
+  - 状態行のロジック更新(`isEnabled === false` 時は「⚫ 停止中(自動収集無効)」)
+  - メインボタンを「有効化する / 無効化する」(永続トグル、有効化時は `window.confirm` で意図確認)
+  - 「今すぐ実行」ボタンは `isEnabled === false` で disabled、ツールチップ案内
+  - セッション内一時停止 / 再開ボタンは `isEnabled && (isRunning || isPaused)` のとき表示
 
-UI モデル全面刷新:
-- **既存キー**:read-only chip(`AIza••••••••XYZ12` で先頭 6 + 末尾 4 だけ平文、中間 dot)+ × で削除マーク(再押下で取消)。**input ではないので物理的に編集不可**
-- **新規キー**:別セクションの input 行(初期 1 行、`+ 新規行を追加` で増やせる)
-- 保存時 = `(残った既存) + (新規 trim 非空)` を Set で dedupe → IPC `setKeys`
+### 動作
 
-これで既存キーを誤って消す経路がコードレベルで除去された。
+- **デフォルト**:🔴 無効 / 起動時 `[data-collection] auto-start skipped (dataCollectionEnabled=false)` ログ / 何も走らない
+- **「有効化する」を押す**:確認ダイアログ → OK → 🟢 有効 / `start()` 呼出(API キー無ければ no-op) / 5 秒後にバッチ
+- **「無効化する」を押す**:即座に `pause()`(進行中バッチ停止)+ config に `false` 保存 / 再起動後も自動開始しない
+- **再起動**:config の `dataCollectionEnabled` を読んで挙動が決まる
 
-### クリーンアップ(`e43f275`)
+## 動作確認(実機 — ユーザに依頼予定)
 
-検証成功後、`[SS-DEBUG]` / `[IPC-DEBUG]` 系の verbose ログを撤去。`saveYoutubeApiKeys` の **read-back integrity check** だけは残置(成功時無音、ズレた時のみ `console.warn`)— 将来の暗号化 / 書き込みリグレッションを静かに監視する防御層。
+1. **デフォルト状態**:アプリ初回起動 → 「自動収集: 🔴 無効」表示、収集走らんこと
+2. **有効化トグル**:確認ダイアログ → OK → 🟢 有効、収集開始ログ
+3. **無効化トグル**:🔴 無効、進行中バッチ停止
+4. **再起動後の永続化**:有効化したまま再起動 → 自動開始する / 無効化したまま再起動 → 自動開始しない
+5. **「今すぐ実行」**:無効状態では disabled、有効状態では押せる
 
-### 実機検証 ✅
+## 主要変更ファイル(直近 = `2dca5bd`)
 
-ユーザ確認済み:既存 1 個保存済み → API 管理 → キー一覧を編集 → 新キー貼り付け → 保存(合計 2 個) → 再度開いて 2 個出ている。
-
----
-
-## 1 つ前の前提(変更前の文脈)
-
-`5298725` で `MAX_YT_KEYS=10 → 50` 化。`240dc50` で `getKeys()` IPC 新設 + `useEffect[editing]` で既存キーを draft に seed。ただし password input に seed したことが UX バグの真因になり、3 周目の `b04f64d` で UI モデルを刷新した。
-
-## 1 つ前の前提(更に前)
-
-`ead5db5` で API 管理モーダルを新設 → `662be56` で全画面フェーズ swap に変更。データ収集 1 週間放置の前段階整備。
-
----
-
-## 主要変更ファイル(直近)
-
-### Frontend
-- `src/renderer/src/components/ApiManagementView.tsx` — `YoutubeKeysSection` を全面リライト(existing chips + new input rows モデル)
-- `src/renderer/src/components/ApiManagementView.module.css` — `.existingKeyList` / `.existingKeyRow` / `.existingKeyValue` / `.existingKeyRowRemoved` / `.newKeySection` / `.newKeyHeader`
-
-### Backend
-- `src/main/secureStorage.ts` — `saveYoutubeApiKeys` に read-back integrity check 残置(防御層)。verbose ログは撤去
-- `src/main/index.ts` — `youtubeApiKeys:*` IPC ハンドラから verbose ログ撤去
+- `src/common/config.ts`、`src/common/types.ts`
+- `src/main/config.ts`、`src/main/index.ts`
+- `src/preload/index.ts`
+- `src/renderer/src/components/DataCollectionSettings.tsx`
 
 ## 既知の地雷・注意点
 
-- **`youtubeApiKeys.getKeys` は plaintext を renderer に返す**:Gladia / Anthropic と異なる方針。multi-key editor の UX で既存キー識別が必要なため deliberate な区別。`types.ts` のコメント参照
-- **read-back integrity check は無音動作**:ズレた時だけ警告ログ。本番運用で警告が出たら DPAPI / safeStorage / fs.writeFile 周りを疑う
-- **既存キーの masked プレビュー**:先頭 6 + 末尾 4 + 中間 dot。スクショに撮られても秘密は漏れない設計だが、12 文字未満のキーは全部 dot になる(YouTube キーは 39 文字で問題なし)
-- **collection.log のローテーションなし**:append-only。長期運用前にローテ仕掛けを検討
+- **`saveYoutubeApiKeys` の read-back integrity check** は引き続き残置(成功時無音、ズレた時のみ `console.warn`)— 防御層
+- **既存 install では `dataCollectionEnabled` field が無い** → ロード時 `false` フォールバック → アップグレード時も即収集が走らない安全な初期値
+- **永続マスタースイッチを ON にしても API キーが無ければ何も起きない**:`dataCollectionManager.start()` 内の `hasYoutubeApiKeys()` チェックが残っているため。UI には「未起動(API キー未登録)」を見せる
 
-## 次タスク候補
+## 次タスク候補(ユーザ進行中 + 次セッション候補)
 
-1. **データ収集を 1 週間放置で 1 万件蓄積**(本来の目的)
-2. ログを CollectionLogViewer で時々確認(ERROR 赤色頻発なら原因特定)
-3. **Phase 2(蓄積データ分析)**
-4. アイキャッチの実体動画化(FFmpeg)
-5. 編集画面 (`edit` フェーズ) で `clipSegments` を実際の動画範囲絞り込みに使う
-6. collection.log のローテーション(本番運用前)
+1. **【ユーザ側】検索クエリ戦略を詰める** — 別タスクで指示が来る
+2. データ収集の検索クエリを変更したいタイミングで `BROAD_QUERIES` (`src/main/dataCollection/searchQueries.ts`) を更新
+3. クエリ戦略確定 → ユーザが「有効化する」を押して 1 週間放置 → 蓄積データを Phase 2 で分析
+4. 並行候補:アイキャッチの実体動画化(FFmpeg)、編集画面で `clipSegments` を実際の動画範囲絞り込みに使う
 
 ## みのる(USER)への報告用
 
-- YouTube API キー保存バグ完治 ✅(3 周目でログ駆動デバッグで真因特定)
-- 既存キーは read-only chip 表示 + × で削除マーク。input じゃないので誤って消すことが物理的に不能
-- 新規キーは別セクションの input 欄に貼り付け → 「保存(合計 N 個)」で既存と新規が併合
-- 残置ログ:read-back 整合性チェック(無音動作、壊れた時だけ警告)
-- データ収集放置の準備完了
+- データ収集に **永続マスタースイッチ** 追加 ✅
+- API キー保存と独立した「**有効化する / 無効化する**」ボタンが「切り抜きデータ収集」セクションに出現
+- デフォルトは 🔴 無効 / 「今すぐ実行」も無効状態では押せない
+- 検索クエリ戦略が決まったら **手動で「有効化する」を押す** 運用
+- 確認ダイアログでクォータ消費が始まることを明示する

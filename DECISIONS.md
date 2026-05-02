@@ -15,6 +15,20 @@
 
 ---
 
+## 2026-05-03 06:30 - データ収集の自動開始を永続フラグで制御(デフォルト無効)
+
+- 誰が: Claude Code
+- 何を: `AppConfig` に `dataCollectionEnabled: boolean`(デフォルト `false`)を追加、起動時自動開始の条件に組み込み、UI に永続マスタートグル追加
+- 理由: API キー保存周りが本番品質に到達したが、ユーザがこれから「どういう検索クエリで集めるか」戦略を詰めるフェーズに入る。クエリ未確定のまま自動収集が走ると無駄なクォータ消費が始まるため、**明示的な opt-in を要求**する設計に
+- レイヤ整理:
+  - `dataCollectionEnabled` = **永続マスタースイッチ**(再起動を跨ぐ、`config.json` に保存)
+  - `isPaused` / `isRunning` = **セッション内のモード**(有効状態下での一時停止 / 稼働)
+- IPC 追加:`dataCollection.isEnabled` / `setEnabled(boolean)`。`setEnabled(true)` は config 保存 + `start()`、`setEnabled(false)` は config 保存 + `pause()`(進行中バッチを即停止)
+- UI:`DataCollectionSettings` のステータス行に「自動収集: 🔴 無効 / 🟢 有効」項目、メインボタンを「有効化する / 無効化する」(有効化時は確認ダイアログ)に。「今すぐ実行」は `isEnabled === false` で disabled。セッション内の一時停止 / 再開ボタンは有効状態下のみ表示
+- 影響: src/common/config.ts(AppConfig 拡張)、src/common/types.ts(IpcApi 拡張)、src/main/config.ts(load/save 追加)、src/main/index.ts(起動分岐 + IPC ハンドラ)、src/preload/index.ts(bridge 追加)、src/renderer/src/components/DataCollectionSettings.tsx(UI 改修)
+- 既存 install 向けにロード時 `false` フォールバック → アップグレード時も即収集が走らない安全な初期値
+- コミット: `2dca5bd`
+
 ## 2026-05-03 05:30 - YouTube API キー保存バグ 真因特定 + 完治(3 周目)
 
 - 誰が: Claude Code
