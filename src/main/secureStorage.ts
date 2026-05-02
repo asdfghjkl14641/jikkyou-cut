@@ -70,3 +70,42 @@ export const saveAnthropicSecret = (value: string) => saveAt(anthropicPath(), va
 export const loadAnthropicSecret = () => loadAt(anthropicPath());
 export const deleteAnthropicSecret = () => deleteAt(anthropicPath());
 export const hasAnthropicSecret = () => existsAt(anthropicPath());
+
+// ---- YouTube Data API (multi-key for quota rotation) ----------------------
+// Stored as a single ciphertext blob containing the JSON-encoded array.
+// We don't encrypt each key separately because the user typically rotates
+// the whole set together (paste 10 keys, save, done).
+const youtubeKeysPath = () => path.join(app.getPath('userData'), 'youtubeApiKeys.bin');
+
+export async function saveYoutubeApiKeys(keys: string[]): Promise<void> {
+  const cleaned = keys.map((k) => k.trim()).filter((k) => k.length > 0);
+  if (cleaned.length === 0) {
+    await deleteAt(youtubeKeysPath());
+    return;
+  }
+  await saveAt(youtubeKeysPath(), JSON.stringify(cleaned));
+}
+
+export async function loadYoutubeApiKeys(): Promise<string[]> {
+  const raw = await loadAt(youtubeKeysPath());
+  if (!raw) return [];
+  try {
+    const parsed = JSON.parse(raw) as unknown;
+    if (!Array.isArray(parsed)) return [];
+    return parsed.filter((k): k is string => typeof k === 'string' && k.length > 0);
+  } catch {
+    return [];
+  }
+}
+
+export async function clearYoutubeApiKeys(): Promise<void> {
+  await deleteAt(youtubeKeysPath());
+}
+
+export async function hasYoutubeApiKeys(): Promise<boolean> {
+  return existsAt(youtubeKeysPath());
+}
+
+export async function countYoutubeApiKeys(): Promise<number> {
+  return (await loadYoutubeApiKeys()).length;
+}

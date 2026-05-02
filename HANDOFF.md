@@ -45,6 +45,7 @@ Electron + React + TypeScript 製。**現在は配布前の "自分用ツール"
 - **操作感改善 + 区間バー右クリックメニュー**: 完了 (左クリック即時シーク + ホバー圧縮 + コメント行コンパクト化 + SegmentContextMenu)
 - **AI タイトル要約**: 完了 (Anthropic BYOK、Claude Haiku 4.5、3 並列 + キャッシュ、Settings UI と ClipSegmentsList ボタン)
 - **切り抜き候補の自動抽出**: 完了 (アルゴリズム peak 検出 + AI 精査 + タイトル生成を 1 ボタンで一気通貫、ClipSelectView ヘッダの ✨ ボタン)
+- **データ収集パイプライン Phase 1**: 完了 (better-sqlite3 + YouTube Data API + yt-dlp で切り抜き動画蓄積、Settings UI、1 時間ごとバックグラウンド収集)
 
 ### 次フェーズ
 - **進行中**: コメント分析画面 (バックエンド実装待ち) — 詳細は `docs/COMMENT_ANALYSIS_DESIGN.md`
@@ -116,7 +117,14 @@ jikkyou-cut/
     │   ├── subtitleSettings.ts # subtitle-settings.json load/save
     │   ├── urlDownload.ts     # yt-dlp 呼び出し(URL DL)
     │   ├── aiSummary.ts       # Anthropic Claude Haiku で区間タイトル生成 + 1-ボタン自動抽出
-    │   └── commentAnalysis/   # コメント分析オーケストレータ + 実装(peakDetection.ts も含む)
+    │   ├── commentAnalysis/   # コメント分析オーケストレータ + 実装(peakDetection.ts も含む)
+    │   └── dataCollection/    # 切り抜き動画データ収集 Phase 1(SQLite + YouTube API + yt-dlp)
+    │       ├── index.ts       # DataCollectionManager(バックグラウンド 1 時間ループ)
+    │       ├── database.ts    # better-sqlite3 ラッパ + スキーマ + upsert
+    │       ├── youtubeApi.ts  # search.list / videos.list + キーローテーション + クォータ管理
+    │       ├── ytDlpExtractor.ts # heatmap + chapters + サムネ + 上位 3 ピーク抽出
+    │       ├── searchQueries.ts  # ブロード検索クエリ + per-creator クエリ生成
+    │       └── creatorList.ts # userData/data-collection/creators.json の CRUD
     │       ├── index.ts       # analyze({chat→viewers→scoring})オーケストレータ
     │       ├── chatReplay.ts  # yt-dlp で live_chat / rechat を取得 + パース
     │       ├── viewerStats.ts # playboard.co スクレイピング(ヒューリスティック)
@@ -200,6 +208,9 @@ type EditorState = {
 - `hasAnthropicApiKey` / `setAnthropicApiKey` / `clearAnthropicApiKey` / `validateAnthropicApiKey` — Gladia キーと並列の BYOK スロット。`safeStorage`(Windows DPAPI)で `userData/anthropicKey.bin` に暗号化保存。検証は Anthropic API への 1-token ping で実施
 - `aiSummary.{generate, cancel, onProgress}` — `clipSegments[]` の各区間に対して Claude Haiku 4.5 でタイトル生成。3 並列 + 429/5xx で指数バックオフ + per-request 30 秒タイムアウト。結果は `userData/comment-analysis/<videoKey>-summaries.json` にキャッシュ(キー = `${start}-${end}-${msgCount}` で 2 桁丸め)。`onProgress` は `done/total` を発火、UI は ClipSegmentsList の進捗ラベルで表示
 - `aiSummary.{autoExtract, onAutoExtractProgress}` — 1 ボタン全自動。`{videoKey, buckets, windowSec, hasViewerStats, videoDurationSec, targetCount}` を渡すと、Stage 1(`peakDetection.ts` のアルゴリズム)→ Stage 2(Claude Haiku 4.5 で 10 → N に refine、JSON 出力)→ Stage 4(`generateSegmentTitles` 再利用)を順次実行。Stage 2 結果は `userData/comment-analysis/<videoKey>-extractions.json` にキャッシュ。失敗時はスコア順フォールバック + warning。進捗は `{phase: 'detect'|'refine'|'titles', percent}` で 3 段階発火
+- `youtubeApiKeys.{hasKeys, getKeyCount, setKeys, clear}` — YouTube Data API キー BYOK(複数、最大 10 個)。`userData/youtubeApiKeys.bin` に DPAPI 暗号化保存。**renderer には件数だけ返し、生キーは戻さない**(Gladia / Anthropic と同パターン)
+- `creators.{list, add, remove}` — 配信者ターゲットリスト。`userData/data-collection/creators.json` の JSON CRUD。Settings UI から編集 + 手動編集どちらも可能
+- `dataCollection.{getStats, triggerNow, pause, resume}` — Phase 1 蓄積パイプラインのコントロール。`getStats` は `{videoCount, creatorCount, quotaUsedToday, isRunning, lastCollectedAt}` を返す。`app.whenReady()` で `dataCollectionManager.start()` を呼ぶが、API キー未設定なら no-op。設定済みなら 5 秒後に最初のバッチ → 1 時間ごとに継続
 
 ---
 

@@ -494,4 +494,31 @@ export type IpcApi = {
     autoExtract: (args: AutoExtractStartArgs) => Promise<AutoExtractResult>;
     onAutoExtractProgress: (cb: (p: AutoExtractProgress) => void) => () => void;
   };
+
+  // Background data-collection pipeline (Phase 1 — accumulation only).
+  // The renderer reads stats / triggers manual runs / pauses; it never
+  // sees raw API keys.
+  dataCollection: {
+    getStats: () => Promise<{
+      videoCount: number;
+      creatorCount: number;
+      quotaUsedToday: number;
+      isRunning: boolean;
+      lastCollectedAt: string | null;
+    }>;
+    triggerNow: () => Promise<void>;
+    pause: () => Promise<void>;
+    resume: () => Promise<void>;
+  };
+  youtubeApiKeys: {
+    hasKeys: () => Promise<boolean>;
+    getKeyCount: () => Promise<number>;
+    setKeys: (keys: string[]) => Promise<void>;
+    clear: () => Promise<void>;
+  };
+  creators: {
+    list: () => Promise<Array<{ name: string; channelId: string | null }>>;
+    add: (name: string, channelId: string | null) => Promise<void>;
+    remove: (name: string) => Promise<void>;
+  };
 };

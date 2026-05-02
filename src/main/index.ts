@@ -14,6 +14,8 @@ import * as subtitleSettings from './subtitleSettings';
 import * as urlDownload from './urlDownload';
 import * as commentAnalysis from './commentAnalysis';
 import * as aiSummary from './aiSummary';
+import { dataCollectionManager } from './dataCollection';
+import * as creatorList from './dataCollection/creatorList';
 import type { AppConfig } from '../common/config';
 import type {
   CommentAnalysisStartArgs,
@@ -223,6 +225,28 @@ function registerIpcHandlers() {
   );
   ipcMain.handle('aiSummary:cancel', () => aiSummary.cancelAll());
 
+  // YouTube Data API key BYOK (multi-slot for quota rotation).
+  ipcMain.handle('youtubeApiKeys:hasKeys', () => secureStorage.hasYoutubeApiKeys());
+  ipcMain.handle('youtubeApiKeys:getKeyCount', () => secureStorage.countYoutubeApiKeys());
+  ipcMain.handle('youtubeApiKeys:setKeys', async (_e, keys: string[]) => {
+    if (!Array.isArray(keys)) throw new Error('keys must be string[]');
+    await secureStorage.saveYoutubeApiKeys(keys);
+  });
+  ipcMain.handle('youtubeApiKeys:clear', () => secureStorage.clearYoutubeApiKeys());
+
+  // Creator targeting list (per-user JSON, no encryption).
+  ipcMain.handle('creators:list', () => creatorList.loadCreatorList());
+  ipcMain.handle('creators:add', (_e, name: string, channelId: string | null) =>
+    creatorList.addCreator(name, channelId),
+  );
+  ipcMain.handle('creators:remove', (_e, name: string) => creatorList.removeCreator(name));
+
+  // Data-collection manager (background pipeline).
+  ipcMain.handle('dataCollection:getStats', () => dataCollectionManager.getStatsSnapshot());
+  ipcMain.handle('dataCollection:triggerNow', () => dataCollectionManager.triggerNow());
+  ipcMain.handle('dataCollection:pause', () => dataCollectionManager.pause());
+  ipcMain.handle('dataCollection:resume', () => dataCollectionManager.resume());
+
   // 1-button auto-extract: peak detection → AI refine → title generation.
   // Owns its own progress channel ('aiSummary:autoExtractProgress') so the
   // 3-phase progress bar in ClipSelectView doesn't get cross-talk from
@@ -243,6 +267,12 @@ app.whenReady().then(() => {
   buildMenu(() => mainWindow);
   registerIpcHandlers();
   createWindow();
+
+  // Background data-collection. start() is a no-op if no API keys are
+  // configured, so it's safe to call unconditionally. The manager
+  // delays the first batch by ~5 s internally so it doesn't compete
+  // with window-open / IPC-handler-registration / etc.
+  void dataCollectionManager.start();
 
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow();

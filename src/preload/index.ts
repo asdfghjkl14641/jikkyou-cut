@@ -150,6 +150,26 @@ const api: IpcApi = {
       };
     },
   },
+
+  dataCollection: {
+    getStats: () => ipcRenderer.invoke('dataCollection:getStats'),
+    triggerNow: () => ipcRenderer.invoke('dataCollection:triggerNow'),
+    pause: () => ipcRenderer.invoke('dataCollection:pause'),
+    resume: () => ipcRenderer.invoke('dataCollection:resume'),
+  },
+
+  youtubeApiKeys: {
+    hasKeys: () => ipcRenderer.invoke('youtubeApiKeys:hasKeys'),
+    getKeyCount: () => ipcRenderer.invoke('youtubeApiKeys:getKeyCount'),
+    setKeys: (keys) => ipcRenderer.invoke('youtubeApiKeys:setKeys', keys),
+    clear: () => ipcRenderer.invoke('youtubeApiKeys:clear'),
+  },
+
+  creators: {
+    list: () => ipcRenderer.invoke('creators:list'),
+    add: (name, channelId) => ipcRenderer.invoke('creators:add', name, channelId),
+    remove: (name) => ipcRenderer.invoke('creators:remove', name),
+  },
 };
 
 contextBridge.exposeInMainWorld('api', api);

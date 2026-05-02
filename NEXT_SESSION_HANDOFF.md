@@ -1,127 +1,135 @@
 # 次セッションへの引き継ぎ (NEXT_SESSION_HANDOFF)
 
 ## 凍結時刻
-2026-05-02 22:30
+2026-05-02 23:30 — データ収集パイプライン Phase 1 完成、蓄積期間に入る前
 
 ## リポジトリ状態
-- HEAD: 直近コミット直後(切り抜き候補の自動抽出)
+- HEAD: 直近コミット直後(データ収集 Phase 1)
 - Working Tree: clean
 
 ## 直前の状況サマリ
 
-ユーザ要望「波形見ても切り抜きどこか分からん。ボタン 1 つで『ここどう?』を 3-5 個提案してくれる機能が欲しい」に応えて、**ハイブリッド方式の自動抽出**を実装。
+ユーザの長期構想「YouTube で実際に伸びとる切り抜き動画から、配信者ごとの伸びパターンを学習して自動抽出を強化したい」に対し、**Phase 1: データ蓄積基盤** を実装。
 
 ### 構成
 
-ClipSelectView ヘッダの「✨ 自動で切り抜き候補を抽出」ボタン → 3 段階パイプライン:
+`src/main/dataCollection/` に 6 ファイル新設:
 
-1. **Stage 1: アルゴリズム peak 検出**(`src/main/commentAnalysis/peakDetection.ts` 新規)
-   - rolling-score を全 window-start 位置で計算
-   - ローカル極大値(±W/2 以内で最大)
-   - score≥0.30 + 動画両端 30 秒バッファ + 隣接 W 間隔 dedup でフィルタ
-   - 上位 10 個を返却(各候補に window 内の messages を結合)
+| ファイル | 役割 |
+|---|---|
+| `database.ts` | better-sqlite3 ベース。WAL モード、5 テーブル(creators/videos/heatmap_peaks/chapters/api_quota_log)、トランザクション upsert |
+| `youtubeApi.ts` | search.list + videos.list、キーローテーション、`api_quota_log` で日次クォータ管理 |
+| `ytDlpExtractor.ts` | yt-dlp で heatmap + chapters + サムネ取得、`pickTopPeaks(spacing=30s)` で上位 3 ピーク + chapter title 紐付け |
+| `searchQueries.ts` | 11 個のブロード検索クエリ + per-creator クエリビルダ |
+| `creatorList.ts` | `userData/data-collection/creators.json` の CRUD |
+| `index.ts` | DataCollectionManager(自動 5 秒後起動 + 1 時間ループ + manual trigger) |
 
-2. **Stage 2: AI 精査**(`refineCandidatesWithAI` in aiSummary.ts)
-   - 候補 10 個を Claude Haiku 4.5 に投げて N 個に絞り込み
-   - 選定基準:起承転結 / ネタバレ性 / 反応の質 / 独立性
-   - per-author dedup(2 件まで)+ 30 件均等サンプリングで prompt 軽量化
-   - JSON 出力 → ±0.1 秒で startSec/endSec マッチングしてバリデート
-   - パース失敗 / API エラー / 0 件成功時は **スコア順上位 N にフォールバック**(警告 toast 付き)
-   - キャッシュ:`userData/comment-analysis/<videoKey>-extractions.json`、key = `t${targetCount}-${start}-${end}-${msgLen}|...`
+`secureStorage.ts` に YouTube API キー(複数、BYOK)スロット追加。`userData/youtubeApiKeys.bin` に DPAPI 暗号化保存、最大 10 個。
 
-3. **Stage 4: タイトル生成**(既存の `generateSegmentTitles` 再利用)
-   - 各 refined candidate の messages を渡して 3 並列でタイトル生成
-   - Stage 2 の `predictedTitle` は fallback、Stage 4 結果が「正式」
+`SettingsDialog` に 3 つ目のセクション(`DataCollectionSettings.tsx` 新設):
+- ステータスパネル(動画数 / 配信者数 / 本日のクォータ / 状態 / 最終収集)— 5 秒間隔で polling
+- API キー multi-input(各 password、最大 10 行)+ 「全て保存」「登録済みを全削除」
+- 配信者タグ chip 一覧 + Enter で追加 + ✕ で削除
+- 「今すぐ実行」「一時停止/再開」ボタン
 
 ### IPC 拡張
 
-- `aiSummary.autoExtract(args)` → `Promise<AutoExtractResult>`
-- `aiSummary.onAutoExtractProgress(cb)` → 進捗(`{phase: 'detect'|'refine'|'titles', percent}`)を 3 段階発火
-- 既存の `aiSummary.generate` の進捗チャネルとは別経路(cross-talk 防止)
-
-### UI
-
-ClipSelectView ヘッダ:
-```
-[戻る]  [3個 ▼ ✨自動で切り抜き候補を抽出]  [この区間を編集 (N)]
+```ts
+dataCollection.{getStats, triggerNow, pause, resume}
+youtubeApiKeys.{hasKeys, getKeyCount, setKeys, clear}
+creators.{list, add, remove}
 ```
 
-- **件数 select**(3/4/5、デフォルト 3、Sparkles ボタンの隣)
-- **ボタン disabled 条件**:
-  - !hasAnthropicApiKey(設定画面で登録案内 tooltip)
-  - analysisState !== 'ready'(コメント分析未完了)
-  - clipSegments.length >= 5(警告 tooltip:「クリアしてから実行」)
-- **進捗 modal**:z-index 1000、3 step プログレスバー(検出 → 精査 → タイトル)+ 現在 phase ラベル + キャンセルボタン(`aiSummary.cancel()` を呼ぶ)
-- **エラー表示**:同 modal 内で「閉じる」ボタン付き
+renderer には件数だけ返し、生キーは戻さない方針(Gladia / Anthropic と同じ)。
 
-### 既存の「AI でタイトル生成」ボタン(ClipSegmentsList)は温存
+### 起動シーケンス
 
-手動で区間追加した後にタイトルだけ AI に頼む用途で残す価値あり。新ボタンと役割分担:
+`app.whenReady()` で `void dataCollectionManager.start()`。API キー未設定なら no-op で静かに skip。設定済みなら 5 秒後に最初のバッチ → 1 時間ごとに継続。
 
-| ボタン | 場面 |
-|---|---|
-| ✨ 自動抽出(ヘッダ) | 何もない状態から AI に全部おまかせ |
-| AI でタイトル生成(リスト) | 自分で区間追加した後にタイトルだけ |
+### 検証(サンドボックスで取れた範囲)
 
-### サンドボックス smoke test
+- ✅ `better-sqlite3` を `npx electron-rebuild -f -w better-sqlite3` で Electron 33 ABI(NODE_MODULE_VERSION 130)に rebuild。Node v24 (ABI 137) からは load 失敗するが、これは rebuild が正しく Electron ABI に向いた証拠
+- ✅ `yt-dlp --print %(heatmap)j` の出力形式を Rick Roll URL で確認、`[{start_time, end_time, value}]` 形状(100 ポイント)を確認
+- ✅ 型チェック + build 全部 clean
+- ❌ 実 API 呼び出しは検証不可(API キー未保有)。1 時間放置 → 件数確認はユーザ環境で必要
 
-合成 1 時間動画 + 5 個の gaussian peak(うち 1 つはエッジ端 `t=3580`)で算法を検証。結果:エッジ端 peak が 30 秒バッファで正しく filter、残り 4 個が score 順にピックされ、合成 centre から ±5-10s 以内で着地。
+## ⚠️ 実機検証が必要
+
+サンドボックスでは API キーがないので、Phase 1 の本懐(1 週間で 1 万件蓄積)は完全に未検証。
+
+### 次セッション最初に走らせるべき検証
+
+1. **`npm install` が再実行された場合は `npx electron-rebuild -f -w better-sqlite3` が必要**(native module のバインディング rebuild)
+2. **アプリ起動 → Settings → 切り抜きデータ収集セクションを開く** → API キー欄に Google Cloud Console で発行した YouTube Data API v3 キーを 1〜10 個入力 → 「全て保存」
+3. **配信者リスト** に 3 人ほど登録(例: 葛葉 / 壱百満天原サロメ / 不破湊)
+4. **「今すぐ実行」ボタンを押す** → ターミナル(`npm run dev` のコンソール)で:
+   - `[data-collection] batch start`
+   - `[data-collection] candidates=N, new=M`
+   - `[data-collection] batch done in Xs — saved=Y, failures=Z`
+   が出るか確認
+5. **5 分待ってステータスパネルの動画数・クォータ消費を確認**
+6. **DB 直接確認**(任意):
+   ```sh
+   # %APPDATA%/jikkyou-cut/data-collection.db を sqlite3 で開く
+   SELECT name, COUNT(v.id) AS n FROM creators c LEFT JOIN videos v ON v.creator_id=c.id GROUP BY c.id ORDER BY n DESC;
+   ```
+   特定配信者ターゲットが効いてれば、その配信者の件数が多くなる
+7. **サムネファイル**:`%APPDATA%/jikkyou-cut/data-collection/thumbnails/<videoId>.jpg` が並んでるはず
+8. **1 時間放置** → 動画数が 200 程度増えるか確認(MAX 200/バッチ)
 
 ## 主要変更ファイル
 
-- `src/common/types.ts` — `AutoExtractStartArgs/Progress/Result` 追加 + `IpcApi.aiSummary` 拡張
-- `src/main/commentAnalysis/peakDetection.ts`(新規) — Stage 1 アルゴリズム
-- `src/main/aiSummary.ts` — `callAnthropicRaw` 切り出し / `refineCandidatesWithAI` / `autoExtractClipCandidates` / extractions cache
-- `src/main/index.ts` — `aiSummary:autoExtract` IPC ハンドラ
-- `src/preload/index.ts` — `aiSummary.autoExtract` + `onAutoExtractProgress`
-- `src/renderer/src/components/ClipSelectView.{tsx,module.css}` — ヘッダボタン + count select + 進捗 modal
+### Backend(新規)
+- `src/main/dataCollection/database.ts`(308 行)
+- `src/main/dataCollection/youtubeApi.ts`(186 行)
+- `src/main/dataCollection/ytDlpExtractor.ts`(170 行)
+- `src/main/dataCollection/searchQueries.ts`(33 行)
+- `src/main/dataCollection/creatorList.ts`(58 行)
+- `src/main/dataCollection/index.ts`(216 行)
 
-## ⚠️ 既知の不具合(次セッション最優先)
+### Backend(拡張)
+- `src/main/secureStorage.ts` — YouTube キー multi-slot
+- `src/main/index.ts` — IPC ハンドラ + auto-start
+- `src/preload/index.ts` — 3 つの新 namespace
 
-ユーザ報告(2026-05-02 22:35):
-> シークバーにカーソルを合わせた時に、カーソルにラインが合ってない
+### Frontend
+- `src/renderer/src/components/DataCollectionSettings.tsx`(新規、326 行)
+- `src/renderer/src/components/SettingsDialog.tsx` — 3 セクション目に組み込み
+- `src/common/types.ts` — IpcApi 拡張
 
-`CommentAnalysisGraph.tsx` のホバーライン(`.hoverLine`)が **マウスカーソルの実 x ではなく、最近接サンプルの window-centre x にスナップ** している。修正方針:
-- ホバーライン位置 = マウス x(`e.clientX - rect.left`)
-- ツールチップ内の数値表示 = サンプル(=window 中心の bucket)由来 のままで OK
-- `setHoverPos({ sample, x: <マウス x>, y: ... })` に変えるだけで直るはず
+### Docs
+- `docs/DATA_COLLECTION_DESIGN.md`(新規)
+- `IDEAS.md` — Phase 1/2/3 ロードマップを追加
+- `DECISIONS.md` / `TODO.md` / `HANDOFF.md` 更新
 
-`CommentAnalysisGraph.tsx` の `handleMouseMove` の中で `(sampleCentre / durationSec) * rect.width` を計算してる箇所を `e.clientX - rect.left` に置き換える。
-
-## 最初のアクション順
-
-1. **ホバーライン位置修正**(上記、優先度高)
-2. **実機検証**(本セッションの自動抽出機能):
-   - VTuber 雑談配信 / ゲーム実況で 3-5 個抽出 → 主観評価 5 点満点
-   - 同じ動画で 3 回実行して安定性確認(ランダム性高すぎないか)
-   - Stage 各所の所要時間計測(検出 → 精査 → タイトル)
-   - キー未設定 / ネット切断 / 既存区間 5 個以上 でのエラー系挙動
-   - キャッシュ動作確認(2 回目即返り)
-   - Anthropic dashboard でコスト感確認
-3. **次タスク候補**:
-   - アイキャッチの実体動画化(FFmpeg `drawtext`)
-   - 編集画面 (`edit` フェーズ) で `clipSegments` を実際の動画範囲絞り込みに使う
+### Deps
+- `better-sqlite3` + `@types/better-sqlite3` 追加
+- 33 packages added; native rebuild required
 
 ## 既知の地雷・注意点
 
-- **Stage 1 と renderer rollingScore の二重実装**: `peakDetection.ts` の score math と `src/renderer/src/lib/rollingScore.ts` は同じ。weights が drift したら両方更新必須。将来 `src/common/lib/` に共通化検討
-- **AI 精査が候補の startSec/endSec を勝手に変更してくる場合**: ±0.1秒のバリデーションで弾いて fallback、データ欠損は出ない
-- **キャッシュキーのコメント数依存**: 同じ window でも analysisWindowSec を 120 → 121 に微妙に変えると msgCount が変わってキャッシュ miss する可能性。仕様としては OK
-- **autoExtract と generate の cancel 共有**: 両方とも `aiSummary.cancel()` を呼ぶと `activeAc` を abort。同時実行は想定していない(UI 側で button disabled で防ぐ)
+- **better-sqlite3 ネイティブ build**: `npm install` 後に `npx electron-rebuild -f -w better-sqlite3` を必ず走らせる。これを忘れると `NODE_MODULE_VERSION mismatch` でアプリが落ちる
+- **クォータの初期化**: `api_quota_log.UNIQUE(api_key_index, date)` で日付が変わると自動的に新しい行に積まれる。明示的なクリアは不要
+- **403 を返したキーが永遠に muted されるわけではない**: dailyDisabled set はメモリ内なのでアプリ再起動で復活する。日付が変わって自然に quota 復活する想定
+- **MAX_VIDEOS_PER_BATCH = 200**: 1 時間で 200 動画の処理が間に合わなかったら次の 1 時間と被る可能性があるが、`runOneBatch` は `currentBatch` で重複防止
+- **PER_VIDEO_DELAY_MS = 200**: 200 動画 × 200 ms = 40 秒分の sleep。yt-dlp プロセス自体の起動 + メタ取得が 1〜3 秒/動画なので、合計 ~10 分/バッチが目安
+- **既存切り抜き動画の `view_count` 追跡**: 現状は `INSERT ON CONFLICT DO UPDATE` で上書きのみ、履歴なし。Phase 2 で `video_stats_history` テーブルを別途用意する想定
+
+## 最初のアクション順
+
+1. **実機検証**(上記)
+2. **API キー確保**:Google Cloud Console で YouTube Data API v3 を有効化、API キー 1〜10 個発行
+3. **1 週間放置で 1 万件蓄積を目指す** → DB 件数を見ながら必要に応じて配信者リスト調整
+4. **Phase 2 着手準備**:蓄積データの傾向を眺めて、サムネ解析 / タイトル分析の方針を決める
+5. **次タスク候補**:
+   - Phase 2(蓄積データ分析)
+   - アイキャッチの実体動画化(FFmpeg)
+   - 編集画面 (`edit` フェーズ) で `clipSegments` を実際の動画範囲絞り込みに使う
 
 ## みのる(USER)への報告用
 
-### 自動抽出機能
-- ClipSelectView ヘッダに **「✨ 自動で切り抜き候補を抽出」** ボタン追加
-- 件数 select(3/4/5)で出力区間数指定
-- ボタン押下 → 3-step 進捗 modal → リストに区間 + AI タイトル付きで反映
-- Anthropic API キーが Settings に必要(既存の AI タイトル生成と同じキー)
-- 既存の「AI でタイトル生成」ボタンは温存(手動追加後のタイトル付け用)
-
-### 実機検証お願い
-- 実 DL 動画でボタン押下 → 結果の質を主観評価(5 点満点)
-- 同動画 3 回実行して結果の安定性
-- Anthropic コスト(dashboard で実測)
-
-### 次セッション最優先
-- 波形ホバーラインがカーソル位置に合っていない件を修正
+- データ収集パイプライン Phase 1 完成、Settings → 切り抜きデータ収集セクションで操作可能
+- YouTube Data API キー登録 → 配信者リスト編集 → 自動で 1 時間ごとに収集
+- DB は `%APPDATA%/jikkyou-cut/data-collection.db`、サムネは `%APPDATA%/jikkyou-cut/data-collection/thumbnails/`
+- まずは API キー登録 → 「今すぐ実行」で初動確認、問題なければ 1 週間放置で 1 万件蓄積を目指す
+- Phase 2(分析)/ Phase 3(自動抽出への統合)は別タスク

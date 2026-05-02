@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { X, CheckCircle } from 'lucide-react';
+import DataCollectionSettings from './DataCollectionSettings';
 import styles from './SettingsDialog.module.css';
 
 type Props = {
@@ -259,6 +260,9 @@ export default function SettingsDialog({
             <span>キーを検証して保存しました</span>
           </div>}
         </div>
+
+        {/* Data-collection pipeline (Phase 1) — its own bordered block. */}
+        <DataCollectionSettings />
       </div>
 
       <div className={styles.footer}>

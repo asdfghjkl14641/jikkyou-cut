@@ -15,6 +15,34 @@
 
 ---
 
+## 2026-05-02 23:30 - 切り抜き動画データ収集パイプライン Phase 1(蓄積基盤)
+
+- 誰が: Claude Code
+- 何を: バックグラウンド SQLite 蓄積パイプライン。YouTube Data API(キー最大 10 個ローテーション)+ yt-dlp で「実際に伸びとる切り抜き動画」のメタデータ・サムネ・heatmap 上位 3 ピーク・chapters を蓄積する基盤。Phase 2(分析)/ Phase 3(自動抽出統合)への入力データ生成役
+- 構成:
+  - **`src/main/dataCollection/database.ts`**(`better-sqlite3` ベース、WAL モード)— `creators` / `videos` / `heatmap_peaks` / `chapters` / `api_quota_log` の 5 テーブル。全 upsert はトランザクション、video 削除時の cascade で peaks/chapters も整合性維持。スキーマは起動時に自動作成
+  - **`src/main/secureStorage.ts` 拡張** — `youtubeApiKeys.bin`(JSON 配列を 1 ファイルに DPAPI 暗号化保存)に `saveYoutubeApiKeys` / `loadYoutubeApiKeys` / `clearYoutubeApiKeys` / `hasYoutubeApiKeys` / `countYoutubeApiKeys` を追加。renderer には件数だけ返す(生キーは戻さない)
+  - **`src/main/dataCollection/youtubeApi.ts`** — `searchVideos` + `fetchVideoDetails`。`ApiKeyRotator` クラスでクォータ消費を `api_quota_log` に記録しつつラウンドロビン、daily 10K unit 超えたキーは翌日まで mute。403/401 を返したキーは即時 dailyDisabled、5xx/network 系はリトライしない(次バッチで自然回復)。コスト定数:`search.list=100`, `videos.list=1`, `channels.list=1`
+  - **`src/main/dataCollection/ytDlpExtractor.ts`** — `--print` で `id/title/channel/channel_id/view_count/like_count/comment_count/duration/upload_date/description/heatmap/chapters` を 1 行 JSON 出力。`pickTopPeaks(heatmap, chapters, 30s spacing)` で value 降順 + 30 秒以内 dedup → 上位 3 個、各ピークの centre 時刻が含まれるチャプターの title を紐付け。`--write-thumbnail --convert-thumbnails jpg` でサムネを `userData/data-collection/thumbnails/<id>.jpg` に保存
+  - **`src/main/dataCollection/searchQueries.ts`** — 11 個のブロード検索クエリ(切り抜き / クリップ / 神回 / VTuber / にじさんじ / ホロライブ / マイクラ / APEX 等)、`buildPerCreatorQuery(name)` で「<人物名> 切り抜き」を生成
+  - **`src/main/dataCollection/creatorList.ts`** — `userData/data-collection/creators.json` の JSON CRUD。Settings UI からの編集 + 手動編集どちらも可能
+  - **`src/main/dataCollection/index.ts`** — `DataCollectionManager` シングルトン。`start()` は no-key なら no-op、API キーありなら 5 秒後に最初のバッチ → 1 時間ごとに自動継続。バッチ内では:per-creator 検索 → broad 検索 → 既存 DB と突き合わせて新規 ID のみ抽出 → `videos.list` で stats 取得 → 各動画 yt-dlp で heatmap/chapters/thumbnail 取得 → DB upsert。MAX 200 動画/バッチ、200 ms 間隔で yt-dlp に優しく
+  - **IPC**:`dataCollection.{getStats, triggerNow, pause, resume}` + `youtubeApiKeys.{hasKeys, getKeyCount, setKeys, clear}` + `creators.{list, add, remove}`
+  - **Settings UI**:`DataCollectionSettings.tsx`(新規)を `SettingsDialog` の 3 つ目のセクションとして埋め込み。ステータスパネル(動画数 / 配信者数 / 本日のクォータ / 状態 / 最終収集)+ API キー multi-input(最大 10、各 password 入力)+ 配信者リスト(タグ風 chip + Enter で追加 + ✕ で削除)。5 秒間隔で stats を polling
+  - **`app.whenReady()`** に `void dataCollectionManager.start()` を追加。キー未設定時はログ 1 行で静かに skip
+- 検証: better-sqlite3 を `npx electron-rebuild` で Electron 33 ABI(NODE_MODULE_VERSION 130)に rebuild、`yt-dlp --print %(heatmap)j %(chapters)j` の出力形式を実 URL(Rick Roll の 100 ポイント heatmap)で確認、型チェック + build clean。実 API 呼び出しはサンドボックスから検証不可(API キー未保有)
+- 理由: 「YouTube で実際に伸びとる切り抜き」のパターンを学習データとして蓄積し、将来 Phase 2(分析)+ Phase 3(自動抽出統合)で配信者ごとの伸びパターンを反映した抽出をするため。今回はデータ蓄積基盤のみ。1 週間放置で 1 万件規模の蓄積を想定
+- 開放されている設計判断:
+  - サムネ画像解析(Phase 2)
+  - タイトルパターン分析(Phase 2)
+  - 自動抽出機能との統合(Phase 3)
+  - 配信者の自動グルーピング(現状手動リスト)
+  - 伸び率計算(view_count / 経過日数)
+  - 既存動画の view_count 再取得ループ(週次)— 現状は collected_at 上書きするだけで履歴なし
+- 影響: src/main/dataCollection/* (新規 6 ファイル)、src/main/secureStorage.ts (YouTube キー BYOK 追加)、src/main/index.ts (IPC + auto-start)、src/preload/index.ts、src/common/types.ts (IpcApi 拡張)、src/renderer/src/components/{SettingsDialog,DataCollectionSettings}.tsx、package.json (better-sqlite3 + @types)
+- ⚠️ 実機検証はユーザ環境で必要(API キー登録 → 1 時間放置 → DB に件数蓄積されとるか確認)
+- コミット: (未定)
+
 ## 2026-05-02 22:30 - 切り抜き候補の自動抽出(ハイブリッド方式 + 1 ボタン全自動)
 
 - 誰が: Claude Code
