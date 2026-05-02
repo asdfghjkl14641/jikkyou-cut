@@ -1,111 +1,82 @@
 # 次セッションへの引き継ぎ (NEXT_SESSION_HANDOFF)
 
 ## 凍結時刻
-2026-05-03 09:30 — データ収集 UI ボタン整理 + `npm run dev` 必須を CLAUDE.md 冒頭に明文化。**データ収集の有効化はユーザの操作待ち**、ネオポルテ 0-hit 検証も同タイミング。
+2026-05-03 10:30 — better-sqlite3 ネイティブ読み込みエラー調査完了(transient cache 破損、現状自然回復済み)+ 再発防止 external pin。**配信者 325 件問題の診断はこれから**(diag メニュー押下 → 結果待ち)。
 
 ## ⚠️ 次セッションの Claude Code が最初に読むこと
 
-`CLAUDE.md` の **冒頭(概要より上)** に「アプリ起動時の絶対ルール」を追加した。**実機検証で `npm run start` を絶対に使わない**(古いビルドを掴む)。
+`CLAUDE.md` 冒頭の「アプリ起動時の絶対ルール」を厳守。`npm run start` は使わず `npm run dev` を使う。詳細は `CLAUDE.md` 冒頭参照。
 
-| コマンド | 使う時 |
-|---|---|
-| ✅ `npm run dev` | **常にこれ**(electron-vite dev -w、watch mode) |
-| ✅ `npm run dev:fresh` | キャッシュ疑い時(`out/` を消してから dev) |
-| ❌ `npm run start` | **使わない**(electron-vite preview、古い `out/` 実行) |
-
-詳細は `CLAUDE.md` 冒頭参照。
+`npm install` を新たに実行した場合は `npx @electron/rebuild -f -w better-sqlite3` を必ず叩く(Electron 33 ABI に向けて rebuild)。
 
 ## リポジトリ状態
-- HEAD: `b95240b`(feat: 「1 回だけ取得」リネーム + 「取得を停止」)
-- 直前: `c54ba71`(docs(claude): npm run dev 必須を明文化)
+- HEAD: `5160da8`(fix(build): better-sqlite3 + bindings external 明示ピン)
+- 直前: `fca786a`(diag(data-collection): DB 診断スクリプト + 一時メニュー)
 - docs commit 後 clean
 
 ## 直前の状況サマリ
 
-直前タスク(75 人 seed)の続きで、ユーザ要望に基づくデータ収集 UI の整理 + 開発フローの再発防止記載を 1 セットで実施。
+### 今回(緊急対応):better-sqlite3 ロード失敗エラー調査
 
-### データ収集の制御ボタン(3 軸に整理)
+ユーザ実機の `collection.log` で「`Could not dynamically require "<root>/build/better_sqlite3.node" / @rollup/plugin-commonjs`」エラーが報告され、緊急調査。
 
-| 操作 | UI ボタン | IPC | 永続性 |
-|---|---|---|---|
-| 永続マスタースイッチ | 「有効化する / 無効化する」 | `setEnabled(true/false)` | ✅ 再起動跨ぐ(`AppConfig.dataCollectionEnabled`) |
-| 1 回手動取得(off-cycle) | 「1 回だけ取得」(旧「今すぐ実行」) | `triggerNow` | ❌ |
-| 進行中バッチ停止 | 「取得を停止」(NEW) | `cancelCurrent` | ❌(永続状態を変えない) |
+**結論**:
+- エラーは **2026-05-02 09:29Z〜10:11Z の時間帯に 7 件集中、それ以降は出ていない**(自然回復済み)
+- 真因は **一時的な build cache 破損**(`bindings` が bundled された瞬間があり、rollup-commonjs の runtime stub が throw)
+- 「動画 347 件 / 配信者 325 件」表示は **エラー停止後の正常 batch run で蓄積されたデータ** = データ自体は健在
+- 念のため再発防止に `electron.vite.config.ts` の `main.build.rollupOptions.external` に `better-sqlite3` と `bindings` を明示ピン(`externalizeDepsPlugin` は direct deps のみ → transitive の `bindings` が漏れる可能性を物理的に潰す)
 
-旧「一時停止 / 再開」ボタン(セッション内 pause/resume)は廃止。意味的に「取得を停止」とほぼ同じだが、永続スイッチと混乱しやすかった。
+### 残タスク:配信者 325 件問題の診断(`fca786a` の diag メニュー使う)
 
-### Manager の cancel セマンティクス(重要)
+直前の commit `fca786a` で `diagnose.ts` + 「デバッグ → DB 診断(データ収集)」メニューを投入済み。**ユーザが押すと SQL 実行結果がターミナルに出る**(9 個のクエリで creators テーブル / videos テーブル / クォータの実態確認)。
 
-`cancelCurrentBatch()` は state を `paused` に変えない。`cancelRequested = true` を立てるだけで、進行中バッチが次のチェックポイント(creators ループ / クエリループ等)で `return` して exit。
+コード読みでの仮説:`_collectBatch` (index.ts:278) で broad search 由来の各 video の `channelTitle` (= 切り抜き **アップローダー**) を `upsertCreator` で auto INSERT (`is_target=0`、`creator_group=null`)。`getStats.creatorCount` は `SELECT COUNT(*) FROM creators` で全件カウントするので 75 (seed) + 250 (auto-add) = 325 と推定。これを SQL で確認すべし。
 
-- 通常スケジュール(`scheduleNext` の timer)は影響を受けない → 規定の 2h 後に通常通り再開
-- `runOneBatch()` 先頭で `cancelRequested = false` を再リセット(前回の cancel が次バッチに漏れない)
-- finally で `if (cancelRequested) logInfo('batch ended — cancelled by user / pause')`
+## 主要変更ファイル(直近)
 
-### Status 表示の優先度
+### `5160da8`(緊急対応)
+- `electron.vite.config.ts` — `main.build.rollupOptions.external` に `better-sqlite3` + `bindings`
+- 並行で `out/` クリーン rebuild + `npx @electron/rebuild -f -w better-sqlite3` 実行(node_modules の `.node` 状態確認、rebuild は no-op で既に Electron 33 ABI に向いてた)
 
-```
-1. isBatchActive          → 🟢 取得中…
-2. !isEnabled             → ⚫ 停止中(自動収集無効)
-3. isPaused               → ⏸ 一時停止中
-4. isRunning && !active   → ⏸ 待機中(次まで N 分)  ← nextBatchAtSec を使う
-5. keyCount === 0         → ⚫ 未起動(API キー未登録)
-6. otherwise              → ⚫ 停止中
-```
+### `fca786a`(診断スクリプト)
+- `src/main/dataCollection/diagnose.ts`(新規、readonly DB 開いて 9 クエリ実行)
+- `src/main/menu.ts`(一時的に「デバッグ」サブメニュー + 「DB 診断(データ収集)」項目)
 
-### 起動コマンド警告(CLAUDE.md 冒頭追加)
+### `d79e312`(直前)
+- `src/renderer/src/components/ApiManagementView.tsx` — 3 番目のタブ「データ収集」追加(DataCollectionSettings をホスト)
+- `src/renderer/src/components/SettingsDialog.tsx` — DataCollectionSettings 撤去 + ハンドオフリンク 2 つに
 
-冒頭 #### に「⚠️ アプリ起動時の絶対ルール」セクションを追加。次の Claude Code セッションが最初に目に入る場所。具体的内容:
-- `npm run start` は preview コマンドで古いビルド実行 → 使わない
-- `npm run dev` を使う、変更が即反映
-- 古い electron プロセス掃除のコマンド例(PowerShell + bash 両方)
-- 過去事例(複数回ハマった旨)を明示
+## 動作確認
 
-`package.json` に `dev:fresh` 追加(`node -e` でクロスプラットフォームに `out/` を消してから dev、外部依存なし)。
+### ✅ 済
+- `npm run dev` clean boot:port 3001 / `creators already populated (75) — no seed delta`
+- bundle 内 `import Database from "better-sqlite3"` のみ、bindings 参照 / dynamic require stub なし
 
-## 主要変更ファイル
-
-### `c54ba71`(docs)
-- `CLAUDE.md` — 冒頭警告セクション + 開発コマンド更新
-- `package.json` — `dev:fresh` script 追加
-
-### `b95240b`(feat)
-- `src/main/dataCollection/index.ts` — `cancelCurrentBatch()` + `nextBatchAt` + `isBatchActive` + cancel 検知ログ
-- `src/common/types.ts` — `dataCollection.cancelCurrent` + `getStats` 拡張
-- `src/main/index.ts` — IPC ハンドラ `dataCollection:cancelCurrent`
-- `src/preload/index.ts` — bridge 追加
-- `src/renderer/src/components/DataCollectionSettings.tsx` — ボタン整理 + ステータス表示刷新
-
-## 動作確認 ✅(一部済 / 残はユーザ操作待ち)
-
-- ✅ **`npm run dev:fresh` 起動成功**:port 3003 で renderer / start electron app / `creators already populated (75) — no seed delta` ログ確認
-- ✅ **タイプチェック + ビルド clean**
-- ⏳ **UI ボタン配置**:Settings → 切り抜きデータ収集 セクションで 3 ボタン(「有効化する」「1 回だけ取得」「取得を停止」)が並ぶことをユーザ目視確認待ち
-- ⏳ **「1 回だけ取得」**:押下 → 「🟢 取得中…」状態 → 完了後「⏸ 待機中(次まで 2 時間 0 分)」(初期化された場合)or 元の状態に戻る
-- ⏳ **「取得を停止」**:進行中のみ enabled。クリックで確認ダイアログ → OK → ターミナルに `[data-collection] cancel signal sent — current batch will exit on next checkpoint` → `[data-collection] batch ended — cancelled by user / pause`
-- ⏳ **ネオポルテ 0-hit 警告**:有効化 → 最初のバッチで neoporte 5 人について全 3 クエリで 0 件のものに警告ログ。出たら `creators.json` を手修正
+### ⏳ ユーザに依頼中
+- メニュー「**デバッグ → DB 診断(データ収集)**」を押下 → ターミナル出力をチャットに貼り付け → 配信者 325 件の真因確定
 
 ## 既知の地雷・注意点
 
-- **「取得を停止」は state を変えない**:cancel 後も `isEnabled = true` のままなので、規定スケジュールで 2h 後に通常通り再開する。永続的に止めたい場合は「無効化する」を押す
-- **dev:fresh の `out/` 削除**:他の electron プロセスがロックしてると Windows で削除失敗する可能性。その場合は他の electron 全終了 → 再実行
-- **既存 user data dir のキャッシュエラー**:他の electron 起動中に新たな electron を立ち上げると `Unable to move the cache: アクセスが拒否されました` が出るが動作には影響なし(GPU キャッシュの一時ファイル)
-- **`window.confirm` を使ってる**:取得停止の確認ダイアログ。CSS Modules 統一感のためカスタムモーダル化したいが優先度低
-- **電源プラン / スリープ**:2h スケジュール中に PC スリープすると timer が止まる。setTimeout は wall clock ベースじゃないので、復帰時に保留される。気になる場合は `Date.now()` 比較ベースの schedule に置き換えを検討
+- **better-sqlite3 のネイティブ rebuild**:`npm install` 後は `npx @electron/rebuild -f -w better-sqlite3` を必ず実行(Electron ABI 不一致防止)。HANDOFF.md セクション 9 に追記済み
+- **build cache 破損の再発防止**:`electron.vite.config.ts` の `external` に `better-sqlite3` + `bindings` 明示ピン。`externalizeDepsPlugin` だけに頼らない
+- **collection.log の過去エラー**:09:29Z〜10:11Z の 7 件はユーザの記憶に残ってるかもしれんが、現状は問題なし(以後 INFO のみで data 蓄積成功してた)
+- **「配信者 325 件」表示の真因はまだ未確定**:仮説は seed 75 + auto-add 250 だが SQL で要確認。修正方針(表示だけ直す or データモデル直す)はユーザ判断待ち
+- **デバッグメニューは一時的**:`fca786a` で投入した「デバッグ」サブメニューは原因確定 + 修正完了後に削除予定。残しておくと配布版にも出てしまう
 
 ## 次タスク候補
 
-1. **【ユーザ操作】**:Settings → 切り抜きデータ収集 → 「**有効化する**」を押す → 1 週間放置
-2. 最初のバッチで neoporte 5 人の 0-hit 警告チェック → API 管理 → 収集ログ タブで確認 → `creators.json` 手修正
-3. **Phase 2(蓄積データ分析)**:グループ別再生数分布 / per-creator 伸び率時系列 / サムネ + タイトルパターン抽出
-4. **Phase 3(統合)**:`aiSummary.autoExtract` の Stage 2 プロンプトに「この配信者の伸びパターン」をコンテキスト注入
-5. UX の小ぶりな改善:カスタムモーダル(window.confirm 置き換え)、待機時間カウントダウンの 1 秒間隔更新(現状は 5 秒 polling)
+1. **【ユーザ操作】**:メニュー「デバッグ → DB 診断(データ収集)」を押下 → ターミナル出力をチャットに貼り付け
+2. 結果を見て「配信者 325 件」の真因確定 → 修正方針提示(2 案):
+   - **案 A(表示だけ修正)**:`getStats.creatorCount` を `WHERE is_target = 1` に絞る(= 75 表示)。データモデルはそのまま、auto-add 250 件は内部に保持
+   - **案 B(データモデル変更)**:`_collectBatch` で broad search 由来の uploader を `creators` に upsert しない。`channel_id` / `channel_name` は `videos` 内に保持、creators テーブルは seed のみに
+3. ユーザ承認後、修正コミット
+4. デバッグメニュー + diagnose.ts を撤去
+5. **Phase 2(蓄積データ分析)**:そのまま継続
 
 ## みのる(USER)への報告用
 
-- データ収集ボタンを **3 軸** に整理 ✅(永続スイッチ / 1 回だけ取得 / 取得を停止)
-- 「今すぐ実行」→ **「1 回だけ取得」** にリネーム
-- **「取得を停止」** ボタン新設、進行中バッチを永続状態を変えずに止められる
-- ステータス表示が **「⏸ 待機中(次まで 1 時間 47 分)」** みたいに次のバッチまでの時間が見える
-- Claude Code が古いビルド掴む事故対策に **`CLAUDE.md` 冒頭に絶対ルール明記** + `npm run dev:fresh` 追加(キャッシュ疑い時に使う)
-- **次の一手**:Settings → 切り抜きデータ収集 → 「**有効化する**」を押して 1 週間放置
+- 「全バッチで失敗」エラー → **既に直っとる**(09:29Z〜10:11Z の時間帯のみ、以降は正常稼働)
+- 真因は **一時的なビルドキャッシュ破損**。原因経路を `electron.vite.config.ts` で明示 external 化して再発防止済み
+- 「動画 347 件 / 配信者 325 件」のデータは **生き残っとる**(エラー停止後の batch で蓄積された分)
+- **次の一手**:メニュー「**デバッグ → DB 診断(データ収集)**」を押して、ターミナルに出る診断ログを貼り付け
+- 押すと creators テーブルの内訳(seed 由来 vs auto-add 由来)が見える → 「配信者 325 件」の真因確定 → 修正方針 2 案 提示 → ユーザ判断

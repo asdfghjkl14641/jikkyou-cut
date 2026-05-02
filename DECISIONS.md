@@ -15,6 +15,23 @@
 
 ---
 
+## 2026-05-03 10:30 - 緊急: better-sqlite3 ネイティブモジュール読み込み失敗の真因確定 + 再発防止
+
+- 誰が: Claude Code
+- 何を: ユーザ収集ログ(`collection.log`)で「`Could not dynamically require "<root>/build/better_sqlite3.node" / @rollup/plugin-commonjs`」エラーが 7 件発生していたのを調査。**当該エラーは 2026-05-02 09:29Z〜10:11Z の時間帯に集中、それ以降は INFO のみで停止済み**(= 既に直っとる)。**transient なビルドキャッシュ破損** が真因と確定。再発防止に `electron.vite.config.ts` の `main.build.rollupOptions.external` に `better-sqlite3` と `bindings` を明示ピン
+- 調査の流れ:
+  1. **仮説 A(electron-rebuild 未実行)**:`npx @electron/rebuild -f -w better-sqlite3` 実行 → `✔ Rebuild Complete`、ただし `.node` ファイルの mtime は変わらず(prebuild キャッシュからコピー、binary 自体は既に Electron 33 ABI に向いてた)→ ABI mismatch ではない
+  2. **仮説 B(externalize 未設定)**:`electron.vite.config.ts` は `externalizeDepsPlugin()` 設定済み、`out/main/index.js` を grep して `import Database from "better-sqlite3"` のみ残存(bundled されてない)→ externalize は機能してた
+  3. **仮説 C(out/ ビルドキャッシュ問題)**:`out/` 削除 → `npm run build` 再生成 → 同じく externalize 状態正常
+  4. **collection.log のタイムスタンプ確認**:エラー 7 件すべて `2026-05-02T09:29Z〜10:11Z` の間。それ以降の `[INFO] no heatmap available for ...` 大量ログ + `batch start / search broad → 50 items` で **以降は DB 書き込み成功**してることが確定 → 一時的な build cache 状態の問題
+- 真因(推定):一時的に `bindings`(better-sqlite3 の transitive dep)が bundled された時間帯があり、その bundle に rollup-commonjs が runtime stub を埋めて throw していた。`externalizeDepsPlugin` は **package.json の direct deps だけ** externalize するため、transitive の `bindings` がバンドル対象になった瞬間がある(v8 dev mode の incremental rebuild のタイミング等)
+- 再発防止:`electron.vite.config.ts` の `main.build.rollupOptions.external` に `better-sqlite3` と `bindings` を明示ピン(belt-and-braces)。これで `externalizeDepsPlugin` が何らかの理由で transitive を取りこぼしても、明示 external で守られる
+- ⚠️ 「動画 347 件 / 配信者 325 件」表示は **エラー停止後の正常 batch run で蓄積されたデータ**。エラー時間帯のロスはあるがデータ自体は健在
+- 影響: `electron.vite.config.ts`(rollupOptions.external 追加)
+- 動作確認 ✅:`npm run build` 後 bundle に bindings 参照なし / runtime stub なし、`npm run dev` clean boot、creators.json 75 件 seed step 正常
+- 次: 配信者 325 件問題の診断(別タスク `fca786a` で diagnose.ts 投入済み、ユーザが「デバッグ → DB 診断」を押せば実行)
+- コミット: `5160da8`
+
 ## 2026-05-03 09:30 - データ収集制御ボタンの整理 + npm run dev 必須を CLAUDE.md に明文化
 
 - 誰が: Claude Code
