@@ -55,7 +55,7 @@
 - `IDEAS.md`(17 項目の長期構想)+ `docs/COMMENT_ANALYSIS_DESIGN.md`(次フェーズ MVP 設計)新規
 - `HANDOFF.md` 全面書き直し、`TODO.md` セクション再編
 
-### 8. 緊急修正: ClipSelectView の onDuration/onCurrentTime 未配線(`<NEW_HASH>`)
+### 8. 緊急修正: ClipSelectView の onDuration/onCurrentTime 未配線(`8d68dd5`)
 - 症状(URL DL 後): video コントロール消失 / 再生で末尾に飛ぶ / 分析グラフ真っ黒
 - 根本: ClipSelectView の `<VideoPlayer>` に `onDuration`/`onCurrentTime` prop が抜けていて、`editorStore.durationSec` が clip-select 中ずっと null
   - 症状 2: VideoPlayer の preview-skip rAF が `cues=[]+durationSec=null` で `decidePreviewSkip='end'` → 再生開始即末尾シーク
