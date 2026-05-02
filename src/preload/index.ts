@@ -4,6 +4,7 @@ import type {
   ExportProgress,
   FontDownloadProgress,
   IpcApi,
+  AiSummaryProgress,
   TranscriptionProgress,
   UrlDownloadProgress,
 } from '../common/types';
@@ -31,6 +32,11 @@ const api: IpcApi = {
   setApiKey: (key) => ipcRenderer.invoke('apiKey:set', key),
   clearApiKey: () => ipcRenderer.invoke('apiKey:clear'),
   validateApiKey: (key) => ipcRenderer.invoke('apiKey:validate', key),
+
+  hasAnthropicApiKey: () => ipcRenderer.invoke('anthropicApiKey:has'),
+  setAnthropicApiKey: (key) => ipcRenderer.invoke('anthropicApiKey:set', key),
+  clearAnthropicApiKey: () => ipcRenderer.invoke('anthropicApiKey:clear'),
+  validateAnthropicApiKey: (key) => ipcRenderer.invoke('anthropicApiKey:validate', key),
 
   startTranscription: (args) => ipcRenderer.invoke('transcription:start', args),
   cancelTranscription: () => ipcRenderer.invoke('transcription:cancel'),
@@ -114,6 +120,21 @@ const api: IpcApi = {
       ipcRenderer.on('commentAnalysis:progress', listener);
       return () => {
         ipcRenderer.removeListener('commentAnalysis:progress', listener);
+      };
+    },
+  },
+
+  aiSummary: {
+    generate: (args) => ipcRenderer.invoke('aiSummary:generate', args),
+    cancel: () => ipcRenderer.invoke('aiSummary:cancel'),
+    onProgress: (cb) => {
+      const listener = (
+        _e: Electron.IpcRendererEvent,
+        p: AiSummaryProgress,
+      ) => cb(p);
+      ipcRenderer.on('aiSummary:progress', listener);
+      return () => {
+        ipcRenderer.removeListener('aiSummary:progress', listener);
       };
     },
   },

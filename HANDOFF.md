@@ -42,6 +42,8 @@ Electron + React + TypeScript 製。**現在は配布前の "自分用ツール"
 - **コメント分析 rolling window スコア + W スライダー**: 完了 (5 要素 / 30 秒〜5 分可変 / Stage 1+2 分離)
 - **複数区間選択 + 感情 9 カテゴリ + アイキャッチ枠**: 完了 (clipSegments[] 最大 20 / 区間バー drag / ClipSegmentsList / eyecatches 自動同期。AI タイトル生成とアイキャッチ実体動画化は次タスク)
 - **操作系整理 + ライブコメントビュー**: 完了 (波形は左=シーク・右ドラッグ=区間追加、PeakDetailPanel 廃止、LiveCommentFeed 常駐)
+- **操作感改善 + 区間バー右クリックメニュー**: 完了 (左クリック即時シーク + ホバー圧縮 + コメント行コンパクト化 + SegmentContextMenu)
+- **AI タイトル要約**: 完了 (Anthropic BYOK、Claude Haiku 4.5、3 並列 + キャッシュ、Settings UI と ClipSegmentsList ボタン)
 
 ### 次フェーズ
 - **進行中**: コメント分析画面 (バックエンド実装待ち) — 詳細は `docs/COMMENT_ANALYSIS_DESIGN.md`
@@ -112,6 +114,7 @@ jikkyou-cut/
     │   ├── secureStorage.ts   # safeStorage で APIキー暗号化保存
     │   ├── subtitleSettings.ts # subtitle-settings.json load/save
     │   ├── urlDownload.ts     # yt-dlp 呼び出し(URL DL)
+    │   ├── aiSummary.ts       # Anthropic Claude Haiku で区間タイトル生成
     │   └── commentAnalysis/   # コメント分析オーケストレータ + 実装
     │       ├── index.ts       # analyze({chat→viewers→scoring})オーケストレータ
     │       ├── chatReplay.ts  # yt-dlp で live_chat / rechat を取得 + パース
@@ -137,8 +140,9 @@ jikkyou-cut/
             └── components/
                 ├── ClipSelectView.tsx          # フェーズ2: 切り抜き範囲選択画面(2-column 配置)
                 ├── CommentAnalysisGraph.tsx    # 盛り上がりグラフ(左クリック=シーク、右ドラッグ=区間追加)
-                ├── LiveCommentFeed.tsx         # フェーズ2 右パネル: 常駐ライブコメント(独自仮想スクロール)
-                ├── ClipSegmentsList.tsx        # フェーズ2: 切り抜き区間カード一覧 + アイキャッチ行
+                ├── LiveCommentFeed.tsx         # フェーズ2 右パネル: 常駐ライブコメント(独自仮想スクロール、ROW_HEIGHT 40)
+                ├── ClipSegmentsList.tsx        # フェーズ2: 切り抜き区間カード一覧 + アイキャッチ行 + AI タイトル生成ボタン
+                ├── SegmentContextMenu.tsx      # フェーズ2: 区間バー右クリックメニュー(削除 / タイトル編集)
                 ├── WindowSizeSlider.tsx        # フェーズ2: rolling window 幅(W)スライダー
                 ├── DropZone.tsx                # フェーズ1: ファイル DnD + URL 入力
                 ├── EditableTranscriptList.tsx  # フェーズ3: キュー一覧(リニア表示)
@@ -192,6 +196,8 @@ type EditorState = {
 **メインプロセスが唯一の真実源**。preload で `window.api` として expose される。
 主要な名前空間: `fonts`, `subtitleSettings`, `urlDownload`, `commentAnalysis`, `loadProject`, `saveProject`, `startTranscription`, `startExport` 等。
 - `commentAnalysis.{start, cancel, onProgress}` — `videoFilePath` + `sourceUrl`(URL DL 由来)+ `durationSec` を渡すと、yt-dlp チャット取得 → playboard 視聴者数取得 → 5 秒バケット集計(Stage 1)を順次実行して `CommentAnalysis` を返す(`buckets[]` を含む)。実際のスコア(`ScoreSample[]`)は renderer で `src/renderer/src/lib/rollingScore.ts` の `computeRollingScores` が W スライダーの値で都度計算する Stage 2。`onProgress` は phase=chat/viewers/scoring の 3 段階で発火。失敗時は graceful degradation(チャット 0 件 / 視聴者数なしモードで重み切替)。
+- `hasAnthropicApiKey` / `setAnthropicApiKey` / `clearAnthropicApiKey` / `validateAnthropicApiKey` — Gladia キーと並列の BYOK スロット。`safeStorage`(Windows DPAPI)で `userData/anthropicKey.bin` に暗号化保存。検証は Anthropic API への 1-token ping で実施
+- `aiSummary.{generate, cancel, onProgress}` — `clipSegments[]` の各区間に対して Claude Haiku 4.5 でタイトル生成。3 並列 + 429/5xx で指数バックオフ + per-request 30 秒タイムアウト。結果は `userData/comment-analysis/<videoKey>-summaries.json` にキャッシュ(キー = `${start}-${end}-${msgCount}` で 2 桁丸め)。`onProgress` は `done/total` を発火、UI は ClipSegmentsList の進捗ラベルで表示
 
 ---
 

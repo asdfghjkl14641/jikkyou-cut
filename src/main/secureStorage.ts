@@ -2,10 +2,16 @@ import { app, safeStorage } from 'electron';
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
 
-// Stores the API key as ciphertext using Electron's safeStorage (DPAPI on
-// Windows). The plaintext key never lands on disk and never leaves this
+// Stores API keys as ciphertext using Electron's safeStorage (DPAPI on
+// Windows). Plaintext keys never land on disk and never leave this
 // module to the renderer.
-const getKeyFilePath = () => path.join(app.getPath('userData'), 'apiKey.bin');
+//
+// Two slots are exposed: the original Gladia key (transcription) and a
+// new Anthropic key (AI title summarisation). Each lives in its own
+// file so they're independently rotatable.
+
+const gladiaPath = () => path.join(app.getPath('userData'), 'apiKey.bin');
+const anthropicPath = () => path.join(app.getPath('userData'), 'anthropicKey.bin');
 
 export function isEncryptionAvailable(): boolean {
   try {
@@ -15,24 +21,19 @@ export function isEncryptionAvailable(): boolean {
   }
 }
 
-export async function saveSecret(value: string): Promise<void> {
+async function saveAt(p: string, value: string): Promise<void> {
   if (!isEncryptionAvailable()) {
     throw new Error('この環境では安全なAPIキー保存に対応していません');
   }
   const encrypted = safeStorage.encryptString(value);
-  const p = getKeyFilePath();
   await fs.mkdir(path.dirname(p), { recursive: true });
   await fs.writeFile(p, encrypted);
 }
 
-// Decrypts and returns the secret. Callers should drop the reference as soon
-// as the key has been used. Errors are intentionally generic — the original
-// exception message is dropped rather than re-thrown to avoid leaking key
-// fragments through stack traces or logs.
-export async function loadSecret(): Promise<string | null> {
+async function loadAt(p: string): Promise<string | null> {
   let buf: Buffer;
   try {
-    buf = await fs.readFile(getKeyFilePath());
+    buf = await fs.readFile(p);
   } catch {
     return null;
   }
@@ -43,15 +44,29 @@ export async function loadSecret(): Promise<string | null> {
   }
 }
 
-export async function deleteSecret(): Promise<void> {
-  await fs.rm(getKeyFilePath(), { force: true });
+async function deleteAt(p: string): Promise<void> {
+  await fs.rm(p, { force: true });
 }
 
-export async function hasSecret(): Promise<boolean> {
+async function existsAt(p: string): Promise<boolean> {
   try {
-    await fs.access(getKeyFilePath());
+    await fs.access(p);
     return true;
   } catch {
     return false;
   }
 }
+
+// ---- Gladia ---------------------------------------------------------------
+
+export const saveSecret = (value: string) => saveAt(gladiaPath(), value);
+export const loadSecret = () => loadAt(gladiaPath());
+export const deleteSecret = () => deleteAt(gladiaPath());
+export const hasSecret = () => existsAt(gladiaPath());
+
+// ---- Anthropic ------------------------------------------------------------
+
+export const saveAnthropicSecret = (value: string) => saveAt(anthropicPath(), value);
+export const loadAnthropicSecret = () => loadAt(anthropicPath());
+export const deleteAnthropicSecret = () => deleteAt(anthropicPath());
+export const hasAnthropicSecret = () => existsAt(anthropicPath());

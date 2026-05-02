@@ -1,5 +1,5 @@
 import { useEffect, useState, type DragEvent } from 'react';
-import { Trash2, GripVertical, Edit2, Check, EyeOff, Eye } from 'lucide-react';
+import { Trash2, GripVertical, Edit2, Check, EyeOff, Eye, Sparkles } from 'lucide-react';
 import type { ClipSegment, Eyecatch, ReactionCategory } from '../../../common/types';
 import styles from './ClipSegmentsList.module.css';
 
@@ -64,6 +64,12 @@ type Props = {
   onUpdateEyecatch: (id: string, patch: Partial<Omit<Eyecatch, 'id'>>) => void;
   onClearAll: () => void;
   onReorder: (orderedIds: string[]) => void;
+  // AI title generation. Passed in by ClipSelectView along with the
+  // current Anthropic key state. List handles the button + progress
+  // bar; the parent owns the actual IPC call.
+  hasAnthropicApiKey: boolean;
+  aiGenerationState: { kind: 'idle' } | { kind: 'running'; done: number; total: number } | { kind: 'error'; message: string };
+  onGenerateAiTitles: () => void;
 };
 
 export default function ClipSegmentsList({
@@ -79,6 +85,9 @@ export default function ClipSegmentsList({
   onUpdateEyecatch,
   onClearAll,
   onReorder,
+  hasAnthropicApiKey,
+  aiGenerationState,
+  onGenerateAiTitles,
 }: Props) {
   const [editingTitleId, setEditingTitleId] = useState<string | null>(null);
   const [titleDraft, setTitleDraft] = useState('');
@@ -165,25 +174,52 @@ export default function ClipSegmentsList({
     setDragOverId(null);
   };
 
+  const aiRunning = aiGenerationState.kind === 'running';
+  const aiButtonDisabled = segments.length === 0 || aiRunning || !hasAnthropicApiKey;
+
   return (
     <div className={styles.container}>
       <div className={styles.header}>
         <span className={styles.headerCount}>
           切り抜き区間 ({segments.length} / {maxSegments})
         </span>
-        <button
-          type="button"
-          className={styles.clearAllButton}
-          onClick={handleConfirmClear}
-          disabled={segments.length === 0}
-        >
-          全削除
-        </button>
+        <div className={styles.headerActions}>
+          <button
+            type="button"
+            className={styles.aiButton}
+            onClick={onGenerateAiTitles}
+            disabled={aiButtonDisabled}
+            title={
+              !hasAnthropicApiKey
+                ? '設定画面で Anthropic API キーを登録してください'
+                : aiRunning
+                ? '生成中...'
+                : 'AI で各区間のタイトルを生成'
+            }
+          >
+            <Sparkles size={12} />
+            {aiRunning
+              ? `生成中… ${aiGenerationState.done}/${aiGenerationState.total}`
+              : 'AI でタイトル生成'}
+          </button>
+          <button
+            type="button"
+            className={styles.clearAllButton}
+            onClick={handleConfirmClear}
+            disabled={segments.length === 0 || aiRunning}
+          >
+            全削除
+          </button>
+        </div>
       </div>
+
+      {aiGenerationState.kind === 'error' && (
+        <div className={styles.aiError}>{aiGenerationState.message}</div>
+      )}
 
       {segments.length === 0 ? (
         <div className={styles.emptyState}>
-          波形をドラッグするか、ピーク詳細パネルから区間を追加してください。
+          波形を右ドラッグするか、ピーククリックで区間を追加してください。
         </div>
       ) : (
         <div className={styles.list}>

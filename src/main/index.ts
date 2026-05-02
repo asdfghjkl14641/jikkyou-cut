@@ -13,6 +13,7 @@ import * as fonts from './fonts';
 import * as subtitleSettings from './subtitleSettings';
 import * as urlDownload from './urlDownload';
 import * as commentAnalysis from './commentAnalysis';
+import * as aiSummary from './aiSummary';
 import type { AppConfig } from '../common/config';
 import type {
   CommentAnalysisStartArgs,
@@ -81,6 +82,19 @@ function registerIpcHandlers() {
   ipcMain.handle('apiKey:clear', () => secureStorage.deleteSecret());
   ipcMain.handle('apiKey:validate', (_e, key: string) =>
     gladia.validateApiKey(key),
+  );
+
+  // Anthropic API key (AI title summarisation, BYOK)
+  ipcMain.handle('anthropicApiKey:has', () => secureStorage.hasAnthropicSecret());
+  ipcMain.handle('anthropicApiKey:set', async (_e, key: string) => {
+    if (typeof key !== 'string' || key.length === 0) {
+      throw new Error('APIキーが空です');
+    }
+    await secureStorage.saveAnthropicSecret(key);
+  });
+  ipcMain.handle('anthropicApiKey:clear', () => secureStorage.deleteAnthropicSecret());
+  ipcMain.handle('anthropicApiKey:validate', (_e, key: string) =>
+    aiSummary.validateAnthropicKey(key),
   );
 
   // transcription
@@ -197,6 +211,17 @@ function registerIpcHandlers() {
     },
   );
   ipcMain.handle('commentAnalysis:cancel', () => commentAnalysis.cancelAnalysis());
+
+  // AI segment-title summarisation (Anthropic Claude Haiku)
+  ipcMain.handle(
+    'aiSummary:generate',
+    async (_e, args: { videoKey: string; segments: aiSummary.SummarySegment[] }) => {
+      return aiSummary.generateSegmentTitles(args.videoKey, args.segments, (done, total) => {
+        mainWindow?.webContents.send('aiSummary:progress', { done, total });
+      });
+    },
+  );
+  ipcMain.handle('aiSummary:cancel', () => aiSummary.cancelAll());
 }
 
 app.whenReady().then(() => {

@@ -43,7 +43,16 @@ export default function App() {
   const setCurrentSec = useEditorStore((s) => s.setCurrentSec);
   const restoreFromProject = useEditorStore((s) => s.restoreFromProject);
 
-  const { view, save, validateApiKey, setApiKey, clearApiKey } = useSettings();
+  const {
+    view,
+    save,
+    validateApiKey,
+    setApiKey,
+    clearApiKey,
+    validateAnthropicApiKey,
+    setAnthropicApiKey,
+    clearAnthropicApiKey,
+  } = useSettings();
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [operationsOpen, setOperationsOpen] = useState(false);
   const [subtitleSettingsOpen, setSubtitleSettingsOpen] = useState(false);
@@ -372,10 +381,14 @@ export default function App() {
         <SettingsDialog
           open={settingsOpen}
           hasApiKey={view.hasApiKey}
+          hasAnthropicApiKey={view.hasAnthropicApiKey}
           onClose={() => setSettingsOpen(false)}
           onValidateApiKey={validateApiKey}
           onSaveApiKey={setApiKey}
           onClearApiKey={clearApiKey}
+          onValidateAnthropicApiKey={validateAnthropicApiKey}
+          onSaveAnthropicApiKey={setAnthropicApiKey}
+          onClearAnthropicApiKey={clearAnthropicApiKey}
         />
       )}
       <OperationsDialog

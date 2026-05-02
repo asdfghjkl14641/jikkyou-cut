@@ -13,6 +13,8 @@ import type {
   CommentAnalysisProgress,
   ClipSegment,
   ReactionCategory,
+  AiSummarySegment,
+  AiSummaryProgress,
 } from '../../../common/types';
 import styles from './ClipSelectView.module.css';
 
@@ -58,6 +60,25 @@ export default function ClipSelectView() {
   // Triggers ClipSegmentsList to enter title-edit mode for a specific
   // segment. Cleared by the list once handled.
   const [editTitleRequestId, setEditTitleRequestId] = useState<string | null>(null);
+
+  // AI title generation lifecycle. The list panel reads this and
+  // disables its button / shows a progress label accordingly.
+  type AiState =
+    | { kind: 'idle' }
+    | { kind: 'running'; done: number; total: number }
+    | { kind: 'error'; message: string };
+  const [aiState, setAiState] = useState<AiState>({ kind: 'idle' });
+  const [hasAnthropicApiKey, setHasAnthropicApiKey] = useState(false);
+
+  // Refresh the Anthropic key flag whenever this view mounts (covers the
+  // "user opened Settings, saved a key, then came back" path).
+  useEffect(() => {
+    let alive = true;
+    void window.api.hasAnthropicApiKey().then((has) => {
+      if (alive) setHasAnthropicApiKey(has);
+    });
+    return () => { alive = false; };
+  }, []);
 
   const mockAnalysis = useMemo<CommentAnalysis>(() => {
     return generateMockAnalysis(durationSec ?? 0) as CommentAnalysis;
@@ -141,6 +162,70 @@ export default function ClipSelectView() {
   const handleSeekInternal = useCallback((sec: number) => {
     videoRef.current?.seekTo(sec);
   }, []);
+
+  // Slice the analysis bucket messages by each segment's bounds so the
+  // AI gets only the comments that actually fall inside the window.
+  // Buckets are time-ordered; we walk once per segment which is cheap
+  // even for 20 segments.
+  const buildSummarySegments = useCallback((): AiSummarySegment[] => {
+    return clipSegments.map((seg) => {
+      const messages: AiSummarySegment['messages'] = [];
+      for (const b of graphAnalysis.buckets) {
+        if (b.timeSec + graphAnalysis.bucketSizeSec <= seg.startSec) continue;
+        if (b.timeSec >= seg.endSec) break;
+        for (const m of b.messages) {
+          if (m.timeSec >= seg.startSec && m.timeSec < seg.endSec) messages.push(m);
+        }
+      }
+      return {
+        id: seg.id,
+        startSec: seg.startSec,
+        endSec: seg.endSec,
+        messages,
+      };
+    });
+  }, [clipSegments, graphAnalysis]);
+
+  const handleGenerateAiTitles = useCallback(async () => {
+    if (clipSegments.length === 0) return;
+    if (!hasAnthropicApiKey) {
+      setAiState({ kind: 'error', message: '設定画面で Anthropic API キーを登録してください' });
+      return;
+    }
+    const segs = buildSummarySegments();
+    setAiState({ kind: 'running', done: 0, total: segs.length });
+    const cleanup = window.api.aiSummary.onProgress((p: AiSummaryProgress) => {
+      setAiState({ kind: 'running', done: p.done, total: p.total });
+    });
+    try {
+      // videoKey: use the file path so the on-disk cache shards per
+      // video. filePath was checked non-null at the top of this
+      // component (early return), so it's safe to assume here.
+      const videoKey = filePath ?? 'unknown';
+      const results = await window.api.aiSummary.generate({ videoKey, segments: segs });
+      // Apply each successful title back to the store. Errors stay on
+      // the result entry but we don't surface per-segment errors in
+      // the UI yet (a single global error message is sufficient for
+      // the prototype).
+      let firstError: string | null = null;
+      for (const r of results) {
+        if (r.title) {
+          updateClipSegment(r.segmentId, { title: r.title });
+        } else if (!firstError && r.error && r.error !== 'cancelled') {
+          firstError = r.error;
+        }
+      }
+      if (firstError) {
+        setAiState({ kind: 'error', message: firstError });
+      } else {
+        setAiState({ kind: 'idle' });
+      }
+    } catch (err) {
+      setAiState({ kind: 'error', message: err instanceof Error ? err.message : String(err) });
+    } finally {
+      cleanup();
+    }
+  }, [clipSegments.length, hasAnthropicApiKey, buildSummarySegments, filePath, updateClipSegment]);
 
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
@@ -247,6 +332,9 @@ export default function ClipSelectView() {
               onUpdateEyecatch={updateEyecatch}
               onClearAll={clearAllSegments}
               onReorder={reorderClipSegments}
+              hasAnthropicApiKey={hasAnthropicApiKey}
+              aiGenerationState={aiState}
+              onGenerateAiTitles={handleGenerateAiTitles}
             />
           </div>
         </div>

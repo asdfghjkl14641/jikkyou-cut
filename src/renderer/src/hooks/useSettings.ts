@@ -5,6 +5,7 @@ import type { ApiKeyValidationResult } from '../../../common/types';
 export type SettingsView = {
   config: AppConfig;
   hasApiKey: boolean;
+  hasAnthropicApiKey: boolean;
 };
 
 export function useSettings() {
@@ -14,12 +15,13 @@ export function useSettings() {
   useEffect(() => {
     let alive = true;
     (async () => {
-      const [config, hasApiKey] = await Promise.all([
+      const [config, hasApiKey, hasAnthropicApiKey] = await Promise.all([
         window.api.getSettings(),
         window.api.hasApiKey(),
+        window.api.hasAnthropicApiKey(),
       ]);
       if (alive) {
-        setView({ config, hasApiKey });
+        setView({ config, hasApiKey, hasAnthropicApiKey });
         setLoading(false);
       }
     })();
@@ -31,7 +33,7 @@ export function useSettings() {
   const save = useCallback(async (partial: Partial<AppConfig>) => {
     const next = await window.api.saveSettings(partial);
     setView((prev) =>
-      prev ? { ...prev, config: next } : { config: next, hasApiKey: false },
+      prev ? { ...prev, config: next } : { config: next, hasApiKey: false, hasAnthropicApiKey: false },
     );
     return next;
   }, []);
@@ -56,5 +58,34 @@ export function useSettings() {
     );
   }, []);
 
-  return { view, loading, save, validateApiKey, setApiKey, clearApiKey };
+  const validateAnthropicApiKey = useCallback(
+    (key: string) => window.api.validateAnthropicApiKey(key),
+    [],
+  );
+
+  const setAnthropicApiKey = useCallback(async (key: string) => {
+    await window.api.setAnthropicApiKey(key);
+    setView((prev) =>
+      prev ? { ...prev, hasAnthropicApiKey: true } : null,
+    );
+  }, []);
+
+  const clearAnthropicApiKey = useCallback(async () => {
+    await window.api.clearAnthropicApiKey();
+    setView((prev) =>
+      prev ? { ...prev, hasAnthropicApiKey: false } : null,
+    );
+  }, []);
+
+  return {
+    view,
+    loading,
+    save,
+    validateApiKey,
+    setApiKey,
+    clearApiKey,
+    validateAnthropicApiKey,
+    setAnthropicApiKey,
+    clearAnthropicApiKey,
+  };
 }

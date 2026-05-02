@@ -312,6 +312,33 @@ export type UrlDownloadArgs = {
   outputDir: string;
 };
 
+// ---- AI summary (Anthropic Claude Haiku) ---------------------------------
+
+export type AiSummarySegment = {
+  id: string;
+  startSec: number;
+  endSec: number;
+  messages: ChatMessage[];
+};
+
+export type AiSummaryResult = {
+  segmentId: string;
+  title: string | null;
+  error?: string;
+};
+
+export type AiSummaryProgress = {
+  done: number;
+  total: number;
+};
+
+export type AiSummaryStartArgs = {
+  // Discriminator for the on-disk cache file. Caller can use videoId,
+  // file path basename, or any stable string.
+  videoKey: string;
+  segments: AiSummarySegment[];
+};
+
 // One clip segment in the user's selection list. Replaces the singular
 // `clipRange` — the editor now produces highlight-compilation–style
 // outputs with 1..20 segments separated by eyecatches.
@@ -364,6 +391,14 @@ export type IpcApi = {
   clearApiKey: () => Promise<void>;
   validateApiKey: (key: string) => Promise<ApiKeyValidationResult>;
 
+  // Anthropic API key — used by the AI segment-title summariser. Same
+  // BYOK pattern as Gladia, separate slot so the user can rotate them
+  // independently.
+  hasAnthropicApiKey: () => Promise<boolean>;
+  setAnthropicApiKey: (key: string) => Promise<void>;
+  clearAnthropicApiKey: () => Promise<void>;
+  validateAnthropicApiKey: (key: string) => Promise<{ ok: boolean; error?: string }>;
+
   // transcription
   startTranscription: (args: TranscriptionStartArgs) => Promise<TranscriptionResult>;
   cancelTranscription: () => Promise<void>;
@@ -413,5 +448,11 @@ export type IpcApi = {
     start: (args: CommentAnalysisStartArgs) => Promise<CommentAnalysis>;
     cancel: () => Promise<void>;
     onProgress: (cb: (p: CommentAnalysisProgress) => void) => () => void;
+  };
+
+  aiSummary: {
+    generate: (args: AiSummaryStartArgs) => Promise<AiSummaryResult[]>;
+    cancel: () => Promise<void>;
+    onProgress: (cb: (p: AiSummaryProgress) => void) => () => void;
   };
 };

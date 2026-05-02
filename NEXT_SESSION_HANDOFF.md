@@ -1,77 +1,89 @@
 # 次セッションへの引き継ぎ (NEXT_SESSION_HANDOFF)
 
 ## 凍結時刻
-2026-05-02 17:30
+2026-05-02 19:00
 
 ## リポジトリ状態
-- HEAD: 直近コミット直後(操作系整理 + LiveCommentFeed)
-- Working Tree: dirty(`urlDownload.ts` の Antigravity ログ 1 行のみ未コミット — 過去から残存)
+- HEAD: 直近コミット直後(Part A 操作感改善 + Part B AI タイトル要約)
+- Working Tree: 残 Antigravity WIP の `urlDownload.ts` ログ 1 行のみ未コミット
 
 ## 直前の状況サマリ
 
-ClipSelectView の操作系を「左クリック=シーク、右ドラッグ=区間追加」に整理し、`PeakDetailPanel`(ピーククリックで開く詳細パネル)を完全廃止して、右側に常駐する **ライブコメントフィード(`LiveCommentFeed`)** を据え置きました。動線が「左でシーク、右で区間」にきれいに二分される構造になっています。
+ClipSelectView の操作感を 4 件まとめて改善し、続けて AI タイトル要約(Anthropic Claude Haiku 4.5)Phase 2 を完成させました。
 
-### 主要変更
+### Part A — 操作感改善
 
-1. **波形の左右クリック分離** (`CommentAnalysisGraph.tsx`)
-   - 左クリック単発 → シーク
-   - 左ドラッグ → ライブシーク(マウスに追従)
-   - 右ドラッグ → 範囲選択 → リリースで `addClipSegment` 自動呼び出し(最低 5 秒、既存区間と重複なら toast 警告)
-   - 右クリック単発 → no-op、`onContextMenu` で preventDefault してネイティブメニュー抑制
-   - 区間バー上を左クリック → そこへシーク + バー select(Delete キー対応)
+1. **左クリック即時シーク**: `mousedown` 時点で **即発火** + `mousemove` でライブシーク追従。RAF coalesce で連続発火を抑制。移動閾値 5→3 px、segment-pending / right-pending にだけ移動閾値が残る
+2. **ホバーツールチップ圧縮**: 4 行 → 1 行(`時刻 · スコア · コメ数`)、font-size 11px、カーソルから 12/12 px オフセット、150 ms 遅延でフリッカー抑制
+3. **コメント行コンパクト化**: ROW_HEIGHT 60→40、ユーザ名列削除(時刻 + 本文の 2 列)
+4. **区間バー右クリックメニュー**: `SegmentContextMenu` 新規。「タイトル編集」「この区間を削除」。タイトル編集は ClipSegmentsList の inline 編集を `editTitleRequestId` 経由で発火 + scrollIntoView
 
-2. **`PeakDetailPanel.{tsx,module.css}` 削除**: ピーククリックの詳細展開・「この区間を編集範囲に設定」ボタン・「この区間を切り抜きに追加」ボタン・AI 要約スロット・カテゴリ内訳すべて廃止。`selectedPeak` state、関連の Esc ハンドラ、`onPeakClick` callback も除去
+### Part B — AI タイトル要約
 
-3. **`LiveCommentFeed.{tsx,module.css}` 新規** (右パネル常駐)
-   - 動画全体の chat replay を時系列で並べる
-   - `currentSec` 追従でオートスクロール(現在位置を viewport 中央)
-   - 現在 ±5 秒のコメント = 背景強調 + 赤い左ボーダー、過去 = opacity 0.55、未来 = 0.85
-   - コメントクリック → その時刻にシーク
-   - キーワードを薄い色付き下線でハイライト
-   - 独自仮想スクロール(`ROW_HEIGHT=60px` 固定 + 上下スペーサ + 可視 ±BUFFER_ROWS=6)
-   - 手動スクロール検知:`lastProgrammaticScrollTop` と実 scrollTop の差が 4px 超なら autoScroll OFF。「現在位置に戻る」ボタン + ヘッダのチェックボックスで再開
-   - 数千件のチャットでも常時 ~30 DOM ノード
-
-4. **`CommentAnalysis.allMessages: ChatMessage[]` 追加**: `analyze()` 内で defensive sort、renderer で binary search して現在位置のコメント index を引く。バケット内のメッセージとは同一参照(コピーなし)
-
-5. **ボタン整理**:「この区間を編集範囲に設定」ボタン廃止 → ヘッダの「この区間を編集 (N)」一本に統一。`MIN_SEGMENT_SEC` を 1 → 5 秒へ底上げ(誤クリック対策)
+1. **Anthropic BYOK**: `secureStorage` を Gladia / Anthropic 2 スロット化。Settings UI に「Anthropic APIキー(AI タイトル生成用)」セクション追加(独立 入力 + 検証 + 保存 + 削除)。1-token validation ping(`max_tokens: 5`)で実 API 接続を確認してから保存
+2. **`aiSummary.ts`(新規)**: Claude Haiku 4.5 で各 ClipSegment のキャッチータイトル生成。3 並列 + 429/5xx で 3 回まで 2/4/6 秒バックオフ + per-request 30 秒タイムアウト + AbortController で `cancelAll()`。出力は `cleanTitle()` で「タイトル:」echo・引用符・句点を strip
+3. **キャッシュ**: `userData/comment-analysis/<videoKey>-summaries.json`、key は `${startSec}-${endSec}-${msgCount}`(2 桁丸めで sub-frame ドリフト吸収)
+4. **ClipSegmentsList の AI 生成ボタン**: Sparkles アイコン + 全削除ボタンの隣。実行中は `生成中… 3/12` 進捗表示、キー未設定時 disabled + tooltip 案内、エラー時は inline 赤メッセージ
+5. **タイトル反映**: 結果を `updateClipSegment(id, { title })` で store へ書き込み、即時 UI 反映
 
 ## 主要変更ファイル
 
-- `src/common/types.ts` — `CommentAnalysis.allMessages` 追加
-- `src/main/commentAnalysis/scoring.ts` — `analyze()` で `[...messages].sort((a,b)=>a.timeSec-b.timeSec)` を返却
-- `src/renderer/src/components/CommentAnalysisGraph.{tsx,module.css}` — マウスステートマシン刷新(`left-pending` / `left-live` / `segment-*` / `right-select`)+ `warningToast` UI
-- `src/renderer/src/components/CommentAnalysisGraph.mock.ts` — `allMessages: []`
-- `src/renderer/src/components/LiveCommentFeed.{tsx,module.css}`(新規)
-- `src/renderer/src/components/ClipSelectView.{tsx,module.css}` — 2-column 配置、`selectedPeak` state 削除、`<aside>` で `LiveCommentFeed` を常駐
-- `src/renderer/src/components/PeakDetailPanel.{tsx,module.css}`(削除)
+### Part A
+- `src/renderer/src/components/CommentAnalysisGraph.{tsx,module.css}` — マウスステートマシン作り直し + tooltipCompact + RAF coalesce
+- `src/renderer/src/components/LiveCommentFeed.{tsx,module.css}` — ROW_HEIGHT 40 + author 列削除
+- `src/renderer/src/components/ClipSegmentsList.tsx` — `editTitleRequestId` prop + scroll-into-view
+- `src/renderer/src/components/ClipSelectView.tsx` — コンテキストメニュー orchestration
+- `src/renderer/src/components/SegmentContextMenu.{tsx,module.css}`(新規)
+
+### Part B
+- `src/main/secureStorage.ts` — 2 スロット化(Gladia / Anthropic)
+- `src/main/aiSummary.ts`(新規) — 並列実行 + リトライ + キャッシュ + 1-token validation
+- `src/main/index.ts` — `anthropicApiKey:*` + `aiSummary:*` IPC ハンドラ追加
+- `src/preload/index.ts` — Anthropic 系 + `aiSummary` namespace を window.api に expose
+- `src/common/types.ts` — `AiSummary*` 型 + `IpcApi` 拡張
+- `src/renderer/src/hooks/useSettings.ts` — Anthropic accessors(validate / set / clear)
+- `src/renderer/src/components/SettingsDialog.tsx` — 2 セクション化(Gladia / Anthropic)
+- `src/renderer/src/components/ClipSegmentsList.{tsx,module.css}` — AI ボタン + 進捗 + エラー表示
+- `src/renderer/src/components/ClipSelectView.tsx` — orchestrator + segments→messages slicing
+- `src/renderer/src/App.tsx` — Settings ダイアログへの props bridge
 
 ## 最初のアクション順
 
-1. **実機動作確認**(私はサンドボックスから動かせないので必須)
-   - 左クリック → シーク(区間バー上クリックでもシーク + select)
-   - 左ドラッグ → ライブシーク
-   - 右ドラッグ → 範囲オーバーレイ → リリースで区間追加(リストにカード出現、波形にバー出現)
-   - 右クリック単発 → コンテキストメニュー出ない
-   - 再生中、右パネルがオートスクロール(コメントが現在位置に追従)
-   - 手動スクロール → autoScroll OFF + 「現在位置に戻る」ボタン出現
-   - キーワードに色付き下線
-2. **AI 要約スロット実装(次タスク、Claude Code)**: Anthropic Claude Haiku で区間タイトル自動生成 + (任意で)LiveCommentFeed のヘッダ近辺にウィンドウ要約。`src/main/commentAnalysis/aiSummary.ts` 新規 + IPC `commentAnalysis.summariseSegment` 想定
-3. **アイキャッチの実体動画化(別タスク)**: FFmpeg で黒画面 + テキスト合成、`drawtext` フィルタ
-4. **編集画面 (`edit` フェーズ) で `clipSegments` を実際に動画範囲絞り込みに使う**: 現状は `setPhase('edit')` だけで動画レンジは未連動
+1. **実機動作確認**(私はサンドボックスから動かせないので必須):
+   - 左クリック → mousedown 直後にシーク発火(指でリズム叩いてラグ感じない)
+   - 左ドラッグ → ライブシークが滑らか
+   - 区間バー上クリック → 即シーク + 動かなければ select、ドラッグなら resize/move
+   - 波形ホバー → 1 行ツールチップ + 150 ms 遅延 + カーソルから少しオフセット
+   - コメント行 → ROW_HEIGHT 40 + ユーザ名なし、4000 件で fps 落ちず
+   - 区間バー右クリック → メニュー、「削除」「タイトル編集」両方動作
+   - Settings → Anthropic キー入力 → 検証成功フィードバック → 保存
+   - AI でタイトル生成 → 進捗バー → 各区間にタイトル反映
+   - 同じ区間で再度生成 → キャッシュ即返り(API 呼ばれない、ms 単位)
+   - ネット切断 / 不正キー / レート制限 → エラーメッセージ + UI ハングしない
+2. **アイキャッチの実体動画化(次タスク)**: FFmpeg `drawtext` フィルタで黒画面 + テキスト合成。`Eyecatch.text` を入力に短い動画(`durationSec` 秒)を生成、書き出し時の concat に挟む
+3. **編集画面での `clipSegments` 適用**: 現状は `setPhase('edit')` だけで動画レンジは未連動。VideoPlayer の preview-skip ロジックを clipSegments の補集合(削除すべき範囲)で動かす拡張が必要
 
 ## 既知の地雷・注意点
 
-- **`MIN_SEGMENT_SEC=5` 固定**: それ未満の右ドラッグは silent discard。短い切り抜きを許したくなったら定数を下げる
-- **`onContextMenu` 抑制**: 波形領域だけ。波形の外(動画 / リスト / フィード)では通常の右クリックメニューが出る
-- **autoScroll の programmatic vs user 判定**: 4px 許容で誤判定を避けているが、極稀にレイアウトシフトで autoScroll が誤 OFF になることがある。困ったらヘッダのチェックボックスで再開可能
-- **キーワードハイライトのコスト**: 行ごとに `SORTED_KEYWORDS.length` 回ループしてる。1000 行 × 60 パターン = 6 万回 / 描画。仮想スクロールで実描画は 30 行程度なので 1800 回 / フレーム → 余裕。ただしキーワード辞書を倍々に増やすと境目が来る
-- **`CommentAnalysis.allMessages` のキャッシュサイズ**: 数千件で ~500KB。チャットキャッシュ自体は immutable だが、`comment-analysis/<id>-chat.json` の構造変更が起きるとマイグレーション要
+- **AI 生成のキャッシュキー**: 2 桁丸め `${start.toFixed(2)}-${end.toFixed(2)}-${msgCount}`。境界を 0.01 秒以下動かしてもキャッシュヒットする一方、コメント数が変わるとミスする(W=120 から 121 に動かしただけでも buckets の境界が変わって msgCount が 1 増減する可能性あり)。仕様としては OK だが、実機検証時に「おや、再生成された」と感じたら msgCount のせいかも
+- **Anthropic API キー削除の挙動**: Settings から削除しても、ClipSelectView の `hasAnthropicApiKey` 状態は次回マウント時にしか refresh されない(useEffect が依存なし)。AI 生成ボタンが「キー未設定」に切り替わるのが少し遅れる可能性。ClipSelectView で見える window 内では問題ないが、Settings → 編集 → 戻る で再生成したら気にすべき
+- **AI 生成中の AbortController**: ClipSelectView がアンマウントされても fetch は走り続ける。新しい動画ファイルを開いた瞬間にキャンセルしたい場合は cleanup 関数で `window.api.aiSummary.cancel()` を呼ぶべきだが、今回は実装してない(プロトタイプ範囲)
+- **80 件サンプリング**: コメントが極端に多い区間で `stride = total/80` で均等抽出。もし 1 区間で 1000 件超のコメントが瞬間的に集まる動画の場合、サンプリング精度が荒くなって AI タイトルが大味になる可能性
 
 ## みのる(USER)への報告用
 
-- **左でシーク、右で区間追加** に動線がスパッと分かれました。
-- 右パネルが「ピーク詳細」じゃなく **常駐の流しコメント** になりました。動画再生に合わせて下から上に流れる感じで、現在位置のコメントが赤い線で目立ちます
-- コメントクリックで即その時刻にシーク
-- 区間追加は **波形を右ドラッグするだけ**(中央のボタン廃止、ヘッダの「この区間を編集」一本に集約)
-- AI 要約と区間タイトル自動生成は次のセッションで
+### Part A 改善まとめ
+- **左クリックが即シーク**:Anthropic キーは Settings の新しい欄に入れてください
+- **ホバーが邪魔じゃなくなった**:時刻 · スコア · 件数 だけの 1 行
+- **コメント欄が詰まった**:ROW_HEIGHT 60→40、ユーザ名なし
+- **区間バーを右クリック**でメニュー(削除 / タイトル編集)
+
+### Part B AI タイトル
+- Settings の「Anthropic APIキー」欄に登録 → ClipSegmentsList 上部の「AI でタイトル生成」ボタンで全区間一括生成
+- 生成結果は各区間カードの `title` 欄に直接入る、手で再編集も可
+- 同じ境界の区間は 2 回目以降キャッシュから即返る(API コスト発生しない)
+- モデルは Claude Haiku 4.5(廉価帯)、20 区間で数円のコスト感
+
+### 次タスク候補
+- アイキャッチの実体動画化
+- 編集画面での clipSegments 適用(動画範囲絞り込み)

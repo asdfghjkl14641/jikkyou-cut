@@ -15,6 +15,39 @@
 
 ---
 
+## 2026-05-02 19:00 - AI タイトル要約(Anthropic Claude Haiku 統合)Phase 2
+
+- 誰が: Claude Code
+- 何を:
+  - **Anthropic API キー BYOK**: `secureStorage.ts` を Gladia / Anthropic の 2 スロット化(`apiKey.bin` / `anthropicKey.bin`、independently rotatable)。`hasAnthropicSecret` / `saveAnthropicSecret` / `loadAnthropicSecret` / `deleteAnthropicSecret` を追加
+  - **`aiSummary.ts`(新規)**: Claude Haiku 4.5(`claude-haiku-4-5`)で各 `ClipSegment` のキャッチータイトルを生成。3 並列 + 429/5xx で 3 回まで 2/4/6 秒バックオフ + per-request 30 秒タイムアウト + AbortController で `cancelAll()`。プロンプトは「15 文字以内のキャッチータイトル」「ネタバレ歓迎」「カギカッコ・絵文字なし」。コメント数 80 件超は均等サンプリング。出力は `cleanTitle()` で「タイトル:」echo・引用符・句点を strip
+  - **キャッシュ**: `userData/comment-analysis/<videoKey>-summaries.json`、key は `${startSec}-${endSec}-${messages.length}`(2 桁丸めで sub-frame ドリフト吸収)。同じ境界 2 回目は API 呼ばずに即返す
+  - **検証エンドポイント**: `validateAnthropicKey(key)` で 1-token ping(`max_tokens: 5, "Hi"`)。401/403 は明示的にローカライズ、429 は「キー自体は有効な可能性」の注釈付きエラー
+  - **Settings UI 拡張**: `SettingsDialog` を Gladia / Anthropic の 2 セクション分け、各セクション独立の 入力 + 保存(検証込み) + 削除 + 状態フィードバック(設定済みバッジ / エラー表示 / 保存成功表示)
+  - **ClipSegmentsList の「AI でタイトル生成」ボタン**: 全削除ボタンの隣に新設、Sparkles アイコン。実行中は `生成中… 3/12` の進捗ラベル表示。キー未設定時は disabled + tooltip 案内。エラー時は inline メッセージ
+  - **タイトル反映**: `aiSummary.generate` の結果を 1 件ずつ `updateClipSegment(id, { title })` で store に書き込み、即時 UI 反映
+- 理由: 切り抜き編集で「区間タイトル付け」は AI に任せた方が速い + ネタバレ的キャッチコピーが切り抜き文化に合う。Haiku は安価(1 動画 30 区間で数円)で品質十分。BYOK で OPS コストはユーザ持ち、`safeStorage` (Windows DPAPI) で暗号化保存、renderer に生キー戻さない
+- 開放されている設計判断:
+  - 区間追加時の自動生成(現状はボタン押下時のみ)
+  - 個別区間の再生成ボタン(区間カード内に再生成アイコン)
+  - プロンプトテンプレートのユーザカスタマイズ
+  - モデル選択(Sonnet 4.6 / Opus 4.7、現状は Haiku 固定)
+  - エラーの per-segment 表示(現状は first-error の global 表示のみ)
+- 影響: src/main/secureStorage.ts (2 スロット化)、src/main/aiSummary.ts(新規)、src/main/index.ts (`anthropicApiKey:*` + `aiSummary:*` IPC)、src/preload/index.ts (`hasAnthropicApiKey` 等 + `aiSummary` namespace)、src/common/types.ts (`AiSummary*` 型 + `IpcApi` 拡張)、src/renderer/src/hooks/useSettings.ts (Anthropic accessors)、src/renderer/src/components/SettingsDialog.tsx (2 セクション)、src/renderer/src/components/ClipSegmentsList.{tsx,module.css}(AI ボタン + 進捗)、src/renderer/src/components/ClipSelectView.tsx(オーケストレータ + segments→messages slicing)、src/renderer/src/App.tsx(props 経由)
+- コミット: (未定)
+
+## 2026-05-02 18:30 - ClipSelectView 操作感改善(左クリック即時シーク + ホバー圧縮 + コメント行コンパクト化 + 区間バー右クリックメニュー)
+
+- 誰が: Claude Code
+- 何を:
+  - **A-1 左クリック即時シーク**: 旧「mousedown → 5px 移動チェック → mouseup でクリック判定 → 発火」の 4 段ゲートを廃止。`mousedown` 時点で **即座に 1 回シーク** + 続く `mousemove` でライブシーク追従。RAF coalesce(`scheduleSeek`)で 60+fps 連続発火を抑制。閾値 5→3 px、`segment-pending` / `right-pending` の 2 種にだけ移動閾値を残す
+  - **A-2 ホバーツールチップ圧縮**: 4 行(時刻 / スコア / カテゴリ内訳 / コメント数)を **1 行**(`2:05:20 · スコア 48 · 86コメ`)に。font-size 11px、padding 4/8、半透明黒背景、カーソルから 12/12 px オフセット、150 ms 遅延でホバーフリッカー抑制、画面右端で flip
+  - **A-3 LiveCommentFeed コンパクト化**: `ROW_HEIGHT` 60 → 40 px、ユーザ名列削除(時刻 + 本文の 2 列)、行内 1 行 ellipsis、`BUFFER_ROWS` 6→8。author データは `ChatMessage.author` に残るが UI ではレンダリングしない(将来用に保持)
+  - **A-4 区間バー右クリックメニュー**: `SegmentContextMenu.{tsx,module.css}`(新規、`position: fixed`)で「タイトル編集」「この区間を削除」を提示。`onSegmentContextMenu` props で graph → ClipSelectView へ伝搬。「タイトル編集」は `editTitleRequestId` 経由で ClipSegmentsList の inline 編集モードを発火 + `scrollIntoView({ block: 'center' })`。メニュー外クリック / Esc でクローズ
+- 理由: baef8ad 後の実機検証で「シーク反応遅い・ホバー邪魔・コメント幅でかい」報告。クリック即時性は移動閾値ゲートを完全撤廃、ホバーは情報過多だったので最小限に圧縮、コメント行はユーザ名で 30% 食ってたので削って倍密度に
+- 影響: CommentAnalysisGraph.{tsx,module.css}(マウスステートマシン作り直し + tooltipCompact)、LiveCommentFeed.{tsx,module.css}(ROW_HEIGHT 40 + author 列削除)、ClipSegmentsList.tsx(`editTitleRequestId` prop + scroll-into-view)、ClipSelectView.tsx(コンテキストメニュー orchestration)、SegmentContextMenu.{tsx,module.css}(新規)
+- コミット: `[Part A]`
+
 ## 2026-05-02 17:30 - 操作系整理(左右クリック分離) + ピーク詳細廃止 → 常駐ライブコメントビュー
 
 - 誰が: Claude Code(Antigravity から託された仕様の実装)

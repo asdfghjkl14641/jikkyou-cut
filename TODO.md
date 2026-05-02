@@ -23,7 +23,10 @@
   - [x] **rolling window スコア + W スライダー UI**(5 要素:平均コメ密度・平均キーワード・持続率・ピーク強度・視聴者維持率、Stage 1=main bucketize / Stage 2=renderer rolling)
   - [x] **複数区間選択 + 感情 9 カテゴリ + 区間色塗り + アイキャッチ枠**(clipSegments[] 最大 20 / dominantCategory 別 path 描画 / Eyecatch 自動同期 / 区間バー drag resize+move / ClipSegmentsList で順序入替 + タイトル編集)
   - [x] **操作系整理 + 常駐ライブコメントビュー**(波形は左=シーク・右ドラッグ=区間追加、PeakDetailPanel 廃止、LiveCommentFeed 新設で chat 全件を再生位置追従・自動スクロール表示、仮想スクロール独自実装)
-  - [ ] **次**: AI 要約(Claude Haiku)で区間タイトル自動生成
+  - [x] **操作感改善 + 区間バー右クリックメニュー**(左クリック即時シーク / ホバー圧縮 / コメント行コンパクト化 / SegmentContextMenu)
+  - [x] **AI タイトル要約(Claude Haiku 4.5)**(Anthropic BYOK、aiSummary.ts オーケストレータ、3 並列 + リトライ + キャッシュ、Settings UI 拡張、ClipSegmentsList の AI 生成ボタン)
+  - [ ] **次**: アイキャッチの実体動画化(FFmpeg で黒画面 + テキスト合成)
+  - [ ] 編集画面での clipSegments 適用
   - [ ] アイキャッチの実体動画化(FFmpeg で黒画面 + テキスト合成)
   - [ ] 自動候補抽出ボタン(上位 N 区間を一括追加)
   - [ ] スコア重み調整 UI(現状ハードコード)
@@ -97,6 +100,8 @@
 
 ### 2026-05-02
 
+- AI タイトル要約(Anthropic Claude Haiku 4.5 統合) — `secureStorage` を Gladia/Anthropic 2 スロット化、`aiSummary.ts` を新設(3 並列 + 429/5xx リトライ + per-request 30 秒タイムアウト + AbortController キャンセル)、`userData/comment-analysis/<key>-summaries.json` キャッシュ(2 桁丸めキーで sub-frame ドリフト吸収)、Settings UI を Gladia/Anthropic 2 セクション化、ClipSegmentsList に「AI でタイトル生成」ボタン + 進捗表示。1-token validation ping で キー検証。プロンプトは「15 文字以内のキャッチータイトル、ネタバレ歓迎」。区間→bucket-message slicing は ClipSelectView 側
+- 操作感改善(左クリック即時シーク + ホバー圧縮 + コメント行コンパクト化 + 区間バー右クリックメニュー)— mousedown 時点で即発火 + RAF coalesce、ツールチップを 4 行 → 1 行(`時刻 · スコア · 件数`)、ROW_HEIGHT 60→40 + author 列削除、`SegmentContextMenu` 新規(削除 / タイトル編集 → 編集はリストの inline 編集を発火 + scrollIntoView)
 - 操作系整理(左右クリック分離)+ ピーク詳細廃止 → 常駐ライブコメントビュー — 波形の左クリック = シーク、左ドラッグ = ライブシーク、右ドラッグ = 区間追加(リリース時に自動 add)、右クリック単発 = no-op(`onContextMenu` 抑制)。`PeakDetailPanel` 削除、ClipSelectView 右側に `LiveCommentFeed`(常駐、独自仮想スクロール、現在位置追従、コメントクリックでシーク、キーワードを薄い色付き下線でハイライト)。`CommentAnalysis.allMessages` 追加で全 chat を再生位置基準に binary search できるように。「この区間を編集範囲に設定」ボタン廃止 → ヘッダの「この区間を編集」一本に統一
 - 複数区間選択 + 感情 9 カテゴリ + 区間色塗り + アイキャッチ枠 — 旧 `clipRange` 単区間を撤廃して `clipSegments[]`(最大 20)+ 自動同期する `eyecatches[]` に作り直し。感情カテゴリを 5→9 へ拡張(death/victory/scream/flag 追加、ゲーム実況の死亡フラグ・GG・察し等を語彙化)。波形には dominantCategory 別の薄い色塗り(両端フェード gradient で seam 隠し、白線は固定)+ 区間オーバーレイバー(端ドラッグ resize / 中央 move / 隣接 clamp)。区間カードのドラッグ順序入替・タイトル inline 編集・アイキャッチ skip toggle を持つ `ClipSegmentsList` を新設。`PeakDetailPanel` は「設定」から「追加」へ動線変更、連続追加 OK
 - コメント分析: rolling window スコアに作り直し + W スライダー UI 追加 — 旧「5 秒バケット瞬間スコア」を「W 分続いた盛り上がり」へ。5 要素(平均コメ密度・平均キーワード・持続率・ピーク強度・視聴者維持率)、W=30 秒〜5 分(30 秒ステップ、初期値 2 分)。Stage 1(`bucketize`、main 1 回)と Stage 2(`computeRollingScores`、renderer 都度)に分解、スライダー操作時の体感ラグを排除。`RawBucket` 型新設、`ScoreSample` 構造刷新、`CommentAnalysis.samples` 廃止 → `buckets[]` 保持。視聴者は維持率(min/max)1 軸へ統一(growth rate 廃止)。`src/common/types.ts` / `src/main/commentAnalysis/scoring.ts` / `src/renderer/src/lib/rollingScore.ts`(新規)/ `src/renderer/src/components/{WindowSizeSlider,CommentAnalysisGraph,ClipSelectView,PeakDetailPanel}` / `src/renderer/src/store/editorStore.ts`
