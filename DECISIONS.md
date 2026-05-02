@@ -15,6 +15,23 @@
 
 ---
 
+## 2026-05-03 02:00 - API 管理画面をモーダルから全画面フェーズに変更
+
+- 誰が: Claude Code
+- 何を: 直前(`ead5db5`)で実装した `ApiManagementDialog`(モーダル)を `ApiManagementView`(全画面ビュー)に置換。`editorStore.phase` に `'api-management'` 値を追加、`previousPhase: RestorablePhase | null` で戻り先を保持、`openApiManagement()` / `closeApiManagement()` 2 アクションで遷移。`App.tsx` は `phase === 'api-management'` のとき early return で完全別画面を return(他フェーズの header / banner も含めて非表示)
+  - **戻る動線**: ヘッダ左の「← 戻る」ボタン + Esc キー(input/textarea にフォーカスがある時は無視)
+  - **load / clip-select / edit のいずれからでも遷移可能**、戻りはそれぞれ元の phase に復帰。`previousPhase` 保持なので clipSegments / 動画ファイル / 編集状態は維持される(setFile/clearFile が走らない限り消えない)
+  - **モーダル時のロジックは全部移植**: タブ切替(API キー / 収集ログ)、Gladia / Anthropic 単一キーの inline 編集モード + 削除 confirm、YouTube multi-key editor、per-key クォータバー(5 秒 polling)、CollectionLogViewer 埋め込み
+  - **CSS は別新規ファイル**(`ApiManagementView.module.css`):`<dialog>` の固定サイズ制約を解除、`height: 100vh` + flex column + 内側 `max-width: 1200px` で間延び防止。CollectionLogViewer は parent flex:1/min-height:0 のチェーンで画面高さに追従(虚スクロールが正しい containerHeight を取る)
+  - SettingsDialog の「API 管理画面を開く」ボタンも同じ store アクション経由に変更(旧 `setApiMgmtOpen` 廃止)
+- 理由: モーダル形式は背景透過 + 小ダイアログで「別画面に切り替わる」感が薄く、ユーザの意図(全画面 swap)に合っとらんかった。既存 3 フェーズと同じパターン(load / clip-select / edit / **api-management**)に統一して認知負荷を減らす + データ蓄積期のログ確認画面として「広い画面いっぱい使える」価値も
+- 開放されている設計判断:
+  - api-management 時の Settings ダイアログ(現状はマウントされたまま、phase swap で見えなくなる)— 状態クリアが要るなら明示 close
+  - 戻りアニメーション(現状はインスタント切替)
+- 影響: editorStore.ts(phase + previousPhase + 2 アクション)、App.tsx(early return + 旧 setApiMgmtOpen 削除 + 新 onMenuOpenApiManagement ハンドラ)、ApiManagementView.{tsx,module.css}(新規)、ApiManagementDialog.{tsx,module.css}(削除)
+- ⚠️ 実機検証はユーザ環境で必要(全フェーズからの遷移 / Esc / 戻るボタン / データ保持)
+- コミット: (未定)
+
 ## 2026-05-03 01:00 - 「API 管理」専用画面の新設(全 API キー統合 + ログビューア)
 
 - 誰が: Claude Code

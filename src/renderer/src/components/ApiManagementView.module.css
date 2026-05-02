@@ -1,26 +1,49 @@
-.dialog {
-  background: var(--bg-surface);
-  color: var(--text-primary);
-  border: 1px solid var(--border-strong);
-  border-radius: var(--radius-lg);
-  padding: 0;
-  width: min(720px, 90vw);
-  max-height: 85vh;
+/* Full-screen API management view. Mirrors ClipSelectView's layout
+   pattern (header → tabs → flex:1 body) so phase swaps look uniform. */
+
+.view {
   display: flex;
   flex-direction: column;
-}
-
-.dialog::backdrop {
-  background: rgba(0, 0, 0, 0.55);
+  height: 100vh;
+  background: var(--bg-base);
+  color: var(--text-primary);
 }
 
 .header {
+  height: 56px;
   display: flex;
-  align-items: center;
   justify-content: space-between;
-  padding: var(--space-3) var(--space-4);
+  align-items: center;
+  padding: 0 var(--space-4);
+  background: var(--bg-surface);
   border-bottom: 1px solid var(--border-subtle);
   flex-shrink: 0;
+}
+
+.headerLeft {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+}
+
+.backButton {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  padding: var(--space-2) var(--space-4);
+  border-radius: var(--radius-md);
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-medium);
+  cursor: pointer;
+  transition: all var(--transition-fast);
+  background: transparent;
+  color: var(--text-secondary);
+  border: 1px solid transparent;
+}
+
+.backButton:hover {
+  color: var(--text-primary);
+  background: rgba(255, 255, 255, 0.05);
 }
 
 .title {
@@ -32,25 +55,13 @@
   margin: 0;
 }
 
-.closeButton {
-  background: transparent;
-  border: none;
-  color: var(--text-muted);
-  cursor: pointer;
-  padding: 4px;
-  border-radius: var(--radius-sm);
-  display: inline-flex;
-}
-
-.closeButton:hover {
-  background: rgba(255, 255, 255, 0.06);
-  color: var(--text-primary);
-}
+/* ---- Tabs ---------------------------------------------------------------- */
 
 .tabs {
   display: flex;
   gap: 0;
-  padding: 0 var(--space-4);
+  padding: 0 var(--space-6);
+  background: var(--bg-surface);
   border-bottom: 1px solid var(--border-subtle);
   flex-shrink: 0;
 }
@@ -64,11 +75,9 @@
   border-bottom: 2px solid transparent;
   color: var(--text-muted);
   cursor: pointer;
-  padding: 10px 14px;
+  padding: 12px 16px;
   font-size: var(--font-size-sm);
   transition: all var(--transition-fast);
-  /* Negative margin so the active border lines up with the bottom of
-     the tabs row (overlapping the parent's border-bottom). */
   margin-bottom: -1px;
 }
 
@@ -81,10 +90,27 @@
   border-bottom-color: var(--accent-primary);
 }
 
+/* ---- Body ---------------------------------------------------------------- */
+
 .body {
   flex: 1;
-  overflow-y: auto;
-  padding: var(--space-4);
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  /* Generous side padding for the wide screen, but cap inner max-width
+     so content doesn't sprawl across an ultrawide monitor. */
+  padding: var(--space-5) var(--space-6);
+}
+
+.body > * {
+  /* The keys tab is a column flex; the log viewer is also a flex
+     container that grows to remaining height. Both want max-width
+     constraint + auto centring. */
+  max-width: 1200px;
+  margin: 0 auto;
+  width: 100%;
+  flex: 1;
   min-height: 0;
 }
 
@@ -92,15 +118,20 @@
   display: flex;
   flex-direction: column;
   gap: var(--space-3);
+  /* Keys tab is scrollable on narrow heights; the log tab does its
+     own internal scrolling so it doesn't need this. */
+  overflow-y: auto;
 }
 
 /* ---- Single-key + multi-key shared shell --------------------------------- */
+/* Same shapes as the previous ApiManagementDialog.module.css — only
+   the outer view chrome differs. */
 
 .keySection {
   background: rgba(255, 255, 255, 0.02);
   border: 1px solid var(--border-subtle);
   border-radius: var(--radius-md);
-  padding: var(--space-3);
+  padding: var(--space-4);
 }
 
 .keySectionHeader {
@@ -112,19 +143,19 @@
 }
 
 .keySectionTitle {
-  font-size: var(--font-size-sm);
+  font-size: var(--font-size-md);
   font-weight: var(--font-weight-medium);
   margin: 0;
   color: var(--text-primary);
 }
 
 .keySectionStatus {
-  font-size: var(--font-size-xs);
+  font-size: var(--font-size-sm);
 }
 
 .keySectionActions {
   display: inline-flex;
-  gap: 4px;
+  gap: 6px;
 }
 
 .statusOk {
@@ -145,7 +176,7 @@
   background: transparent;
   border: 1px solid var(--border-strong);
   color: var(--text-secondary);
-  padding: 4px 10px;
+  padding: 5px 12px;
   font-size: var(--font-size-xs);
   border-radius: var(--radius-sm);
   cursor: pointer;
@@ -255,12 +286,12 @@
   background: rgba(99, 102, 241, 0.06);
   border: 1px solid rgba(99, 102, 241, 0.2);
   border-radius: var(--radius-sm);
-  padding: 8px 12px;
+  padding: 10px 14px;
   margin: 8px 0;
 }
 
 .quotaSummary {
-  font-size: var(--font-size-xs);
+  font-size: var(--font-size-sm);
   color: var(--text-secondary);
   margin-bottom: 8px;
 }
@@ -279,7 +310,7 @@
 
 .quotaBarRow {
   display: grid;
-  grid-template-columns: 60px 1fr 110px;
+  grid-template-columns: 60px 1fr 130px;
   align-items: center;
   gap: 8px;
   font-size: 11px;

@@ -23,7 +23,11 @@ type ExportStatus = 'idle' | 'running' | 'success' | 'error' | 'cancelled';
 
 const HISTORY_LIMIT = 100;
 
-type EditorPhase = 'load' | 'clip-select' | 'edit';
+type EditorPhase = 'load' | 'clip-select' | 'edit' | 'api-management';
+// Phases that the user can return TO from api-management. We exclude
+// 'api-management' itself — the back button collapses cycles by clearing
+// previousPhase on entry.
+type RestorablePhase = Exclude<EditorPhase, 'api-management'>;
 
 // Maximum number of clip segments the user can stack — set well above
 // the realistic 10-or-so per highlight compilation so a determined user
@@ -34,6 +38,10 @@ const DEFAULT_EYECATCH_DURATION_SEC = 1.5;
 
 type EditorState = {
   phase: EditorPhase;
+  // Where the back button on the API management screen returns to.
+  // null means we're not on the API management phase. Set when entering
+  // 'api-management', cleared when leaving it.
+  previousPhase: RestorablePhase | null;
   // Multi-segment selection — replaces the old singular `clipRange`.
   // Always paired with `eyecatches` whose length is held at
   // `max(0, clipSegments.length - 1)` (one divider per gap between
@@ -93,6 +101,13 @@ type EditorState = {
 
   // phase lifecycle
   setPhase: (phase: EditorPhase) => void;
+  // Push current phase onto previousPhase and switch to api-management.
+  // Idempotent: calling while already on api-management is a no-op.
+  openApiManagement: () => void;
+  // Pop previousPhase back into phase. Falls back to 'load' if there's
+  // no recorded source (e.g. cold-launched into api-management which
+  // we don't currently allow).
+  closeApiManagement: () => void;
 
   // Clip-segment lifecycle. Mutations on `clipSegments` automatically
   // resize `eyecatches` to N-1, preserving slot text where possible.
@@ -244,6 +259,7 @@ function syncEyecatches(
 
 export const useEditorStore = create<EditorState>((set, get) => ({
   phase: 'load',
+  previousPhase: null,
   clipSegments: [],
   eyecatches: [],
   filePath: null,
@@ -287,6 +303,17 @@ export const useEditorStore = create<EditorState>((set, get) => ({
   analysisWindowSec: DEFAULT_ANALYSIS_WINDOW_SEC,
 
   setPhase: (phase) => set({ phase }),
+
+  openApiManagement: () => {
+    const cur = get().phase;
+    if (cur === 'api-management') return;
+    set({ phase: 'api-management', previousPhase: cur });
+  },
+
+  closeApiManagement: () => {
+    const prev = get().previousPhase;
+    set({ phase: prev ?? 'load', previousPhase: null });
+  },
 
   addClipSegment: (segment) => {
     const { clipSegments, eyecatches } = get();

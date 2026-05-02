@@ -10,7 +10,7 @@ import VideoPlayer, {
 import ApiKeySetupBanner from './components/ApiKeySetupBanner';
 import RestoreBanner from './components/RestoreBanner';
 import SettingsDialog from './components/SettingsDialog';
-import ApiManagementDialog from './components/ApiManagementDialog';
+import ApiManagementView from './components/ApiManagementView';
 import { OperationsDialog } from './components/OperationsDialog';
 import TranscribeButton from './components/TranscribeButton';
 import EditableTranscriptList from './components/EditableTranscriptList';
@@ -55,7 +55,8 @@ export default function App() {
     clearAnthropicApiKey,
   } = useSettings();
   const [settingsOpen, setSettingsOpen] = useState(false);
-  const [apiMgmtOpen, setApiMgmtOpen] = useState(false);
+  // API management is now a phase, not a modal — this is removed in
+  // favour of useEditorStore's openApiManagement / closeApiManagement.
   const [operationsOpen, setOperationsOpen] = useState(false);
   const [subtitleSettingsOpen, setSubtitleSettingsOpen] = useState(false);
   const [tosOpen, setTosOpen] = useState(false);
@@ -169,7 +170,11 @@ export default function App() {
   );
 
   useEffect(
-    () => window.api.onMenuOpenApiManagement?.(() => setApiMgmtOpen(true)),
+    // Menu / Ctrl+Shift+A → swap to api-management phase. The store
+    // tracks where we came from so the back button restores it.
+    () => window.api.onMenuOpenApiManagement?.(() =>
+      useEditorStore.getState().openApiManagement(),
+    ),
     [],
   );
   
@@ -280,6 +285,30 @@ export default function App() {
   const apiKeyConfigured = view?.hasApiKey ?? false;
   const showBanner = view != null && !apiKeyConfigured;
 
+  // Full-screen swap to API management — replaces everything
+  // (header / banner / phase-body) so the user gets a clean view.
+  // SettingsDialog stays mounted via the main-return path below; we
+  // close it implicitly on swap because the same store action pushes
+  // 'api-management' onto phase, which doesn't render the dialog
+  // host. (The dialog's <dialog> element is in the unrendered tree
+  // for as long as we're on this phase.)
+  if (phase === 'api-management' && view) {
+    return (
+      <main className={styles.app}>
+        <ApiManagementView
+          hasGladia={view.hasApiKey}
+          hasAnthropic={view.hasAnthropicApiKey}
+          onValidateGladia={validateApiKey}
+          onSaveGladia={setApiKey}
+          onClearGladia={clearApiKey}
+          onValidateAnthropic={validateAnthropicApiKey}
+          onSaveAnthropic={setAnthropicApiKey}
+          onClearAnthropic={clearAnthropicApiKey}
+        />
+      </main>
+    );
+  }
+
   return (
     <main className={styles.app}>
       {phase === 'edit' && (
@@ -388,21 +417,9 @@ export default function App() {
         <SettingsDialog
           open={settingsOpen}
           onClose={() => setSettingsOpen(false)}
-          onOpenApiManagement={() => setApiMgmtOpen(true)}
-        />
-      )}
-      {view && (
-        <ApiManagementDialog
-          open={apiMgmtOpen}
-          onClose={() => setApiMgmtOpen(false)}
-          hasGladia={view.hasApiKey}
-          hasAnthropic={view.hasAnthropicApiKey}
-          onValidateGladia={validateApiKey}
-          onSaveGladia={setApiKey}
-          onClearGladia={clearApiKey}
-          onValidateAnthropic={validateAnthropicApiKey}
-          onSaveAnthropic={setAnthropicApiKey}
-          onClearAnthropic={clearAnthropicApiKey}
+          // The Settings dialog still owns the "open API management"
+          // hand-off button; it now triggers the phase swap.
+          onOpenApiManagement={() => useEditorStore.getState().openApiManagement()}
         />
       )}
       <OperationsDialog

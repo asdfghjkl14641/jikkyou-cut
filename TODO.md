@@ -104,6 +104,7 @@
 
 ### 2026-05-02
 
+- API 管理画面をモーダルから全画面フェーズに変更 — `phase` に `'api-management'` 追加、`ApiManagementDialog`(モーダル)を `ApiManagementView`(全画面)に置換、`previousPhase` で戻り先保持、Esc + 戻るボタン両対応。load / clip-select / edit のいずれからでも遷移可能、データ保持
 - 「API 管理」専用画面の新設(全 API キー統合 + 収集ログビューア) — トップメニュー「API 管理」+ Ctrl+Shift+A、`ApiManagementDialog` でタブ式(API キー / 収集ログ)管理。Gladia / Anthropic / YouTube(複数)を統合、YouTube は per-key クォータバー表示。`CollectionLogViewer` は虚スクロール + レベル別フィルタ + エラー赤色強調 + 5 秒自動更新 + 「ファイルを開く」ボタン。`logger.ts` で ISO 8601 `[LEVEL] message` 形式統一、既存 console.log を全部 logger 経由に。`SettingsDialog` から API キー部分を完全削除、ハンドオフリンクのみ
 - 切り抜き動画データ収集パイプライン Phase 1(蓄積基盤) — `better-sqlite3` ベース SQLite DB(WAL モード、5 テーブル)+ YouTube Data API クライアント(キー最大 10 個ローテーション、daily 10K unit クォータ管理)+ yt-dlp で heatmap 上位 3 ピーク / chapters / サムネ抽出。アプリ起動 5 秒後にバックグラウンドで 1 時間ごと自動収集、`Settings → 切り抜きデータ収集` で API キー登録 + 配信者リスト編集 + ステータス確認 + 手動トリガー。MAX 200 動画 / バッチ、200 ms 間隔で yt-dlp に優しく。実機検証は API キー登録後にユーザ側で。Phase 2 / Phase 3 への入力データ生成役
 - 切り抜き候補の自動抽出(ハイブリッド方式 + 1 ボタン全自動) — `peakDetection.ts` で Stage 1(rolling score 全位置 → ローカル極大値 → ±30s バッファ + score≥0.30 + W 間隔 dedup → top 10)、Claude Haiku で Stage 2(候補 10 → ベスト N、起承転結 / ネタバレ性 / 反応質を基準に JSON 出力)、Stage 4 で既存 `generateSegmentTitles` 流用してタイトル生成。ClipSelectView ヘッダに ✨ ボタン + 件数 select + 3-step 進捗 modal。Stage 2 キャッシュ + フォールバック(API 失敗時はスコア順)。サンドボックス合成データの smoke test で peak detection の正確性 + edge buffer フィルタリング動作を確認

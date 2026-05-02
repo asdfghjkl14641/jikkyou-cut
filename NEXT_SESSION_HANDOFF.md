@@ -1,7 +1,7 @@
 # 次セッションへの引き継ぎ (NEXT_SESSION_HANDOFF)
 
 ## 凍結時刻
-2026-05-03 01:00 — 「API 管理」専用画面 + 収集ログビューア完成、データ蓄積期間に入る前
+2026-05-03 02:00 — API 管理画面のモーダル→全画面フェーズ化(`ead5db5` の続き)
 
 ## リポジトリ状態
 - HEAD: 直近コミット直後
@@ -9,7 +9,27 @@
 
 ## 直前の状況サマリ
 
-API キー数(Gladia + Anthropic + YouTube×複数)が増えて Settings 内に埋もれてた問題と、データ収集ログを毎回エディタで開く面倒さを、**「API 管理」専用画面**を新設して解消。データ収集を 1 週間放置する前段階の整備。
+`ead5db5` で実装した「API 管理」モーダルが背景透過で「別画面に切り替わった感」が薄かったため、**全画面フェーズ swap** に作り直した。
+
+### 変更点
+
+- `editorStore.phase` 型を `'load' | 'clip-select' | 'edit' | 'api-management'` に拡張
+- 新 state `previousPhase: RestorablePhase | null`(戻り先保持)
+- 新アクション `openApiManagement()` / `closeApiManagement()`
+- `ApiManagementDialog.{tsx,module.css}` 削除 → `ApiManagementView.{tsx,module.css}` 新規(モーダル時のロジックは全部移植)
+- `App.tsx` は `phase === 'api-management'` のとき early return で完全別画面を return(他フェーズの header / banner は出ない)
+- 戻る動線:左上「← 戻る」ボタン + Esc キー(input フォーカス時は無視)
+- メニュー / Ctrl+Shift+A / Settings ハンドオフボタン全て `openApiManagement()` 経由
+
+### データ保持
+
+`previousPhase` を介すので、`clipSegments` / 動画ファイル / 編集状態は API 管理画面に行って戻ってきても消えない(`setFile` / `clearFile` が呼ばれない限り)。
+
+---
+
+## 直前の前提(変更前の文脈)
+
+API キー数(Gladia + Anthropic + YouTube×複数)が増えて Settings 内に埋もれてた問題と、データ収集ログを毎回エディタで開く面倒さを、**「API 管理」専用画面**を新設して解消したのが `ead5db5`。今回の変更はその UI 形態をモーダル → 全画面に変えたもの。データ収集を 1 週間放置する前段階の整備。
 
 ### 構成
 

@@ -46,7 +46,7 @@ Electron + React + TypeScript 製。**現在は配布前の "自分用ツール"
 - **AI タイトル要約**: 完了 (Anthropic BYOK、Claude Haiku 4.5、3 並列 + キャッシュ、Settings UI と ClipSegmentsList ボタン)
 - **切り抜き候補の自動抽出**: 完了 (アルゴリズム peak 検出 + AI 精査 + タイトル生成を 1 ボタンで一気通貫、ClipSelectView ヘッダの ✨ ボタン)
 - **データ収集パイプライン Phase 1**: 完了 (better-sqlite3 + YouTube Data API + yt-dlp で切り抜き動画蓄積、Settings UI、1 時間ごとバックグラウンド収集)
-- **「API 管理」専用画面**: 完了 (メニューバー直配置 + Ctrl+Shift+A、Gladia/Anthropic/YouTube 統合、CollectionLogViewer で収集ログ GUI 表示)
+- **「API 管理」専用画面**: 完了 (メニューバー直配置 + Ctrl+Shift+A、Gladia/Anthropic/YouTube 統合、CollectionLogViewer で収集ログ GUI 表示)— モーダル → 全画面フェーズ swap に変更(`phase: 'api-management'`)
 
 ### 次フェーズ
 - **進行中**: コメント分析画面 (バックエンド実装待ち) — 詳細は `docs/COMMENT_ANALYSIS_DESIGN.md`
@@ -171,8 +171,11 @@ jikkyou-cut/
 ### State 抜粋
 ```ts
 type EditorState = {
-  // フェーズ
-  phase: 'load' | 'clip-select' | 'edit';
+  // フェーズ。'api-management' は API 管理画面の全画面 swap モード。
+  phase: 'load' | 'clip-select' | 'edit' | 'api-management';
+  // API 管理画面に入った時の元 phase(戻り先)。Esc / 戻るボタンで
+  // ここへ復帰。null = 'api-management' 中ではない。
+  previousPhase: 'load' | 'clip-select' | 'edit' | null;
 
   // 切り抜き区間群(旧 clipRange の置き換え)。最大 20 個。setFile /
   // clearFile / clearAllSegments で空に戻る。順序は addClipSegment で

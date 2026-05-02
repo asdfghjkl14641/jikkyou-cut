@@ -1,16 +1,19 @@
-import { useEffect, useRef, useState } from 'react';
-import { X, CheckCircle, Edit2, Trash2, Plus, KeyRound, FileText } from 'lucide-react';
+import { useEffect, useState } from 'react';
+import { ChevronLeft, CheckCircle, Edit2, Trash2, Plus, X, KeyRound, FileText } from 'lucide-react';
 import CollectionLogViewer from './CollectionLogViewer';
-import styles from './ApiManagementDialog.module.css';
+import { useEditorStore } from '../store/editorStore';
+import styles from './ApiManagementView.module.css';
 
-// Centralised API-key management screen. Hosts:
-//   * Gladia key (transcription, single)
-//   * Anthropic key (AI title summarisation, single)
-//   * YouTube Data API keys (data collection, multi up to 10)
-//   * Per-key YouTube quota breakdown
+// Full-screen API management screen. Replaces the previous
+// `ApiManagementDialog` modal — same content, but mounted as a top-
+// level phase so the user gets a complete screen swap (matching the
+// load / clip-select / edit pattern).
 //
-// Reachable from menu "API 管理" / Ctrl+Shift+A. Replaces the API-key
-// sections that previously lived inside SettingsDialog.
+// Internals (KeysTab / SingleKeySection / YoutubeKeysSection) are
+// straight ports from the dialog; only the outer chrome changes.
+//
+// Reachable from menu "API 管理" / Ctrl+Shift+A. The store's
+// openApiManagement() / closeApiManagement() handle the phase swap.
 
 const MAX_YT_KEYS = 10;
 const YT_DAILY_QUOTA_PER_KEY = 10_000;
@@ -18,11 +21,6 @@ const YT_DAILY_QUOTA_PER_KEY = 10_000;
 type Tab = 'keys' | 'log';
 
 type Props = {
-  open: boolean;
-  onClose: () => void;
-  // Existing API key handlers — passed through from App.tsx so we
-  // re-use the validation paths from useSettings without duplicating
-  // them here.
   hasGladia: boolean;
   hasAnthropic: boolean;
   onValidateGladia: (key: string) => Promise<{ valid: boolean; error?: string }>;
@@ -33,9 +31,7 @@ type Props = {
   onClearAnthropic: () => Promise<void>;
 };
 
-export default function ApiManagementDialog({
-  open,
-  onClose,
+export default function ApiManagementView({
   hasGladia,
   hasAnthropic,
   onValidateGladia,
@@ -45,29 +41,42 @@ export default function ApiManagementDialog({
   onSaveAnthropic,
   onClearAnthropic,
 }: Props) {
-  const ref = useRef<HTMLDialogElement>(null);
   const [tab, setTab] = useState<Tab>('keys');
+  const closeApiManagement = useEditorStore((s) => s.closeApiManagement);
 
+  // Esc anywhere on the screen → back to previous phase. We listen on
+  // window so it works regardless of which inner element has focus.
+  // Inputs that intercept Escape (rare for our forms) can stop
+  // propagation if needed; nothing currently does.
   useEffect(() => {
-    if (open) {
-      ref.current?.showModal();
-      setTab('keys');
-    } else {
-      ref.current?.close();
-    }
-  }, [open]);
+    const handler = (e: KeyboardEvent) => {
+      if (e.key !== 'Escape') return;
+      // Don't close if the user is typing in an input/textarea — they
+      // probably meant to abort an edit, not leave the screen.
+      const target = e.target as HTMLElement | null;
+      if (target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable)) {
+        return;
+      }
+      closeApiManagement();
+    };
+    window.addEventListener('keydown', handler);
+    return () => window.removeEventListener('keydown', handler);
+  }, [closeApiManagement]);
 
   return (
-    <dialog ref={ref} className={styles.dialog} onClose={onClose} onCancel={onClose}>
-      <div className={styles.header}>
-        <h2 className={styles.title}>
-          <KeyRound size={18} />
-          API 管理
-        </h2>
-        <button type="button" className={styles.closeButton} onClick={onClose} aria-label="閉じる">
-          <X size={18} />
-        </button>
-      </div>
+    <div className={styles.view}>
+      <header className={styles.header}>
+        <div className={styles.headerLeft}>
+          <button type="button" className={styles.backButton} onClick={closeApiManagement}>
+            <ChevronLeft size={18} />
+            戻る
+          </button>
+          <h1 className={styles.title}>
+            <KeyRound size={18} />
+            API 管理
+          </h1>
+        </div>
+      </header>
 
       <div className={styles.tabs}>
         <button
@@ -88,7 +97,7 @@ export default function ApiManagementDialog({
         </button>
       </div>
 
-      <div className={styles.body}>
+      <main className={styles.body}>
         {tab === 'keys' ? (
           <KeysTab
             hasGladia={hasGladia}
@@ -101,10 +110,13 @@ export default function ApiManagementDialog({
             onClearAnthropic={onClearAnthropic}
           />
         ) : (
+          // The viewer lives inside a flex:1 container, so its
+          // CollectionLogViewer's `flex:1; min-height:0` chain reaches
+          // the screen edge automatically.
           <CollectionLogViewer />
         )}
-      </div>
-    </dialog>
+      </main>
+    </div>
   );
 }
 
