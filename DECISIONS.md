@@ -34,7 +34,7 @@
   - 詳細なスケジュール設定(現状 1 時間固定)
 - 影響: src/main/secureStorage.ts(diagnostic log + dedupe + 100KB cap)、src/main/dataCollection/index.ts(`getStatsSnapshot` に `isPaused` 追加)、src/common/types.ts(`isPaused` 追加)、src/renderer/src/components/ApiManagementView.{tsx,module.css}(`MAX_YT_KEYS` 50 + handleSave log + per-key 行数表示 + scrollable 行コンテナ)、src/renderer/src/components/DataCollectionSettings.tsx(3-way ステータス表示 + 停止/再開/開始 ボタン)
 - ⚠️ 実機検証はユーザ環境で必要(50 キー入力 + 保存 + 再起動で全件復元 / 開始停止ボタン動作)
-- コミット: (未定)
+- コミット: `5298725`
 
 ## 2026-05-03 02:00 - API 管理画面をモーダルから全画面フェーズに変更
 
