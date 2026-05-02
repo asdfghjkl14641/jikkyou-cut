@@ -27,7 +27,9 @@
   - [x] **AI タイトル要約(Claude Haiku 4.5)**(Anthropic BYOK、aiSummary.ts オーケストレータ、3 並列 + リトライ + キャッシュ、Settings UI 拡張、ClipSegmentsList の AI 生成ボタン)
   - [x] **切り抜き候補の自動抽出(ハイブリッド + 1 ボタン全自動)**(Stage 1 algorithm peak detection → Stage 2 AI refine → Stage 4 title generation、ClipSelectView ヘッダの ✨ ボタン + 件数 select 3/4/5 + 3-step 進捗 modal、Stage 2 キャッシュ、フォールバック付き)
   - [x] **データ収集パイプライン Phase 1(蓄積基盤)**(better-sqlite3 + YouTube Data API + yt-dlp で切り抜き動画メタ + heatmap 上位 3 ピーク + chapters + サムネを蓄積。Settings UI に API キー(複数)+ 配信者リスト + ステータス表示。1 時間ごとのバックグラウンド収集、起動 5 秒後にスタート)
-  - [ ] **次**: データ収集 Phase 2(蓄積データの分析、サムネ + タイトルパターン抽出)
+  - [x] **配信者 40 人 seed + 検索クエリ多角化**(VTuber 25 + ストリーマー 15、3 クエリ/人、channelId 自動解決、creator_group カラム)
+  - [ ] **次**: ユーザが「有効化する」押してデータ蓄積開始 → 1 週間放置 → 1 万件規模
+  - [ ] データ収集 Phase 2(蓄積データの分析、サムネ + タイトルパターン抽出、グループ別集計)
   - [ ] データ収集 Phase 3(分析結果を ClipSelectView の自動抽出にフィードバック)
   - [ ] アイキャッチの実体動画化(FFmpeg で黒画面 + テキスト合成)
   - [ ] 編集画面での clipSegments 適用
@@ -104,6 +106,7 @@
 
 ### 2026-05-02
 
+- 配信者 40 人 seed 投入 + 検索クエリ多角化 + channelId 自動解決(`16535eb`)— ユーザ精査リストを `seedCreators.ts` に定数化(にじさんじ 15 + ホロライブ 10 + ストリーマー 15)、初回起動時に creators.json + DB へ冪等投入。creators テーブルに `creator_group` カラム追加(`PRAGMA table_info` で既存 DB にも安全 migration)、per-creator クエリを切り抜き / 神回 / 名場面の 3 クエリへ多角化、初回バッチで `searchChannelByName`(search.list type=channel、100u/人)を使って channelId を一括解決し永続化。クォータ見積 ~13.25K/サイクル(初回のみ +4K)で 50 キー × 10K/日 = 500K に対し余裕。`upsertCreator` には optional `group` を追加し、INSERT 時のみ反映で既存値を保持(random uploader による上書き防止)
 - データ収集の自動開始を永続フラグで制御(デフォルト無効)— `AppConfig.dataCollectionEnabled` 追加、起動時自動開始を flag でガード、`DataCollectionSettings` に「有効化する / 無効化する」永続トグル(有効化時は確認ダイアログ)+ ステータス行に「自動収集: 🔴 / 🟢」表示。IPC `dataCollection.isEnabled` / `setEnabled` 新設。レイヤ整理:`dataCollectionEnabled` = 永続マスタースイッチ(再起動跨ぐ)、`isPaused` / `isRunning` = セッション内モード。検索クエリ戦略が確定するまでクォータ消費を防ぐのが目的(`2dca5bd`)
 - YouTube API キー保存バグ 3 周目で完治(`b04f64d` + `e43f275`) — 2 度の修正(`5298725` 上限 50 化、`240dc50` getKeys + useEffect seed)後もユーザ実機で「1 個しか登録できない」が続いていた問題を、**ログ駆動デバッグ**で真因確定 → UX モデル全面刷新で完治。`e1811d5` で `[YT-DEBUG]` / `[SS-DEBUG]` / `[IPC-DEBUG]` 接頭辞のログを全動線に仕込み(挙動は変えず)→ ユーザ実機ログで「`add-row button clicked` が 1 度も出てない」「既存キーが masked input に seed → ユーザは空欄と認識して上書き」と確定 → `b04f64d` で UI モデル変更:既存キーは read-only chip(`AIza••••••••XYZ12` 表示 + × で削除マーク)、新規キーは別セクションの input 行、保存時 `(残った既存) + (新規)` を Set で dedupe。input ではないので物理的に既存を誤って消せない構造。`e43f275` で診断ログ撤去、`saveYoutubeApiKeys` の read-back integrity check のみ防御層として残置(成功時無音、ズレた時のみ警告)
 - YouTube API キー複数追加 UI バグ修正 — 真因は **仮説 B(編集モード展開時に既存キーを draft にコピーしない)**。`5298725` で `MAX_YT_KEYS=50` に上げたが、編集 UI で `draft = ['']` 初期化のままで既存キーが見えず、save の "replace" セマンティクスで常に 1 個に上書きされていた。`youtubeApiKeys.getKeys()` IPC を新設(renderer に plaintext 配列を返却、Gladia/Anthropic とは異なる方針 — multi-key editor の UX 上必要)+ `useEffect([editing])` で edit-mode 入りごとに既存キーを draft に seed。diagnostic log も全動線(toggle / add row / save / count)に。**(後で判明:この修正は password input に seed したため別の UX バグを引き起こし、3 周目で UI モデル刷新)**

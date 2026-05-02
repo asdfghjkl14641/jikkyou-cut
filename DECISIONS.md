@@ -15,6 +15,29 @@
 
 ---
 
+## 2026-05-03 07:30 - 配信者 40 人 seed 投入 + 検索クエリ多角化 + channelId 自動解決
+
+- 誰が: Claude Code
+- 何を: ユーザ精査の VTuber 25(にじさんじ 15 + ホロライブ 10)+ ストリーマー 15 = 40 人を `seedCreators.ts` に定数化、初回起動時に `creators.json` + DB の `creators` テーブルへ自動投入(冪等、空の時のみ発火)。各配信者に対して切り抜き / 神回 / 名場面の 3 クエリで検索。channelId は初回バッチで `search.list type=channel`(100u/人)で解決して永続化
+- 理由: バックグラウンド蓄積の本格運用前段。検索網羅性を上げるため per-creator クエリを 1 → 3 へ多角化(YouTube アルゴリズムは同義句に対しても異なる動画を返す傾向)
+- 変更:
+  - `src/main/dataCollection/seedCreators.ts`(新規):`SEED_CREATORS` 40 人定数、`seedCreatorsIfEmpty`(空チェック → creators.json save + DB upsert)、`resolveCreatorChannelIds`(channelId 未解決のみ search.list で解決、結果を creators.json + DB へ persist)
+  - `src/main/dataCollection/youtubeApi.ts`:`searchChannelByName(name)` 追加(type=channel 検索)
+  - `src/main/dataCollection/database.ts`:`creators` に `creator_group TEXT` カラム追加(`'nijisanji' | 'hololive' | 'streamer' | null`)、`migrateSchema()` で `PRAGMA table_info` チェック後 `ALTER TABLE ADD COLUMN`(既存 DB に対して冪等)、`upsertCreator` に optional `group` 引数(INSERT 時のみ反映、UPDATE 時は既存 group 保持で random uploader が seed creator を上書きしない)
+  - `src/main/dataCollection/creatorList.ts`:`CreatorEntry.group` 追加、load/save がフィールドを扱う、既存の `creators.add` は `group: null` で挿入(後方互換)
+  - `src/main/dataCollection/searchQueries.ts`:`buildPerCreatorQuery` → `buildPerCreatorQueries`(3 クエリ返す)
+  - `src/main/dataCollection/index.ts`:バッチ先頭で `resolveCreatorChannelIds()` 呼出(no-op fastpath 込)、creator × 3 クエリループ
+  - `src/main/index.ts`:`app.whenReady()` 内で `seedCreatorsIfEmpty()` を `dataCollectionManager.start()` の前に呼ぶ
+- 開放されている設計判断:
+  - 配信者リストの動的取得 / ランキングからの自動追加
+  - 配信者名の表記揺れ吸収(「葛葉」「KUZUHA」「kuzuha」等)
+  - クエリパターン拡張(過去 N 日 / 再生数閾値 / order=date 追加 etc.)
+  - グループ別(にじさんじ / ホロ / ストリーマー)集計 UI(現状はデータだけ持つ)
+- クォータ見積もり: 検索 12K + broad 1.1K + enrich 0.15K = ~13.25K/サイクル、初回のみ +4K(channelId 解決)。50 キー × 10K/日 = 500K 日次予算で十分
+- 影響: data-collection サブモジュール 5 ファイル + main/index.ts(seed wiring)。UI / IPC 不変。既存 install では migrateSchema が安全に動く
+- ⚠️ 実機検証: ユーザが「有効化する」を押した後の最初のサイクルで multiple creators の動画が DB に入る、を確認
+- コミット: `16535eb`
+
 ## 2026-05-03 06:30 - データ収集の自動開始を永続フラグで制御(デフォルト無効)
 
 - 誰が: Claude Code

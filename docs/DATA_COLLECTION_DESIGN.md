@@ -33,7 +33,7 @@
 
 | テーブル | 役割 |
 |---|---|
-| `creators` | 配信者(配信者名 / channel_id / is_target フラグ) |
+| `creators` | 配信者(配信者名 / channel_id / is_target / `creator_group`(`'nijisanji'\|'hololive'\|'streamer'\|null`)) |
 | `videos` | 切り抜き動画のメタデータ + 統計 + サムネパス + raw API レスポンス |
 | `heatmap_peaks` | 各動画の上位 3 ピーク(start/end/value/chapter_title) |
 | `chapters` | 動画のチャプター(全件、Phase 2 でタイトルパターン分析に使う) |
@@ -48,8 +48,33 @@
 ### Broad(11 クエリ)
 切り抜き / クリップ / 神回 / VTuber / にじさんじ / ホロライブ / マイクラ / APEX / ストリートファイター / ゲーム実況 / 面白い場面 — それぞれを `relevance` 順 + 50 件取得。`relevance` を選んだ理由:`viewCount` 単独だと evergreen 巨大クリップが永遠に上位を占めて新規流入が止まる。
 
-### Per-creator
-`creators.json` に登録された各人物名で「<人物名> 切り抜き」を 50 件取得。targeting されたバケットの方が値が高いので、バッチの先頭で per-creator → broad の順に走らせる(クォータが先に枯れるなら per-creator 側だけは確実に消費する)。
+### Per-creator(seed 40 人 + ユーザ追加)
+
+`creators.json` に登録された各配信者に対し、3 クエリを発射(`buildPerCreatorQueries`):
+
+```
+<人物名> 切り抜き
+<人物名> 神回
+<人物名> 名場面
+```
+
+YouTube のアルゴリズムは同義句に対しても異なる動画を返す傾向があり、1 クエリでは長尾(伝説回 / 名シーン等のラベリング揺れ)を取りこぼすため。3 クエリ × 40 人 = 120 search.list = 12,000 units/サイクル(50 キー × 10K = 500K 日次予算で十分)。
+
+#### 初期 seed リスト(2026-05-03 投入、40 人)
+
+| グループ | 人数 | 内訳 |
+|---|---|---|
+| `nijisanji` | 15 | 葛葉 / 叶 / 不破湊 / イブラヒム / 加賀美ハヤト / 壱百満天原サロメ / 笹木咲 / 椎名唯華 / 月ノ美兎 / でびでび・でびる / 渋谷ハジメ / ローレン・イロアス / 健屋花那 / 剣持刀也 / ジョー・力一 |
+| `hololive` | 10 | 兎田ぺこら / 宝鐘マリン / 湊あくあ / さくらみこ / 戌神ころね / 猫又おかゆ / 大空スバル / 白上フブキ / 星街すいせい / 沙花叉クロヱ |
+| `streamer` | 15 | 加藤純一 / もこう / 兄者弟者 / 釈迦 / StylishNoob / SHAKA / ありさか / ボドカ / k4sen / 関優太 / スタヌ / うるか / だるまいずごっど / 渋谷ハル / ta1yo |
+
+`src/main/dataCollection/seedCreators.ts` に literal で持つ。`seedCreatorsIfEmpty()` が `app.whenReady` で呼ばれ、`creators.json` が空なら投入(冪等)。ユーザが Settings UI で追加した creators は `group: null`。
+
+#### channelId 自動解決
+
+seed 時点では channelId が null。バッチ先頭で `resolveCreatorChannelIds()` が呼ばれ、null の creator のみ `searchChannelByName(name)`(`search.list type=channel`、100u/人)で解決して `creators.json` + DB に persist。一度解決したら fastpath で skip するので、定常状態のコストは 0。初回バッチのみ +4,000 units(40 人未解決)。
+
+targeting されたバケットの方が値が高いので、バッチの先頭で per-creator → broad の順に走らせる(クォータが先に枯れるなら per-creator 側だけは確実に消費する)。
 
 ## API キーローテーション + クォータ管理
 
@@ -68,7 +93,9 @@
 | `videos.list` | 1 unit / call(最大 50 ID/call) |
 | `channels.list` | 1 unit |
 
-10 キー × 10K units/day = 100K/day。1 バッチで `search.list` × (per-creator + broad) ≈ (creators.length + 11) × 100 units、`videos.list` ≈ ceil(MAX_VIDEOS/50) × 1 unit。50 配信者 + 11 broad = 6100 units / 200 動画なら 4 unit → 1 バッチ ~6.1K units。1 日 16 バッチ走らせて約 100K units、ちょうどキャップに収まる。
+**現行(2026-05-03、50 キー想定)**:1 バッチ ≈ per-creator (40 × 3 = 120) + broad (11) = 131 search.list × 100u = 13,100 units + videos.list ~150u = ~13.25K/サイクル。初回のみ channelId 解決で +4K(40 × 100u)。50 キー × 10K = 500K 日次予算 → 1 時間ごと 24 サイクル走らせても 318K で余裕。
+
+**従来(参考)**:10 キー × 10K = 100K/day、1 バッチで `search.list` × (per-creator + broad) ≈ 6.1K units(50 配信者 × 1 クエリ + 11 broad)、1 日 16 バッチで約 100K でキャップに収まる想定だった。multi-angle クエリ + キー数増加で帯域と網羅性を両立。
 
 ## yt-dlp 抽出
 

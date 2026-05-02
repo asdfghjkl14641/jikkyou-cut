@@ -121,11 +121,12 @@ jikkyou-cut/
     │   ├── commentAnalysis/   # コメント分析オーケストレータ + 実装(peakDetection.ts も含む)
     │   └── dataCollection/    # 切り抜き動画データ収集 Phase 1(SQLite + YouTube API + yt-dlp)
     │       ├── index.ts       # DataCollectionManager(バックグラウンド 1 時間ループ)
-    │       ├── database.ts    # better-sqlite3 ラッパ + スキーマ + upsert + per-key クォータ
-    │       ├── youtubeApi.ts  # search.list / videos.list + キーローテーション + クォータ管理
+    │       ├── database.ts    # better-sqlite3 ラッパ + スキーマ + upsert + per-key クォータ + creator_group migration
+    │       ├── youtubeApi.ts  # search.list / videos.list / channels.list + キーローテーション + クォータ管理
     │       ├── ytDlpExtractor.ts # heatmap + chapters + サムネ + 上位 3 ピーク抽出
-    │       ├── searchQueries.ts  # ブロード検索クエリ + per-creator クエリ生成
-    │       ├── creatorList.ts # userData/data-collection/creators.json の CRUD
+    │       ├── searchQueries.ts  # ブロード検索クエリ + per-creator 多角化クエリ(切り抜き / 神回 / 名場面)
+    │       ├── seedCreators.ts # 配信者 40 人 seed + seedCreatorsIfEmpty + resolveCreatorChannelIds
+    │       ├── creatorList.ts # userData/data-collection/creators.json の CRUD(group フィールド対応)
     │       ├── logger.ts      # ISO 8601 [LEVEL] message 形式の append + console echo
     │       └── logReader.ts   # collection.log の末尾 N 行読み出し + パース
     │       ├── index.ts       # analyze({chat→viewers→scoring})オーケストレータ
@@ -300,3 +301,4 @@ type EditorState = {
 - **プロジェクト保存**: 動画と同じ階層に `<basename>.jcut.json` として自動保存。
 - **Gladia API**: 文字起こしに使用。APIキーは `safeStorage` で保存。
 - **データ収集はデフォルト無効** (2026-05-03 06:30): `AppConfig.dataCollectionEnabled` が永続マスタースイッチで、デフォルト `false`。アプリ起動時の自動開始はこの flag が `true` の時のみ。ユーザが「API 管理 / 切り抜きデータ収集 → 有効化する」を明示的に押さない限りバックグラウンドで何も走らない設計(検索クエリ戦略未確定でクォータを浪費しないため)。**`isPaused` / `isRunning` はセッション内のモードに過ぎず、再起動を跨ぐ ON/OFF はこの flag を見る**。
+- **配信者リストは初回のみ自動投入** (2026-05-03 07:30): `creators.json` が空の状態で起動すると `seedCreatorsIfEmpty()` が VTuber 25 + ストリーマー 15 = 40 人を投入する(`src/main/dataCollection/seedCreators.ts` の `SEED_CREATORS` 定数)。**1 度でも creators.json に何か入ったら以降は触らない冪等動作** — ユーザが手動で追加 / 削除した結果を尊重する。channelId は初回バッチで `searchChannelByName` により自動解決して `creators.json` + DB に persist。`creators` テーブルに `creator_group` カラム('nijisanji' / 'hololive' / 'streamer' / null)、Phase 2 のグループ別集計向け。per-creator クエリは「切り抜き / 神回 / 名場面」の 3 角化。
