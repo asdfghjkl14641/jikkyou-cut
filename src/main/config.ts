@@ -57,6 +57,9 @@ export async function loadConfig(): Promise<AppConfig> {
       defaultDownloadQuality: typeof parsed['defaultDownloadQuality'] === 'string'
         ? (parsed['defaultDownloadQuality'] as string)
         : 'best',
+      lastDownloadUrl: typeof parsed['lastDownloadUrl'] === 'string'
+        ? (parsed['lastDownloadUrl'] as string)
+        : null,
     };
   } catch {
     return {
@@ -98,6 +101,10 @@ export async function saveConfig(
       partial.defaultDownloadQuality !== undefined
         ? partial.defaultDownloadQuality
         : current.defaultDownloadQuality,
+    lastDownloadUrl:
+      partial.lastDownloadUrl !== undefined
+        ? partial.lastDownloadUrl
+        : current.lastDownloadUrl,
   };
   const p = getConfigPath();
   await fs.mkdir(path.dirname(p), { recursive: true });

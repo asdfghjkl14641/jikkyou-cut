@@ -26,6 +26,12 @@ import ClipSelectView from './components/ClipSelectView';
 import type { UrlDownloadArgs, UrlDownloadProgress } from '../../common/types';
 import styles from './App.module.css';
 
+// Prototype-stage default for the DropZone URL input: while we're
+// iterating on a single test video, this saves the user from pasting it
+// every launch. Used only as a fallback when `lastDownloadUrl` is null —
+// any previously-downloaded URL takes precedence.
+const PROTOTYPE_DEFAULT_URL = 'https://www.youtube.com/watch?v=kod7RhQQCv4&t=2s';
+
 export default function App() {
   const filePath = useEditorStore((s) => s.filePath);
   const fileName = useEditorStore((s) => s.fileName);
@@ -201,6 +207,9 @@ export default function App() {
         // analysis on it. setFile() clears sourceUrl on fresh load —
         // the call order matters here.
         useEditorStore.getState().setSourceUrl(url);
+        // Persist for next-launch prefill. Fire-and-forget — failure to
+        // save shouldn't disturb the post-DL flow.
+        void save({ lastDownloadUrl: url });
       } catch (err) {
         setDownloadProgressOpen(false);
         const msg = err instanceof Error ? err.message : String(err);
@@ -329,6 +338,7 @@ export default function App() {
             <DropZone
               onFileSelected={setFile}
               onUrlDownloadRequested={handleUrlDownloadRequested}
+              defaultUrl={view?.config.lastDownloadUrl ?? PROTOTYPE_DEFAULT_URL}
             />
           </div>
         )}

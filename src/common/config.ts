@@ -30,6 +30,10 @@ export type AppConfig = {
   urlDownloadAccepted: boolean;
   defaultDownloadDir: string | null;
   defaultDownloadQuality: string;
+  // Last URL the user submitted to DropZone, used to prefill the input on
+  // next launch. Prototype-stage convenience — the user said they got tired
+  // of pasting the same link repeatedly while testing.
+  lastDownloadUrl: string | null;
 };
 
 export const DEFAULT_CONFIG: AppConfig = {
@@ -39,4 +43,5 @@ export const DEFAULT_CONFIG: AppConfig = {
   urlDownloadAccepted: false,
   defaultDownloadDir: null,
   defaultDownloadQuality: 'best',
+  lastDownloadUrl: null,
 };

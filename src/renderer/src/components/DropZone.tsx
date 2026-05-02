@@ -8,11 +8,14 @@ type Props = {
   // download flow (TOS check, settings, progress dialog) — DropZone just
   // hands off the validated URL string.
   onUrlDownloadRequested: (url: string) => void;
+  // Prefill value for the URL input. Persisted across launches so the user
+  // doesn't have to paste the same link every time during prototyping.
+  defaultUrl?: string;
 };
 
-export default function DropZone({ onFileSelected, onUrlDownloadRequested }: Props) {
+export default function DropZone({ onFileSelected, onUrlDownloadRequested, defaultUrl }: Props) {
   const [dragOver, setDragOver] = useState(false);
-  const [url, setUrl] = useState('');
+  const [url, setUrl] = useState(defaultUrl ?? '');
 
   const submitUrl = useCallback(() => {
     const trimmed = url.trim();
