@@ -15,6 +15,33 @@
 
 ---
 
+## 2026-05-03 04:00 - YouTube API キー複数追加 UI バグ修正(load-on-edit-mode-entry)
+
+- 誰が: Claude Code
+- 何を: 直前 `5298725` で `MAX_YT_KEYS=50` に上限を上げたが、ユーザ実機では「1 個しか登録できない」状態。コード読みで真因 = **仮説 B(編集モード展開時に既存 keys を draft にコピーしてない)** と確定。修正:`youtubeApiKeys.getKeys()` IPC を新設(renderer に plaintext 配列を返す)+ `useEffect([editing])` で編集モード ON のたびに既存キーを draft に seed
+- 真因の詳細:
+  - `YoutubeKeysSection` の `draft` state は `useState<string[]>([''])` で初期化、編集モード再開時に **常に `['']` のままで既存 keys を読み込まない**
+  - 1 個保存済み状態で編集モードを開くと **空欄 1 行のみ表示** → ユーザは「あれ、保存されてないのか?」と混乱して 1 個目に新キーを入力 → 保存
+  - `handleSave` は draft 全体を `setKeys()` に投げて secureStorage 側で **完全置換** するセマンティクス → 既存 1 個が新 1 個に上書きされて、結果は **常に 1 個**
+  - 「+ キーを追加」ボタンを押せば draft 行は増やせるが、その場合も既存 key は draft に存在しないので、save 時に消える
+- 修正:
+  - `youtubeApiKeys.getKeys()` IPC を新設、main 側は `secureStorage.loadYoutubeApiKeys()` を直返し
+  - **renderer に plaintext key を返すのは Gladia / Anthropic と異なる方針**(あれらは renderer に戻さない)。深い理由は multi-key editor の UX に既存キー可視化が必要だから — 個別の key を replace / 追加するために、ユーザが「いま登録されてる N 個」を見れる必要がある。trade-off ドキュメント済み(types.ts コメント)
+  - `useEffect([editing])` で編集モード ON 時に `getKeys()` を呼んで draft に seed。空なら `['']` で 1 行から開始
+- ログ強化(diagnostic):
+  - `[ApiManagement] YT edit toggle: false → true, current keyCount=N`
+  - `[ApiManagement] edit mode opened, loaded N existing keys into draft`
+  - `[ApiManagement] YT add row: N → N+1`
+  - `[ApiManagement] saving N YouTube keys (draft rows: M)`
+  - `[ApiManagement] save complete; getKeyCount=N`
+  - これでバグレポート時に件数の流れが追える(キー値そのものは絶対ログに出さない)
+- 開放されている設計判断:
+  - getKeys() の plaintext 返却(Gladia / Anthropic も同様にするか、この区別を維持するか)
+  - "save = replace" セマンティクスを "save = append" に変える(現状は replace、編集 UI で対応)
+- 影響: src/common/types.ts(`youtubeApiKeys.getKeys` 追加 + UI 用途のコメント)、src/main/index.ts(IPC ハンドラ追加)、src/preload/index.ts、src/renderer/src/components/ApiManagementView.tsx(`useEffect([editing])` で seed + diagnostic logs)
+- ⚠️ 実機検証はユーザ環境で必要(5 個保存 → 再起動 → 5 個復元、+ ボタンで行が増える)
+- コミット: (未定)
+
 ## 2026-05-03 03:00 - API 管理画面 3 修正(キー上限 50 / 保存バグ修正 / 収集開始停止)
 
 - 誰が: Claude Code

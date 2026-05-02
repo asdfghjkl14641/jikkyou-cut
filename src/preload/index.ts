@@ -162,6 +162,7 @@ const api: IpcApi = {
   youtubeApiKeys: {
     hasKeys: () => ipcRenderer.invoke('youtubeApiKeys:hasKeys'),
     getKeyCount: () => ipcRenderer.invoke('youtubeApiKeys:getKeyCount'),
+    getKeys: () => ipcRenderer.invoke('youtubeApiKeys:getKeys'),
     setKeys: (keys) => ipcRenderer.invoke('youtubeApiKeys:setKeys', keys),
     clear: () => ipcRenderer.invoke('youtubeApiKeys:clear'),
   },

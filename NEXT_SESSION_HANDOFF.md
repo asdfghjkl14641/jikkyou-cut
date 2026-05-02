@@ -1,7 +1,7 @@
 # 次セッションへの引き継ぎ (NEXT_SESSION_HANDOFF)
 
 ## 凍結時刻
-2026-05-03 03:00 — API 管理画面 3 修正(キー上限 50 / 保存バグ / 収集開始停止)
+2026-05-03 04:00 — YouTube API キー複数追加 UI バグの真因特定 + 修正
 
 ## リポジトリ状態
 - HEAD: 直近コミット直後
@@ -9,7 +9,40 @@
 
 ## 直前の状況サマリ
 
-API 管理画面に対する 3 修正:
+`5298725` で `MAX_YT_KEYS=50` に上限を上げたが、ユーザ実機では「**1 個しか登録できない**」状態が継続。コード読みで真因 = **仮説 B(編集モード展開時に既存 keys を draft にコピーしてない)** と確定し修正。
+
+### 真因
+
+`YoutubeKeysSection` の `draft` state が `useState<string[]>([''])` で初期化されており、編集モード再開時も常に `['']`(空欄 1 行)からスタート。既存の保存済みキーは draft に seed されない。
+
+ユーザの操作フロー:
+1. 1 個保存済みの状態で「キー一覧を編集」を開く
+2. 空欄 1 行のみが見える(既存 1 個は表示されない)
+3. ユーザは新キーを 1 個目に入力 → 保存
+4. `handleSave` は draft 全体を `setKeys()` に投げて secureStorage 側で **完全置換** → 既存 1 個が新 1 個に上書き
+5. **結果は常に 1 個**
+
+「+ キーを追加」を押せば draft 行は増えるが、それでも既存 key は draft に存在しないので save 時に消える。
+
+### 修正
+
+1. **`youtubeApiKeys.getKeys()` IPC を新設**:main 側は `secureStorage.loadYoutubeApiKeys()` を直返し
+2. **renderer に plaintext key を返す方針**:Gladia / Anthropic の「絶対返さない」方針とは異なる、**deliberate な区別**。multi-key editor の UX に既存キー可視化が必要(N 個ある内 1 個だけ追加・削除する操作)。`types.ts` のコメントで明記
+3. **`useEffect([editing])`**:編集モード ON 時に `getKeys()` を呼んで draft に seed。空なら `['']` で 1 行開始
+4. **diagnostic logs**:全動線(toggle / add row / save / count after)を `[ApiManagement]` 接頭辞で出力。キー値そのものは絶対出さない
+
+### 期待される動作
+
+- 0 個状態 → 編集モード:空欄 1 個
+- 1 個保存済み → 編集モード:既存 1 個 + 「+ キーを追加」
+- 「+ キーを追加」連打:1 → 2 → 3 → ... → 50 で disabled
+- 5 個入力 → 保存 → 再起動 → 5 個全部表示
+
+---
+
+## 1 つ前の前提(変更前の文脈)
+
+API 管理画面に対する 3 修正(`5298725`):
 
 ### 修正 1: YouTube API キー上限 10 → 50
 

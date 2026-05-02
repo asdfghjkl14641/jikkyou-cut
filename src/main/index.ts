@@ -231,6 +231,10 @@ function registerIpcHandlers() {
   // YouTube Data API key BYOK (multi-slot for quota rotation).
   ipcMain.handle('youtubeApiKeys:hasKeys', () => secureStorage.hasYoutubeApiKeys());
   ipcMain.handle('youtubeApiKeys:getKeyCount', () => secureStorage.countYoutubeApiKeys());
+  // getKeys returns plaintext keys to renderer — see comment in
+  // common/types.ts for the rationale. Used by the multi-key editor
+  // to seed its draft with existing keys.
+  ipcMain.handle('youtubeApiKeys:getKeys', () => secureStorage.loadYoutubeApiKeys());
   ipcMain.handle('youtubeApiKeys:setKeys', async (_e, keys: string[]) => {
     if (!Array.isArray(keys)) throw new Error('keys must be string[]');
     await secureStorage.saveYoutubeApiKeys(keys);

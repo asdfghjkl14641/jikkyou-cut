@@ -326,6 +326,25 @@ function YoutubeKeysSection() {
     return () => { alive = false; clearInterval(interval); };
   }, []);
 
+  // Seed the editor with what's already saved when the user opens
+  // edit mode. Without this, draft starts as [''] every time, so any
+  // save replaces the existing N keys with whatever was typed in this
+  // session — the bug behind "saved 1 key, came back, can't grow it".
+  // The IPC `getKeys` returns plaintext keys (deliberate relaxation;
+  // see common/types.ts comment).
+  useEffect(() => {
+    if (!editing) return;
+    let alive = true;
+    void window.api.youtubeApiKeys.getKeys().then((keys) => {
+      if (!alive) return;
+      console.log(`[ApiManagement] edit mode opened, loaded ${keys.length} existing keys into draft`);
+      // Seed with existing keys; if none, start with one blank row so
+      // the editor always has at least one input visible.
+      setDraft(keys.length > 0 ? keys : ['']);
+    });
+    return () => { alive = false; };
+  }, [editing]);
+
   const totalUsed = quota.reduce((acc, r) => acc + r.unitsUsed, 0);
   const totalCap = keyCount * YT_DAILY_QUOTA_PER_KEY;
 
@@ -381,7 +400,13 @@ function YoutubeKeysSection() {
           <button
             type="button"
             className={styles.smallButton}
-            onClick={() => setEditing((v) => !v)}
+            onClick={() => {
+              setEditing((v) => {
+                const next = !v;
+                console.log(`[ApiManagement] YT edit toggle: ${v} → ${next}, current keyCount=${keyCount}`);
+                return next;
+              });
+            }}
             disabled={busy}
           >
             <Edit2 size={12} />
@@ -467,7 +492,14 @@ function YoutubeKeysSection() {
               type="button"
               className={styles.smallButton}
               onClick={() =>
-                setDraft((prev) => (prev.length >= MAX_YT_KEYS ? prev : [...prev, '']))
+                setDraft((prev) => {
+                  if (prev.length >= MAX_YT_KEYS) {
+                    console.log(`[ApiManagement] YT add row blocked: at cap ${MAX_YT_KEYS}`);
+                    return prev;
+                  }
+                  console.log(`[ApiManagement] YT add row: ${prev.length} → ${prev.length + 1}`);
+                  return [...prev, ''];
+                })
               }
               disabled={busy || draft.length >= MAX_YT_KEYS}
             >

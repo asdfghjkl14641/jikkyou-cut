@@ -518,6 +518,14 @@ export type IpcApi = {
   youtubeApiKeys: {
     hasKeys: () => Promise<boolean>;
     getKeyCount: () => Promise<number>;
+    // Returns the actual key list to the renderer. Deliberate
+    // relaxation of the "main holds plaintext, never returns" pattern
+    // — needed so the multi-key editor can show what's already saved
+    // when the user enters edit mode (otherwise saving overwrites
+    // existing keys with whatever was typed in this session, since
+    // the editor was always seeded with empty inputs).
+    // Used ONLY by ApiManagementView's YouTube edit panel.
+    getKeys: () => Promise<string[]>;
     setKeys: (keys: string[]) => Promise<void>;
     clear: () => Promise<void>;
   };
