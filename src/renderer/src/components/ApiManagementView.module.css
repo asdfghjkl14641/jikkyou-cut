@@ -438,3 +438,233 @@
   font-size: 11px;
   color: var(--text-secondary);
 }
+
+/* ---- Backup status banner (top of keys tab) ----------------------------- */
+
+.backupSection {
+  background: rgba(255, 215, 100, 0.04);
+  border: 1px solid rgba(255, 215, 100, 0.2);
+  border-radius: var(--radius-md);
+  padding: var(--space-3) var(--space-4);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.backupHeader {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.backupTitle {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 0;
+  font-size: var(--font-size-md);
+  font-weight: var(--font-weight-medium);
+  color: var(--text-primary);
+}
+
+.backupBody {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: var(--font-size-xs);
+}
+
+.backupRow {
+  display: flex;
+  gap: 8px;
+  align-items: baseline;
+  color: var(--text-secondary);
+}
+
+.backupLabel {
+  color: var(--text-muted);
+  min-width: 110px;
+  flex-shrink: 0;
+}
+
+.backupPath {
+  font-family: var(--font-family-mono, monospace);
+  background: rgba(0, 0, 0, 0.3);
+  padding: 2px 6px;
+  border-radius: var(--radius-sm);
+  word-break: break-all;
+  color: var(--text-primary);
+}
+
+.slotChips {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.slotChipOk {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 8px;
+  border-radius: 12px;
+  background: rgba(34, 197, 94, 0.12);
+  border: 1px solid rgba(34, 197, 94, 0.35);
+  color: var(--accent-success);
+  font-size: var(--font-size-xs);
+  font-variant-numeric: tabular-nums;
+}
+
+.slotChipEmpty {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 8px;
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid var(--border-subtle);
+  color: var(--text-muted);
+  font-size: var(--font-size-xs);
+  font-variant-numeric: tabular-nums;
+}
+
+.backupWarning {
+  display: flex;
+  gap: 6px;
+  align-items: flex-start;
+  background: rgba(239, 68, 68, 0.06);
+  border-left: 2px solid var(--accent-danger);
+  padding: 6px 10px;
+  border-radius: var(--radius-sm);
+  font-size: var(--font-size-xs);
+  color: var(--text-secondary);
+  line-height: 1.5;
+}
+
+/* ---- Import / export section -------------------------------------------- */
+
+.importExportSection {
+  background: rgba(99, 102, 241, 0.04);
+  border: 1px solid rgba(99, 102, 241, 0.2);
+  border-radius: var(--radius-md);
+  padding: var(--space-3) var(--space-4);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.importExportHeader {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.importExportButtons {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+/* ---- Import preview dialog ---------------------------------------------- */
+
+.importDialogBackdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.6);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000;
+}
+
+.importDialog {
+  background: var(--bg-surface);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-md);
+  padding: var(--space-4);
+  width: min(560px, calc(100vw - 32px));
+  max-height: calc(100vh - 64px);
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.importDialogTitle {
+  margin: 0;
+  font-size: var(--font-size-md);
+  font-weight: var(--font-weight-bold);
+}
+
+.importDialogPath {
+  font-family: var(--font-family-mono, monospace);
+  font-size: var(--font-size-xs);
+  color: var(--text-muted);
+  word-break: break-all;
+}
+
+.importPlanBox {
+  background: rgba(0, 0, 0, 0.25);
+  border-radius: var(--radius-sm);
+  padding: 10px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.importRow {
+  display: flex;
+  justify-content: space-between;
+  font-size: var(--font-size-sm);
+}
+
+.importRowLabel {
+  color: var(--text-secondary);
+}
+
+.importRowValue {
+  color: var(--text-primary);
+  font-variant-numeric: tabular-nums;
+}
+
+.importInvalidBox {
+  background: rgba(239, 68, 68, 0.08);
+  border-left: 2px solid var(--accent-danger);
+  padding: 8px 12px;
+  border-radius: var(--radius-sm);
+  font-size: var(--font-size-xs);
+  color: var(--text-secondary);
+}
+
+.importInvalidBox strong {
+  display: block;
+  margin-bottom: 4px;
+  color: var(--accent-danger);
+}
+
+.importInvalidBox ul {
+  margin: 0;
+  padding-left: 18px;
+}
+
+.importModeBox {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 8px 0;
+}
+
+.importModeRow {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: var(--font-size-sm);
+  color: var(--text-secondary);
+  cursor: pointer;
+}
+
+.importDialogActions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
