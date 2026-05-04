@@ -28,28 +28,34 @@ Electron + React + TypeScript 製。**現在は配布前の "自分用ツール"
 | LosslessCut | テキスト編集なし、AI 機能なし | テキスト編集 + Gladia 文字起こし + 字幕焼き込み |
 | DaVinci / Premiere | プロ向け、習得コスト高 | 切り抜き作業に特化、低学習コスト |
 
-### 現在の達成状況(2026-05-01 時点)
+### 現在の達成状況(2026-05-03 時点)
 
 - **MVP 完成**(タグ `v0.1.0-mvp` = commit `abb589a`)
-- **字幕機能 Phase A**(基盤 + UI + 焼き込み): 完了
-- **字幕機能 Phase B-1**(コラボ ON/OFF + 話者数指定): 完了
-- **字幕機能 Phase B-2**(話者ID 手動修正 UI + DnD): 完了
-- **字幕機能 Phase B-3**(話者プリセット + キュー単位スタイル上書き): 完了
+- **字幕機能 Phase A / B-1 / B-2 / B-3**(基盤 + UI + 焼き込み + コラボ + 話者修正 + プリセット): 完了
 - **URL 動画 DL**(yt-dlp 統合、YouTube + Twitch): 完了
 - **DropZone への URL 入力統合**: 完了
-- **3 フェーズ構造への再編**: 完了 (Load -> Clip Select -> Edit)
-- **コメント分析グラフ(UI MVP)**: 完了 (モックデータ表示 + ドラッグ選択)
-- **コメント分析 rolling window スコア + W スライダー**: 完了 (5 要素 / 30 秒〜5 分可変 / Stage 1+2 分離)
-- **複数区間選択 + 感情 9 カテゴリ + アイキャッチ枠**: 完了 (clipSegments[] 最大 20 / 区間バー drag / ClipSegmentsList / eyecatches 自動同期。AI タイトル生成とアイキャッチ実体動画化は次タスク)
-- **操作系整理 + ライブコメントビュー**: 完了 (波形は左=シーク・右ドラッグ=区間追加、PeakDetailPanel 廃止、LiveCommentFeed 常駐)
-- **操作感改善 + 区間バー右クリックメニュー**: 完了 (左クリック即時シーク + ホバー圧縮 + コメント行コンパクト化 + SegmentContextMenu)
-- **AI タイトル要約**: 完了 (Anthropic BYOK、Claude Haiku 4.5、3 並列 + キャッシュ、Settings UI と ClipSegmentsList ボタン)
-- **切り抜き候補の自動抽出**: 完了 (アルゴリズム peak 検出 + AI 精査 + タイトル生成を 1 ボタンで一気通貫、ClipSelectView ヘッダの ✨ ボタン)
-- **データ収集パイプライン Phase 1**: 完了 (better-sqlite3 + YouTube Data API + yt-dlp で切り抜き動画蓄積、Settings UI、1 時間ごとバックグラウンド収集)
-- **「API 管理」専用画面**: 完了 (メニューバー直配置 + Ctrl+Shift+A、Gladia/Anthropic/YouTube 統合、CollectionLogViewer で収集ログ GUI 表示)— モーダル → 全画面フェーズ swap に変更(`phase: 'api-management'`)
+- **3 フェーズ構造への再編**(Load → Clip Select → Edit): 完了
+- **コメント分析グラフ + rolling window + W スライダー**: 完了 (Stage 1 main bucketize + Stage 2 renderer rolling)
+- **複数区間選択 + 感情 9 カテゴリ + アイキャッチ枠**: 完了
+- **操作系整理 + ライブコメントビュー + 区間バー右クリックメニュー**: 完了
+- **AI タイトル要約**(Claude Haiku 4.5、3 並列 + キャッシュ): 完了
+- **切り抜き候補の自動抽出**(アルゴリズム peak + AI refine + タイトル生成、1 ボタン): 完了
+- **データ収集パイプライン Phase 1**(SQLite + YouTube Data API + yt-dlp): 完了
+- **「API 管理」専用画面**: 完了 (`phase: 'api-management'` フェーズ swap)
+- **動画 DL 高速化 5 段階再設計**(2026-05-03):
+  - 段階 1: yt-dlp `--concurrent-fragments 8`
+  - 段階 2: 音声優先 DL + 動画 DL バックグラウンド化(audio-first)
+  - 段階 3: YouTube/Twitch 埋め込みプレイヤー(DL 完了前から再生)
+  - 段階 4: 編集中のプレイヤー切替(埋め込み ↔ ローカル動画、再生位置維持)
+  - 段階 5: Twitch 動作確認 + 微調整
+- **段階 6a: URL 入力時の並列化**(2026-05-03、Bug 1 進行中): コメント分析 + global patterns を audio DL と並列 fire。`commentAnalysisStatus` を editorStore に hoist
+- **段階 6b: yt-dlp `--cookies-from-browser` 統合**(2026-05-03): YouTube bot 検出回避。Chrome / Edge / Firefox / Brave 選択可能、設定 UI 経由で双方向バインド
+- **段階 6c: cookies.txt ファイル直接指定**(2026-05-03): ブラウザクッキー全滅環境(Windows DPAPI 問題等)向け。優先度 ファイル > ブラウザ
+- **段階 6d: format selector 緩和 + `--js-runtimes node`**(2026-05-03): YouTube の nsig 解決のため Node.js を yt-dlp の JS runtime に指定。avc1+m4a 制約撤廃で fallback 簡素化
 
 ### 次フェーズ
-- **進行中**: コメント分析画面 (バックエンド実装待ち) — 詳細は `docs/COMMENT_ANALYSIS_DESIGN.md`
+- **進行中**: 段階 6a の Bug 1(YouTube audio-first 経路で commentAnalysisStatus が loading 永続化)。次セッションの最優先
+- **未着手**: Twitch チャット取得が yt-dlp `--sub-langs rechat` で 404 → GraphQL 直接実装(段階 7 候補)
 - 長期構想は `IDEAS.md` 参照(AI動画ディレクター方向)
 
 ---
@@ -189,20 +195,47 @@ type EditorState = {
   // skip(直結フラグ)を持つ
   eyecatches: Eyecatch[];
 
-  // ファイル
+  // ファイル(段階 2 以降、URL DL では filePath は audio DL 完了直後は null、
+  // 動画 DL 完了で setVideoFilePath が後追いで埋める)
   filePath: string | null;
   fileName: string | null;
+  // 段階 2:audio-first DL の出力。filePath より先に埋まる。AI extract /
+  // Gemini 解析はこちらを優先する経路あり
+  audioFilePath: string | null;
+  // 段階 2:audio + video の DL を紐付ける ID。`youtube_<11chars>` /
+  // `twitch_<numeric>` / `url_<sha256-12>`。キャッシュキーや IPC の
+  // session 一致チェックの基盤
+  sessionId: string | null;
+  // 段階 2:動画 DL のバックグラウンド進捗。'idle' / 'downloading' / 'done' / 'error'
+  videoDownloadStatus: { status: 'idle'|'downloading'|'done'|'error'; progress: number; error: string | null };
+  // 動画ソース URL(yt-dlp 由来)。ローカルドロップは null。コメント分析の
+  // 必要条件 + 段階 6a 並列 fire の前提
+  sourceUrl: string | null;
   durationSec: number | null;
+  videoWidth: number | null;
+  videoHeight: number | null;
   currentSec: number;
+  seekNonce: number;
 
   // 文字起こし結果
   cues: TranscriptCue[];
+
+  // 段階 6a:コメント分析の状態。App.tsx が URL 入力時に IPC を fire し、
+  // 進捗 / 結果をここに書き込む。ClipSelectView は本フィールドを購読する
+  // だけで、自前で IPC を呼ばない
+  commentAnalysisStatus: CommentAnalysisLoadStatus;  // idle | loading | ready | error
+  // 段階 6a:global pattern 事前読込のキャッシュ。renderer 側は opaque
+  // (unknown)、autoExtract IPC が main 側で再読込する保険あり
+  globalPatterns: unknown | null;
 
   // コメント分析グラフの rolling window 幅(秒)。30..300 の 30 秒
   // ステップ。`WindowSizeSlider` から書き、`CommentAnalysisGraph` が
   // 読んで `computeRollingScores` を再計算する。setFile / clearFile で
   // 初期値 120 にリセット。永続化はせず(プロトタイプ範囲)
   analysisWindowSec: number;
+
+  // 段階 6b/6c の onUpdate ヘルパは無し。AppConfig の ytdlpCookiesBrowser /
+  // ytdlpCookiesFile は editorStore ではなく useSettings 経由(SettingsDialog)。
   // ...
 };
 ```
@@ -212,7 +245,14 @@ type EditorState = {
 ## 5. IPC 通信
 
 **メインプロセスが唯一の真実源**。preload で `window.api` として expose される。
-主要な名前空間: `fonts`, `subtitleSettings`, `urlDownload`, `commentAnalysis`, `loadProject`, `saveProject`, `startTranscription`, `startExport` 等。
+主要な名前空間: `fonts`, `subtitleSettings`, `urlDownload`, `commentAnalysis`, `aiSummary`, `youtubeApiKeys`, `creators`, `dataCollection`, `collectionLog`, `gemini`, `loadProject`, `saveProject`, `startTranscription`, `startExport` 等。
+
+### 2026-05-03 追加 IPC
+
+- `urlDownload.{startAudioOnly, cancelAudio, onAudioProgress, startVideoOnly, cancelVideo, onVideoProgress}` — 段階 2 の音声優先 / 動画バックグラウンド分離 DL。renderer は通常 audio を await → ClipSelectView を開く → video を fire-and-forget(バックグラウンド進捗を `videoDownloadStatus` に流す)
+- `aiSummary.loadGlobalPatterns` — 段階 6a の事前読込エントリ。URL 入力時に並列 fire され `globalPatterns` に opaque cargo として保持(autoExtract が main 側で再読込する保険あり)
+- `dialog.openCookiesFileDialog` — 段階 6c のクッキーファイル選択ダイアログ。フィルタは `.txt` + すべてのファイル
+- `cookiesFile.validate(absPath)` — 段階 6c のファイル妥当性チェック。`{ exists, sizeBytes, extension }` を返す。**ファイル中身は読まない**(セキュリティ)
 - `commentAnalysis.{start, cancel, onProgress}` — `videoFilePath` + `sourceUrl`(URL DL 由来)+ `durationSec` を渡すと、yt-dlp チャット取得 → playboard 視聴者数取得 → 5 秒バケット集計(Stage 1)を順次実行して `CommentAnalysis` を返す(`buckets[]` を含む)。実際のスコア(`ScoreSample[]`)は renderer で `src/renderer/src/lib/rollingScore.ts` の `computeRollingScores` が W スライダーの値で都度計算する Stage 2。`onProgress` は phase=chat/viewers/scoring の 3 段階で発火。失敗時は graceful degradation(チャット 0 件 / 視聴者数なしモードで重み切替)。
 - `hasAnthropicApiKey` / `setAnthropicApiKey` / `clearAnthropicApiKey` / `validateAnthropicApiKey` — Gladia キーと並列の BYOK スロット。`safeStorage`(Windows DPAPI)で `userData/anthropicKey.bin` に暗号化保存。検証は Anthropic API への 1-token ping で実施
 - `aiSummary.{generate, cancel, onProgress}` — `clipSegments[]` の各区間に対して Claude Haiku 4.5 でタイトル生成。3 並列 + 429/5xx で指数バックオフ + per-request 30 秒タイムアウト。結果は `userData/comment-analysis/<videoKey>-summaries.json` にキャッシュ(キー = `${start}-${end}-${msgCount}` で 2 桁丸め)。`onProgress` は `done/total` を発火、UI は ClipSegmentsList の進捗ラベルで表示
@@ -293,12 +333,14 @@ type EditorState = {
 ## 9. 運用上の注意
 
 - **yt-dlp**: `resources/yt-dlp/` にバイナリを同梱。`getYtDlpPath()` で dev / packaged を分岐。
-- **URL DL の選択フォーマット**: `<video>` 互換のため **H.264+AAC(MP4 コンテナ)を強制取得** する(`buildFormatSelector`)。5 段フォールバック `avc1+m4a / avc1+anything / anything+anything / mp4-single / anything-single` で常に MP4 コンテナに落とし、`--merge-output-format mp4` でコンテナ固定。**merger 経路では `--postprocessor-args 'Merger:-c:v copy -c:a aac -b:a 192k -movflags +faststart'` で音声を必ず AAC 192 kbps に再エンコ + moov atom を頭に**(2026-05-02 20:30 修正、Opus-in-MP4 で `<video>` が音声 silent drop する不具合の根本対策)。4K AV1 や 1440p VP9-mkv は犠牲(最大 1080p AVC1)、**Chromium `<video>` のネイティブ再生互換性を優先**。新しい URL DL のみ修正対象 — **旧形式で DL 済みファイルは音声出ない可能性、再 DL 必須**。
+- **URL DL の選択フォーマット**(2026-05-03 段階 6d 更新): `buildFormatSelector` は 3 段に簡素化:`bestvideo<h>+bestaudio / best<h> / best`。avc1 / m4a 制約は撤廃。`--merge-output-format mp4` でコンテナだけ固定し、merger は `--postprocessor-args 'Merger:-c:v copy -c:a aac -b:a 192k -movflags +faststart'` で video は copy(VP9-in-MP4 を含む)+ audio は AAC 192 kbps + moov atom を頭に。Chromium ~70 以降は MP4+VP9 ネイティブ再生対応のため avc1 強制不要。**全 yt-dlp 呼び出しに `--js-runtimes node` を追加**(YouTube nsig / SABR challenge 解決のため、PATH の Node.js を yt-dlp が自動検出)。`<video>` 互換維持(Opus-in-MP4 silent drop の対策は AAC 強制で継続)。
 - **URL DL の音声フォーマット強制**: `--postprocessor-args 'Merger:-c:v copy -c:a aac -b:a 192k -movflags +faststart'` は merger PP 経由でのみ走る。`best[ext=mp4]` 単体ファイル fallback では postprocessor が走らない経路もあるが、その場合は元ファイルが既に MP4 なのでそのまま使える。診断は `[url-download] yt-dlp resolved formats: JCUT_FMT vfmt=... acodec=...` 行で確認、`acodec=none` なら format selector が video-only に落ちた事故。
 - **URL DL の audio fragment 損失対策**(2026-05-02 21:30 修正): yt-dlp デフォルトの `--skip-unavailable-fragments` は失敗 fragment を silent skip するため、partial audio が merger に渡って **動画長 ≠ 音声長 の壊れた MP4** が出来る不具合が報告された。`--abort-on-unavailable-fragment` + `--retries 30 --fragment-retries 30` で fragment 失敗時は hard error 化、加えて **post-DL ffprobe validation** で video/audio duration ±5 秒以上ずれてたら renderer に明示エラーを投げる。ffprobe 自体が失敗した場合は warning 出して DL 成功扱い(belt-and-braces で過剰に reject しない)
 - **URL DL の進捗パース**: yt-dlp デフォルト出力は `Unknown%` / merge 中ドロップで不安定なので、`--progress-template "download:JCUT_PROGRESS %(progress._percent_str)s %(progress._speed_str)s %(progress._eta_str)s"` で固定フォーマット化。renderer 側の進捗ダイアログに 250ms throttle で送る。
 - **yt-dlp の `--print` + `--progress` は必ずセット**: `--print` を渡すと yt-dlp は暗黙に quiet モードに入り、進捗を含む全デフォルト出力を抑制する。`--progress-template` だけでは「テンプレートを使う」設定にしかならず、出力自体は復活しない。`--progress` フラグ(`Show progress bar, even if in quiet mode`)を **必ずセットで指定** する。`src/main/urlDownload.ts` の spawn args にコメント警告残置。
-- **URL DL は video + audio の 2 パス DL**: `bestvideo[ext=mp4][vcodec^=avc1]+bestaudio[ext=m4a]` の指定で video ストリームと audio ストリームを別々に DL してから `--merge-output-format mp4` で結合する。renderer の進捗バーは 0→100, 0→100 と 2 度上がる動作になる(自分用ツール段階としては許容、merger フェーズ「結合中…」表示は将来検討)。
+- **URL DL は video + audio の 2 パス DL**: `bestvideo<h>+bestaudio` の指定で video ストリームと audio ストリームを別々に DL してから `--merge-output-format mp4` で結合する。renderer の進捗バーは 0→100, 0→100 と 2 度上がる動作になる(自分用ツール段階としては許容、merger フェーズ「結合中…」表示は将来検討)。**段階 2 以降は audio-only DL を先行 fire**(`downloadAudioOnly` → `audioFilePath` をすぐ埋める)→ video DL は別 IPC `urlDownload:startVideoOnly` でバックグラウンド継続、editorStore の `videoDownloadStatus` に進捗を流す。
+- **yt-dlp のクッキー統合**(2026-05-03 段階 6b/6c): `getCookiesArgs({ cookiesBrowser, cookiesFile })` が priority `cookiesFile (--cookies <path>) > cookiesBrowser (--cookies-from-browser <browser>) > []` で args を組み立てる。設定 UI(SettingsDialog の「動画ダウンロード」セクション)で双方向バインド。クッキーファイル直接指定は Windows の DPAPI 問題等でブラウザクッキー読み取りが失敗する環境向け。`friendlyDownloadError` は (A) bot 検出 / (B) 認証必要 / (C) クッキーロック / (D) クッキーファイル不存在 / (E) format 不可 の 5 カテゴリで stderr を分類してアクション可能な日本語メッセージに翻訳。
+- **クッキーファイルのセキュリティ取扱い**(段階 6c): cookies.txt は YouTube アカウント認証情報。**ファイル中身は読まない・ログに出さない・コピーしない**(`validateCookiesFile` は `fs.stat` のみ呼ぶ、size + extension + existence 取得のみ)。パス自体はログ可。SettingsDialog に「※ クッキーファイルは認証情報を含みます。第三者と共有しないでください」の警告文を表示。
 - **Google Fonts**: Google Fonts API から TTF を動的に取得し `userData/fonts` に保存。
 - **プロジェクト保存**: 動画と同じ階層に `<basename>.jcut.json` として自動保存。
 - **Gladia API**: 文字起こしに使用。APIキーは `safeStorage` で保存。

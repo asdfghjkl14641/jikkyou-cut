@@ -1,7 +1,7 @@
 # 次セッションへの引き継ぎ (NEXT_SESSION_HANDOFF)
 
 ## 凍結時刻
-2026-05-03 12:00 — データ収集の最終クリーンアップ(NULL group 解消 + reseed 自動化)+ 運用 Runbook 整備完了。**本格運用開始の準備が完全に整った**。あとはユーザの「有効化する」操作待ち。
+2026-05-03 夜 — 動画 DL 高速化 5 段階再設計 + 段階 6a-6d 完了。**機能は積み上がったが、未解決バグ 3 件 + パフォーマンス問題 1 件あり**。明日の優先順位は明確化済み(本ドキュメント末尾)。
 
 ## ⚠️ 次セッションの Claude Code が最初に読むこと
 
@@ -10,104 +10,149 @@
 - ❌ `npm run start` 禁止(古いビルド掴む)
 - `npm install` 後は `npx @electron/rebuild -f -w better-sqlite3`
 
-## リポジトリ状態
-- HEAD: `cd30fda`(fix(data-collection): NULL group の seed creator を毎起動 reseed で正常化)
-- 直前: `604465d`(docs: uploaders 分離 migration 001 反映)
-- docs commit 後 clean
+dev server 再起動時の orphan 掃除コマンド(Windows):
+```powershell
+Get-CimInstance Win32_Process -Filter "Name='electron.exe'" |
+  Where-Object { $_.CommandLine -match 'jikkyou-cut' } |
+  ForEach-Object { taskkill /F /T /PID $_.ProcessId }
+```
 
-## 直前の状況サマリ
+## 🛑 重要:debug ログを削除しないこと
 
-直前タスクで完了した uploaders 分離(migration 001)後の **3 件の最終クリーンアップ**:
+renderer 側に `[comment-debug:app] / [comment-debug:store] / [comment-debug:clip]` が残置中、
+main 側に `[comment-debug] / [comment-debug:main]` が残置中。
 
-### 修正 1: NULL group 2 件を reseed で恒久解決
+**明日の Bug 1 再現に必要なため、削除しない**。Bug 1 が真因特定 → 修正 → 動作確認まで終わってから一括撤去する想定(段階 6a の Step 6 をまだ実行していない)。
 
-**真因**:per-creator hit 経路で旧式 3 引数 `upsertCreator(name, channelId, isTarget)` が group 引数なしで INSERT したケース(creators.json は 75 ある状態で DB 行が無い時に発生)。今は uploaders 分離後で 3 引数経路は撤廃済みだが、**過去のデータに 2 件残ってた**:
+該当ログの場所:
+- `src/renderer/src/App.tsx`(sessionId watcher / startDownloadFlow / commentAnalysis IPC)
+- `src/renderer/src/store/editorStore.ts`(setFile / clearFile / enterClipSelectFromUrl / setCommentAnalysisStatus / setDuration)
+- `src/renderer/src/components/ClipSelectView.tsx`(mount / re-render snapshot)
+- `src/main/commentAnalysis/chatReplay.ts`(全フロー、yt-dlp stdout/stderr 含む)
+- `src/main/commentAnalysis/index.ts`(analyzeComments 入口/出口)
+- `src/main/index.ts`(commentAnalysis IPC handler)
 
-| name | 期待 group | 実際 |
+---
+
+## 今日 1 日の進捗(完了マーク)
+
+### 朝〜午後
+
+- データ収集:per-creator の検索クエリ集中問題(neoporte 5 人だけ高ヒット)対策 — クエリ多角化 + 配信者 40 人 → 75 人 seed 拡張
+- AI 抽出パイプライン強化:per-creator JSON → global.json への一本化(M1.5b)、`global.json` パターン採用
+- Gemini モデル変更:2.0-flash-exp → 2.5-flash(コスト 1/4 + 文脈理解向上)
+- aiSummary キャッシュバグ修正:videoKey の絶対パスをファイル名にそのまま結合してたバグを `videoKeyToFilenameStem(key)` で解消
+- WinError 32(file sharing violation)修正:yt-dlp の `<id>.live_chat.json.part-Frag0.part` がセッション間で衝突していた → `chatReplay.ts` の tmpDir に nanoid suffix(`jcut-chat-${id}-${nanoid(8)}`)
+- `EmbeddedVideoPlayer` の `setDuration` drift 対策:embed プレイヤーが integer-rounded duration をポーリングで返してくる(audio probe 5740.18s → embed 5741s)→ 既存 valid 値の ±5s 以内なら skip(`editorStore.setDuration` に drift guard 追加)
+
+### 夕方〜夜:動画 DL 高速化 5 段階再設計 + 6a-6d
+
+| 段階 | 内容 | 状態 |
 |---|---|---|
-| ぶゅりる | streamer | NULL |
-| 剣持刀也 | nijisanji | NULL |
+| 1 | yt-dlp `--concurrent-fragments 8` + バイナリ最新化 + ベンチログ | ✅ |
+| 2 | 音声優先 DL + AI 抽出の早期実行(audio-first / video-background) | ✅ |
+| 3 | YouTube/Twitch 埋め込みプレイヤー(DL 完了前から再生) | ✅ |
+| 4 | 編集中のプレイヤー切替(埋め込み ↔ ローカル動画、再生位置維持) | ✅ |
+| 5 | Twitch 動作確認 + 微調整 | ✅ |
+| 6a | URL 入力時の並列化(コメント分析 + global patterns を audio DL と並列 fire) | ✅(ただし Bug 1) |
+| 6b | yt-dlp `--cookies-from-browser` 統合(YouTube bot 検出回避) | ✅ |
+| 6c | cookies.txt ファイル直接指定(ブラウザクッキー全滅環境向け、優先度: ファイル > ブラウザ) | ✅ |
+| 6d | format selector 緩和 + `--js-runtimes node` 全経路適用 | ✅ |
 
-**解決**:`seedCreators.ts` に `reseedGroupsForExistingCreators()` 追加、`seedOrUpdateCreators` の早期 return を撤去して **毎起動必ず reseed を実行**。SEED_CREATORS を source-of-truth として `UPDATE creators SET creator_group=? WHERE name=? AND (creator_group IS NULL OR creator_group != ?) AND is_target=1` を全 75 件に対して実行。冪等(既に sync 済みなら no-op)。
+詳細は DECISIONS.md 直近 9 エントリ(2026-05-03)を参照。
 
-実機 hot-reload で実際に 2 件 update された記録が collection.log に残ってる:
-```
-2026-05-02T13:05:57Z [INFO] reseed group: "剣持刀也" → nijisanji
-2026-05-02T13:05:57Z [INFO] reseed group: "ぶゅりる" → streamer
-2026-05-02T13:05:57Z [INFO] reseed: corrected creator_group on 2 existing creator(s)
-```
+---
 
-post-state(Python で確認):
-```
-null_group: 0
-by_group: {nijisanji: 20, hololive: 15, vspo: 15, neoporte: 5, streamer: 20}
-```
+## 🐛 未解決バグ(明日対応)
 
-全 75 件 group 整合済み ✅。
+### Bug 1: YouTube audio-first 経路で `commentAnalysisStatus.kind = 'loading'` が永続化
 
-### 修正 2: diagnose Q3b + Q15-Q17 拡張
+**症状**:URL 入力(初回 = キャッシュ無し)→ 音声 DL 完了 → ClipSelectView 開く → `コメント (0 件)` が `チャット取得中…` 表示のまま固まる。
+2 回目(キャッシュ HIT)は 3531 messages 正常表示。
 
-| ID | 内容 |
-|---|---|
-| Q3b | NULL group の creator 名一覧(reseed 後は 0 件想定) |
-| Q15 | 直近 1h 以内に追加された videos の振り分け(creator_id / uploader_id 個別 count) |
-| Q16 | 直近 1h で新規追加された uploaders 件数 |
-| Q17 | 直近 1h で新規追加された creators 件数(0 期待、>0 で `⚠ AUTO-ADD REGRESSION SUSPECTED`) |
+**再現済み**:
+- URL: `https://www.youtube.com/watch?v=T6pxHw4gUzs`
+- 該当ログ:今日のチャット履歴後半の DevTools console + ターミナル出力。
+- main 側ログでは `[comment-debug] returning to renderer: messages=3531` まで到達している。
+- renderer 側で受け取りが落ちている(or store への反映が落ちている)。
 
-**ユーザが「1 回だけ取得」を押した後、デバッグメニュー → DB 診断 を押せば一目で auto-add 回帰検出可能**。
+**真因仮説**(未確定):
+1. App.tsx の commentAnalysis IPC `.then()` が session 一致チェックで drop されている可能性 — ただしログ上 `expectedSession` と `state.sessionId` は一致している(段階 6a の検証時点)
+2. `setDuration` の drift guard が悪化させている可能性(EmbeddedVideoPlayer のポーリングが ClipSelectView の useEffect を再起動して in-flight cancel する経路) — 段階 6a で App.tsx に commentAnalysis を hoist した後の挙動を未検証
+3. zustand の selective subscription が ready 状態を ClipSelectView に伝えていない可能性
 
-### 修正 3: 運用 Runbook (`docs/DATA_COLLECTION_OPS.md`)
+**明日のアクション**:
+1. dev server 再起動 → URL 入力 → 再現
+2. DevTools console + ターミナルのログを取り直す(debug ログは残置済み)
+3. `[comment-debug:app] commentAnalysis result received` の messages.length と `[comment-debug:store] setCommentAnalysisStatus: loading -> ready` の有無を突き合わせ
+4. drop / 不到達のどこで切れてるかを確定 → 修正
 
-新規ファイル。本格運用開始前 / トラブル時の対処を網羅:
-- 開始前チェックリスト(キー登録 / 配信者 75 / DB 診断結果 / バックアップ)
-- 開始手順
-- 監視ポイント表(指標と健全 / 異常値の判別)
-- トラブル対処 6 種(クォータ枯渇 / better-sqlite3 / creators 増加 / 配信者ヒットなし / 新規 0 件 / yt-dlp 失敗)
-- バックアップ / ロールバック手順
-- マイグレーション履歴
+### Bug 2: Twitch チャット取得 yt-dlp `--sub-langs rechat` が HTTP 404
 
-## 主要変更ファイル(直近 = `cd30fda`)
+**症状**:`https://www.twitch.tv/videos/2759886104` でコメント分析を走らせると、`downloadChatJson` の yt-dlp が 404 で終了。Twitch 側の rechat エンドポイント API 仕様変更(deprecated)疑い。
 
-- `src/main/dataCollection/seedCreators.ts` — `reseedGroupsForExistingCreators()` 追加、`seedOrUpdateCreators` の早期 return 撤去
-- `src/main/dataCollection/diagnose.ts` — Q3b + Q15-Q17 追加
-- `docs/DATA_COLLECTION_OPS.md`(新規)
+**回避策候補**(未実装):
+- Twitch GraphQL `commentReplay` を直接叩く(`gql.twitch.tv/gql` への POST、Client-ID ヘッダ必要)
+- chat-downloader CLI を別プロセスで呼ぶ
+- yt-dlp 側にパッチ送る(コミュニティ依存、待ち時間長い)
 
-## 動作確認(実機ベース)
+**明日のアクション**:別タスク化(段階 7 候補)。優先度 3。GraphQL 直接実装の spike が必要。
 
-### ✅ 済
-- 全 75 件 group 整合(Python で確認、null=0)
-- reseed の冪等性(2 回目以降は no-op、ログに何も出ない)
-- migrate 001 + reseed 連携(seedOrUpdateCreators の最後で reseed 実行)
-- TypeCheck + build clean
-- dev サーバ起動成功(`bn389ctzj`、port 3001)
+### Bug 3: cookies.txt がプラットフォーム間で混在
 
-### ⏳ ユーザに依頼中
-- メニュー「**デバッグ → DB 診断(データ収集)**」を押下 → 全 14+ クエリの結果を確認
-- API 管理 → データ収集タブ → 「**1 回だけ取得**」を押す → 1 サイクル走らせる
-- 完了後にもう一度「DB 診断」 → Q15(videos with uploader > 0、with creator はゼロ近辺)+ Q16(>0)+ Q17(=0)を確認
-- 問題なければ「**有効化する**」で本格運用開始
+**症状**:`getCookiesArgs` がプラットフォーム判定なしに `--cookies <path>` を全 yt-dlp 呼び出しに付与している。YouTube 用 cookies が Twitch リクエストに渡される。
+**実害**:現状は無害(Twitch は Cookie ヘッダを単に無視するだけ)。
+**整理対象**:`extractVideoId` が platform を返しているので、chatReplay.ts で「YouTube プラットフォームの時だけクッキーを渡す」ように分岐を入れる手はある。優先度低。
 
-## 既知の地雷・注意点
+---
 
-- **uploaders 分離 + reseed の組み合わせ**:`_collectBatch` は uploader / creator 振り分けが分離済み + 起動時 reseed が integrity を維持。auto-add 回帰の経路は物理的に閉じてる
-- **reseed の頻度**:現状毎起動。SEED_CREATORS 75 件 × UPDATE 1 文 = 75 回の prepared statement 実行。SQLite では数 ms。問題なし
-- **Q17 ⚠ 警告**:1 サイクル後に「DB 診断」を押した時点で creators が増えてれば即 ⚠ が出る。出たら `_collectBatch` のリグレッションを疑う
-- **デバッグメニュー残置**:Phase 2 着手後 / 安定運用確認後に撤去予定。Runbook にも記載
-- **過去の手動バックアップ**:`data-collection.db.bak.20260502T123359` (migration 自動)+ `data-collection.db.bak.20260502T212737` (タスク開始前手動)を保持
+## 📉 副次:ClipSelectView の不要 re-render 爆発
 
-## 次タスク候補
+`EmbeddedVideoPlayer` の `onTimeUpdate` が `setCurrentSec` を ~60 Hz で呼ぶ → ClipSelectView 全体が re-render → 子の `LiveCommentFeed` / `CommentAnalysisGraph` も re-render。
+debug ログ `[comment-debug:clip] re-render` がコンソールに大量に出続ける(Bug 1 再現時のログ取得を阻害する程度)。
 
-1. **【ユーザ操作 1】**:アプリ → API 管理 → デバッグ → DB 診断 押下 → ターミナル出力チェック(Q3b NULL group=0 / Q14 user_version=1 が確認できれば OK)
-2. **【ユーザ操作 2】**:API 管理 → データ収集 → 「1 回だけ取得」→ 完了待ち → もう一度 DB 診断 → Q15-Q17 で振り分け正常 + Q17=0 確認
-3. **【ユーザ操作 3】**:問題なければ「有効化する」で本格運用開始 → 1 週間放置
-4. 1 週間後:Phase 2(蓄積データ分析)着手判断
-5. 安定運用が確認できたら デバッグメニュー + diagnose.ts を撤去
+**対応案**:
+- `currentSec` を ClipSelectView の subtree から外す(直接購読する子だけが subscribe する形にリファクタ)
+- `useEditorStore(s => s.currentSec, equal)` に narrow するか、useMemo で subtree を切る
+
+明日の優先 4(debug ログ撤去)と同じタイミングで触ると良い。
+
+---
+
+## 📡 回線 throttling 状況
+
+午後の DL ベンチで明らかに遅い時間帯あり(数 MB/s しか出ない)。原因不明(プロバイダ throttling? YouTube 側 rate limit?)。
+明日朝、URL 入力 → 速度確認(優先 1)で復旧してれば次の Bug 検証へ進む。1 MB/s 以下なら一旦待機 or 別 URL でテスト。
+
+---
+
+## 🎯 明日のタスク優先順位
+
+| 優先 | 内容 | 完了基準 |
+|---|---|---|
+| 1 | **回線回復確認** | 任意の YouTube URL で audio DL 速度測定。50 MB/s 以上なら throttling 解除、2 へ。1 MB/s 以下ならテストできない、回線回復まで待機 |
+| 2 | **Bug 1 真因確定 + 修正** | URL=T6pxHw4gUzs で再現 → debug ログ突き合わせ → 真因特定 → 修正 → 1 回目 / 2 回目とも正常表示確認 |
+| 3 | **Bug 2(Twitch チャット 404)対応の spike** | GraphQL 直接実装の方針判断。Bug 1 解決後 or 別セッション化を判断 |
+| 4 | **debug ログ一括撤去** | Bug 1 解決を確認してから。`[comment-debug:*]` を全削除、コミット |
+
+---
+
+## リポジトリ状態(凍結時)
+
+- HEAD: `dda3ff2`(docs: 運用 Runbook 追加 + reseed/Q15-Q17 を全文書反映)— 6a-6d の commit はまだ作っていない
+- 6a-6d の変更は **uncommitted**(ユーザの実機検証 + Bug 1 修正後にまとめてコミット予定)
+- 段階 1-5 は午後の作業中に commit 済み(履歴は `git log` 参照)
+
+`git status` 推定:
+- modified: `src/common/config.ts`, `src/common/types.ts`, `src/main/config.ts`, `src/main/fileDialog.ts`, `src/main/index.ts`, `src/main/urlDownload.ts`, `src/main/commentAnalysis/index.ts`, `src/main/commentAnalysis/chatReplay.ts`, `src/preload/index.ts`, `src/renderer/src/App.tsx`, `src/renderer/src/store/editorStore.ts`, `src/renderer/src/components/SettingsDialog.tsx`, `src/renderer/src/components/ClipSelectView.tsx`(再 render 爆発抑制で軽く触れる可能性)
+- modified: `DECISIONS.md`, `TODO.md`, `NEXT_SESSION_HANDOFF.md`, `HANDOFF.md`(本タスクで更新)
+
+---
 
 ## みのる(USER)への報告用
 
-- **NULL group 2 件解消** ✅(ぶゅりる→streamer、剣持刀也→nijisanji)
-- 全 **75 人 group 整合済み**(にじ 20 / ホロ 15 / ぶいすぽ 15 / ネオポルテ 5 / ストリーマー 20)
-- **毎起動 reseed** で SEED_CREATORS を source-of-truth として DB を自動整合(冪等、no-op fastpath)
-- **diagnose Q15-Q17 で auto-add 回帰の自動検出** が可能に(Q17=0 期待、>0 で警告)
-- **運用 Runbook** を `docs/DATA_COLLECTION_OPS.md` に整備(チェックリスト / 監視 / トラブル対処)
-- **次の一手**:アプリ → デバッグ → DB 診断 押下で全項目確認 → 「1 回だけ取得」で動作テスト → 問題なければ「**有効化する**」で本格運用開始
+- **動画 DL の体感速度を大きく改善**:URL 貼って数秒で ClipSelectView を開ける(音声優先 + 埋め込みプレイヤー)
+- **YouTube bot 検出 + 認証必要動画への対応**:設定で「ブラウザクッキー使用」 or 「クッキーファイル指定」を選べるようになった(優先度: ファイル > ブラウザ)
+- **format selector の堅牢化**:`--js-runtimes node` 統合で「Requested format is not available」エラーが出にくくなった
+- **未解決バグ 3 件 + 副次 1 件は明日対応**(優先度付け済み、再現手順 + 仮説整理済み)
+- **debug ログは明日まで残置**(削除しないでくれ、と Claude にも申し送り済み)

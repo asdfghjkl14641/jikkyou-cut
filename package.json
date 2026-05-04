@@ -18,6 +18,14 @@
         "filter": [
           "**/*"
         ]
+      },
+      {
+        "from": "resources/tray-icon.png",
+        "to": "tray-icon.png"
+      },
+      {
+        "from": "resources/tray-icon-live.png",
+        "to": "tray-icon-live.png"
       }
     ]
   },

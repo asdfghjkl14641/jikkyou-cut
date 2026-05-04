@@ -140,6 +140,155 @@ npm run test       # Vitest(後追い導入)
 
 **`npm run start` は使わない**(古いビルドを実行するだけ — 文書冒頭の警告参照)。
 
+## 完了済み大規模再設計
+
+### 動画 DL 高速化 5 段階(2026-05-03 完了)
+
+長尺配信(10 時間級)の DL が 1-2 時間かかる問題に対して、段階的に
+ボトルネックを潰す再設計。完成形のフロー:
+
+```
+URL 入力 → 音声 DL(数十秒) → ClipSelectView オープン + embed 再生 +
+AI 抽出可能 → 裏で動画 DL → DL 完了で再生位置維持で seamless 切替 →
+編集 → 書き出し
+```
+
+| 段階 | 内容 | 完了日 |
+|---|---|---|
+| 1 | yt-dlp `--concurrent-fragments 8` + バイナリ最新化 + ベンチログ | 2026-05-03 |
+| 2 | 音声優先 DL + AI 抽出の早期実行(audio-first / video-background) | 2026-05-03 |
+| 3 | YouTube/Twitch 埋め込みプレイヤー(DL 完了前から再生) | 2026-05-03 |
+| 4 | 編集中のプレイヤー切替(埋め込み ↔ ローカル動画) | 2026-05-03 |
+| 5 | Twitch 動作確認 + 微調整 | 2026-05-03 |
+| 6a | URL 入力時の並列化(コメント分析 + グローバルパターン preload) | 2026-05-03(Bug 1 進行中) |
+| 6b | yt-dlp `--cookies-from-browser` 統合(YouTube bot 検出回避) | 2026-05-03 |
+| 6c | cookies.txt ファイル直接指定(優先度 ファイル > ブラウザ) | 2026-05-03 |
+| 6d | format selector 緩和 + `--js-runtimes node` 全経路適用 | 2026-05-03 |
+
+詳細は DECISIONS.md(2026-05-03 各エントリ)参照。残課題は TODO.md。
+
+## 進行中の新機能シリーズ:配信者自動録画
+
+Twitch 配信者を登録 → 配信開始を検知 → yt-dlp で自動録画する機能。
+最終ゴールは IDEAS.md の「配信アーカイブ → 自動動画化」の第一歩。
+
+| 段階 | 内容 | 状態 |
+|---|---|---|
+| X1 | Twitch + YouTube 配信者登録 UI(`twitchHelix.ts` / `creatorSearch.ts` / `MonitoredCreatorsView.tsx` / discriminated `MonitoredCreator` 型) | ✅ 2026-05-03(完成版) |
+| X2 | 配信検知ポーリング(`streamMonitor/`、1 分毎、Twitch streams.list batch + YouTube RSS + `videos.list?liveStreamingDetails`、配信開始/終了イベント発火、登録チャンネル画面 + フローティング指示子で UI 反映) | ✅ 2026-05-03 |
+| X3.5 | タスクトレイ常駐(`tray.ts`、✕ で hide、シングルインスタンス、Windows 自動起動 + `--minimized`、tray live indicator + `streamMonitor.subscribeStatus`) | ✅ 2026-05-04 |
+| X3+X4 | 録画(`streamRecorder/`、yt-dlp `--live-from-start` + Streamlink オプション)+ VOD 取り直し(Twitch helix archive / YouTube actualEndTime)+ 録画済み動画 UI + 編集連携 + 規約警告 | ✅ 2026-05-04 — **シリーズ完成** |
+| X5 | YouTube ライブ検知精度向上 | 将来 |
+
+X1 で固まった規約:
+- Twitch Client ID は AppConfig に平文(公開情報)、Secret は `secureStorage.saveTwitchSecret` で DPAPI 暗号化保存
+- Helix 認証は **Client Credentials flow のみ**(read-only 用途で十分、User Token は使わない)
+- メモリトークンキャッシュ + fingerprint で credentials 切替検知 + 401 で自動 retry-once
+- `MonitoredCreator` は **discriminated union**(`'twitch'` / `'youtube'`)、platform-stable id(`twitchUserId` / `youtubeChannelId`)で dedup。同一人物が両プラに居る場合は別エントリ
+- 検索は **Gemini で 名前 → handle/login 推定 → 各プラ API で プロフィール解決** の 2 段階。Gemini は `gemini-2.5-flash` の `generateTextWithRotation`(Files API なし、`responseMimeType='application/json'`)
+- 「登録チャンネル」は **メイン画面のメニュー導線(Ctrl+Shift+M)** + **全画面 swap-in phase** で実装。設定ダイアログのタブには **Twitch 認証(Client ID/Secret)のみ** 残置
+- 「追加」前は **必ず確認ダイアログ**(`誤登録防止`)、low confidence 時は警告強調
+
+X2 で固まった規約:
+- ポーリング間隔は `POLL_INTERVAL_MS = 60_000`(1 分)、`streamMonitor/index.ts` の定数。将来 user-configurable は spec 範囲外
+- YouTube は **RSS feed が主役**(0 quota)、`videos.list?part=liveStreamingDetails`(1 quota)で確定。`search.list?eventType=live`(100 quota)は使わない
+- Twitch は `helix/streams?user_id=...&user_id=...` を最大 100 ids/req batch で。配信中ユーザのみ data[] に入る = response 自体が live set
+- ポーリングのマスタースイッチは `AppConfig.streamMonitorEnabled`(default `false`、永続化、データ収集と同形)。per-creator フィルタは `MonitoredCreator.enabled`、両方 `true` でないと poll 対象外
+- 状態は in-memory(再起動で消える、再 poll で再構築)。永続化はしない
+- `LiveStreamInfo.url` は Twitch `https://www.twitch.tv/<login>` / YouTube `https://www.youtube.com/watch?v=<videoId>` を保持(段階 X3 の録画 URL に直接使える)
+
+X3.5 で固まった規約:
+- **Windows 専用**(`process.platform === 'win32'` ガード)。macOS / Linux は close/tray/loginItem の 3 箇所すべて no-op で従来挙動維持
+- アプリの quit 経路は **`actuallyQuit()` 単一**(`isQuitting = true` を立てる)。ファイル → 終了メニュー、トレイ右クリック「終了」、`before-quit` の保険、すべてここを通る
+- ✕ ボタンの hide 判定は同期的に `cachedCloseToTray` を見る(boot + `settings:save` で更新)。`loadConfig()` の await を挟むと preventDefault に間に合わない
+- **シングルインスタンス**: `requestSingleInstanceLock()` を **モジュールトップレベル** で呼ぶ。`whenReady` 内だとタイミング依存
+- 自動起動は Electron `setLoginItemSettings({ openAtLogin, args })`、`startMinimized` 時は `args: ['--minimized']`、process.argv で受け取って boot 直後に hide
+- トレイアイコンは `resources/tray-icon.png`(通常)+ `resources/tray-icon-live.png`(配信中)、PowerShell `System.Drawing` で生成したプレースホルダ。`extraResources` で packaged build にも同梱
+- `streamMonitor.subscribeStatus(cb)` で in-process listener を Set 管理、IPC self-loop を回避(tray が同じステータスを欲しがるため)
+
+X3+X4 で固まった規約:
+- **yt-dlp 主役 / Streamlink フォールバック**(spec の想定の逆転)。理由: yt-dlp は同梱バイナリで確実に動く、Streamlink はユーザ手動配置必須
+- 録画は `streamMonitor.subscribeStreamStarted(cb)` / `subscribeStreamEnded(cb)` で in-process トリガ。IPC 経由ではない
+- メタデータは disk が真実源(`<recordingDir>/<platform>/<creator>/<recordingId>.json`)、in-memory `active` マップは subprocess 管理用
+- 録画 lifecycle:`recording → live-ended → vod-fetching → completed` (or `failed`)。各遷移で `writeMetadata` + IPC `streamRecorder:progress`
+- crash recovery は boot 時に `recoverInterruptedRecordings` が stale 'recording' / 'live-ended' / 'vod-fetching' を 'failed' に書き換え
+- VOD 再取得は `urlDownload.downloadVideoOnly` を流用しない(output template 制御不可) — `streamRecorder/vodFetch.ts` で yt-dlp 直接 spawn、cookies / format selector は `getCookiesArgs` 経由で流用
+- Twitch VOD: `helix/videos?type=archive&first=1` を 5 分バックオフ × 3 試行
+- YouTube VOD: `liveStreamingDetails.actualEndTime` ポーリング 5 分バックオフ × 4 試行(最長 20 分)
+- 同時録画上限 5、ディスク 10 GB 未満で abort、50 GB 未満で warning
+- 「録画済み動画」UI は `MonitoredCreatorsView` 内、「編集を開始」は `closeMonitoredCreators` → `setFile(absPath)` の 2 段階(ファイル drop と完全同経路)
+- 規約 disclaimer は初回 `recordingEnabled` ON 時に表示、`recordingDisclaimerAccepted = true` で永続化
+- **streamMonitor subscriber は streamMonitor.start() より前に登録すること**(初回 poll で起動前から live だった配信者の started イベントを取り逃がす race を防ぐ、2026-05-04 緊急修正)
+- **OS スリープ防止**: `src/main/powerSave.ts` が `powerSaveBlocker.start('prevent-app-suspension')` を ref-counted ラップ。streamRecorder が session start/end で `acquire(recording:<id>)` / `release(recording:<id>)`、`will-quit` で `releaseAll`。`AppConfig.preventSleepDuringRecording`(default true)で gate
+- **`[twitch-poll]` debug logs**: `querying user_ids` / `response entry` / `missing` が出る。配信検知されない時はこれで原因切り分け可能(`missing` に user_id があれば stale id か unlisted、`response entry` に出るのに recorder が反応しないなら別の問題)
+- **「↻ 再取得」**: 各 Twitch 行の `monitoredCreators:refetchTwitch` で stored login から user_id を取り直す。Twitch アカウント改名 / X1 Gemini 検索の handle 推測ハズレ時の自己修復用
+- **`before-quit` shutdown フック**: `streamRecorder.shutdownSync()` が active 録画の subprocess を kill + メタを `writeMetadataSync` で同期書き込み。アプリ終了時の yt-dlp ゾンビ漏れを防ぐ。クラッシュ / 強制 kill では発火しない(boot recovery が `previous app session ended unexpectedly` でフォールバック)
+- **`--live-from-start` は YouTube 専用**: yt-dlp の公式仕様。Twitch URL に渡すと「配信開始時点を永遠に探す」無限ループで 0 B になる(2026-05-04 緊急修正、過去 2 回の Twitch 録画失敗の真因)。`recordSession.spawnYtDlp` 内で `info.platform === 'youtube' ? ['--live-from-start'] : []` の条件付き
+- **録画にも cookies 統合**: `recordSession` の constructor に `cookiesArgs: string[]` 必須引数。orchestrator が `getCookiesArgs({ platform: info.platform, ... })` で事前構築して渡す。`creatorSearch` / `urlDownload` と同じ priority(プラットフォーム別 > 汎用 > ブラウザ > なし)
+- **process tree kill 必須**: yt-dlp の HLS 録画は ffmpeg を子プロセスとして spawn する。`proc.kill()` だけでは ffmpeg が orphan 化して live.mp4 を書き続ける(5/4 に 12 個ゾンビ観察)。`stop()` / `killSync()` 両方で Windows は `taskkill /F /T /PID <pid>` を使う。macOS / Linux は `process.kill()` で OK
+- **yt-dlp 早期終了 = 自動再起動**: `proc.on('exit')` で `stopRequested=false` なら `deps.probeIsStillLive()` を呼んで判定。still live + restartCount < 5 → 5 秒クールダウン → `liveFilePath` を `<recordingId>.live.NNN.<ext>` でローテーション → respawn。`liveSegments[]` メタデータに記録(単一セグメント時は省略)
+- **probeIsStillLive は orchestrator 注入**: `streamRecorder/index.ts` の `onStreamStarted` でクロージャ作成。Twitch=`getLiveStreams([userId])`、YouTube=`fetchVideoLiveDetails([videoId])`. **probe 失敗時は `true` を返す**(transient API blip で誤って finalise しないため、MAX_RESTARTS=5 が backstop)
+- **streamMonitor の ended は 3 連続 missing で発火**: `ENDED_MISS_THRESHOLD=3`、`missingCounts` Map で grace カウント。Twitch API の 1-2 ポール blip では録画停止しない。grace 中は `liveStreams` Map に prior info を carry forward(UI / recorder が早期反応しないように)
+
+### yt-dlp 関連の確定ルール(段階 6 系で固まった)
+
+- **`--js-runtimes node` を必ず付ける**: YouTube の nsig / SABR challenge 解決に Node.js が必要。yt-dlp が PATH 経由で自動検出。Electron 同梱の Node が常に有る前提。urlDownload.ts の 3 関数 + chatReplay.ts の 1 関数、計 4 箇所
+- **クッキーは `getCookiesArgs({ cookiesBrowser, cookiesFile })` 一本化**: 直接 args を組み立てない。priority `cookiesFile > cookiesBrowser > []`
+- **クッキーファイル中身は読まない・ログに出さない・コピーしない**: `validateCookiesFile` は `fs.stat` のみ。パスはログ可
+- **format selector は `bestvideo<h>+bestaudio / best<h> / best` の 3 段**: avc1 / m4a 制約は撤廃済み、**この方針を維持**(復活させない)。codec / container 制約を入れると JS runtime 不在時の format 解決失敗で「Requested format is not available」を再発させる
+
+### 新着動画フィード(2026-05-04 から)
+
+`load` phase の DropZone 下に `RecentVideosSection`。**真実源は 2 つ**:
+- 自動録画 = `streamRecorder.list()`(メタデータ駆動)
+- URL DL = `AppConfig.defaultDownloadDir` のディレクトリスキャン(履歴永続化なし、mtime 判定)
+
+`recentVideos.listRecentVideos(maxAgeHours)` が両方を時系列降順でマージ。`createdAt` は録画 → `meta.startedAt`、DL → `stat.mtime`。VOD があれば録画は VOD ファイル、なければ live capture。**0 件はセクション自体非表示**(空ヘッダだけ残ると不格好)。
+
+クリック動作は `useEditorStore.setFile(filePath)` 経由 = 既存編集フローに合流。録画継続中(`recordingStatus === 'recording'`)は警告ダイアログ。
+
+新着動画セクションは「全部一覧」、登録チャンネル画面の「録画済み動画」は「録画専門」と役割分担。
+
+### 配信者検索 = Gemini 主導 + API フォールバック(2026-05-04 から)
+
+**真実源**: `creatorSearch.searchCreators(query)` 一発で取得。renderer は `window.api.creatorSearch.searchAll(query)` を呼ぶ。
+
+**フロー**:
+1. `askGemini` → 0 quota の primary
+2. Gemini 結果を `fetchTwitchProfile` / `fetchYouTubeProfile` で解決(handle 1 quota)
+3. **片方でも空ならその platform だけ API 検索フォールバック**:
+   - Twitch: `/helix/search/channels` + 各候補 follower 取得(計 ~6 unit)
+   - YouTube: `search.list` (100 quota) + 各候補 `channels.list`(1 × 5 = 5 quota)
+4. follower / subscriber 降順で上位 5 件返却
+
+**キャッシュ**: 5 分 TTL の in-memory `Map`(Twitch / YouTube 別個)。連続検索 / 誤クリックの quota 浪費防止。
+
+**データソース UI**:`SearchCard.source` で discriminate、`SourceBadge` コンポーネントが描画
+- ✓ Gemini 推測(緑)— 多くは正しいが impostor を返すケースあり、follower で確認
+- ⚠ API 検索結果(黄)— Gemini が空。確認ダイアログでも警告強調
+- 👤 手動入力(青)— 手動 handle / channelId
+
+**残置**: 旧 `creatorSearch.askGemini` / `fetchTwitchProfile` / `fetchYouTubeProfile` IPC は手動入力フォールバックで使うので削除しない。
+
+**フォロワー / 登録者数 足切りフィルタ**:
+- `AppConfig.searchMinFollowers`(default 200_000)、UI で変更可能
+- **API fallback のみフィルタ対象**:Gemini 結果と手動入力は閾値無視(spec の意図的緩和)
+- **null counts は pass-through**:Twitch app-token で follower 取れない時は罰しない
+- 0-hit + `filteredOut > 0` の時、UI に「閾値を下げて再検索」ボタン(`minFollowersOverride` 引数で in-flight override、AppConfig は変更しない)
+- `MonitoredCreatorsView` のサーチセクションに `ThresholdWidget`(プリセット + 自由入力)+ `RelaxationHint`(緩和ボタン群)を配置
+
+### API キー保存(2026-05-04 事故対応で固まった規約)
+
+過去事案: 2026-05-04 朝に `geminiApiKeys.bin` が **DPAPI master key 不一致で永久復号不能**(50 個消失)。同時に YouTube は過去の保存バグで「50 個コピペした記憶」が実際は 1 個しか保存されてなかったことも判明。これを受けてハイブリッド保存方式に変更。
+
+- **二重化**: 暗号化 `<userData>/<slot>.bin`(canonical)+ 平文 `~/Documents/jikkyou-cut-backup/api-keys.json`(backup)。両方への書き込みを `secureStorage.saveAt` 系が lockstep で実行
+- **保存時の read-back verify**: encrypt → write → read → decrypt → 値一致確認。失敗時は warn ログを残す(削除はしない、平文バックアップが安全網)
+- **読み込みフォールバック**: .bin decrypt 失敗時 → 平文バックアップから読み戻す → 新 master key で再暗号化して .bin に書き戻し。ユーザは何もしなくてもキーを失わない
+- **エクスポート/インポート**: API 管理画面トップに backup banner と import/export セクション。インポートは差分プレビュー → マージ/置き換え選択。50 個コピペを回避できる
+- **平文バックアップの場所選定**: `~/Documents/` を選んだ理由 = userData の外(DPAPI 失敗が両方を巻き添えにしない)/ エクスプローラから見える / アンインストールで消えない / admin 不要 / OneDrive 連携可
+- **平文バックアップの SECURITY**: 暗号化されない。banner で警告常時表示。1Password / Bitwarden への追加コピーを推奨
+- **救出スクリプト**(緊急時用): `scripts/recover-keys.cjs`。Local State の `os_crypt.encrypted_key` を DPAPI で復号 → master key で .bin を AES-256-GCM 復号。ハイブリッド保存が機能していれば不要、過去事案用
+
 ## 重要な実装メモ
 
 ### Whisper 呼び出し

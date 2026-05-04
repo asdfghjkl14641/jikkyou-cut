@@ -4,6 +4,52 @@
 
 ---
 
+## 🎯 次セッション最優先(2026-05-04 朝)
+
+詳細は `NEXT_SESSION_HANDOFF.md` の「明日のタスク優先順位」を参照。
+
+| 優先 | 内容 |
+|---|---|
+| 1 | **回線回復確認** — YouTube DL 速度測定。50 MB/s 以上で 2 へ、1 MB/s 以下なら待機 |
+| 2 | **Bug 1: YouTube audio-first 経路で commentAnalysisStatus が loading 永続化** — URL=T6pxHw4gUzs で再現済、ログ取得済、真因未特定。debug ログを参照しながら真因特定 → 修正 |
+| 3 | ~~**Bug 2: Twitch チャット取得 yt-dlp `--sub-langs rechat` が HTTP 404**~~ ✅ **2026-05-03 段階 7 で解決**(GraphQL 直接実装に変更) |
+| 4 | **debug ログ一括撤去** — Bug 1 解決後。`[comment-debug:app/store/clip]` + main 側 `[comment-debug] / [comment-debug:main]` を全削除(Twitch GraphQL 側の `[comment-debug] twitch graphql ...` も同タイミングで撤去) |
+
+### ⚠️ debug ログを削除しないこと(明日まで残置)
+
+renderer 側 + main 側に `[comment-debug:*]` が残置中。Bug 1 の再現 + 真因特定に必要なため、優先 4(明日のタスク後半)まで削除しない。該当ファイル一覧は `NEXT_SESSION_HANDOFF.md` 参照。
+
+---
+
+## 🆕 進行中の新機能シリーズ:配信者自動録画
+
+Twitch 配信者を登録 → 配信開始を検知 → yt-dlp で自動録画する機能。詳細は DECISIONS.md(2026-05-03 段階 X1 エントリ)+ IDEAS.md「配信アーカイブ → 自動動画化」参照。
+
+| 段階 | 内容 | 状態 |
+|---|---|---|
+| X1 | Twitch + YouTube 配信者登録 UI(Gemini 検索 / メイン画面 / 確認ダイアログ) | ✅ 2026-05-03 |
+| X2 | 配信検知ポーリング(Twitch streams.list batch + YouTube RSS + videos.list?liveStreamingDetails、1 分毎、配信開始/終了イベント) | ✅ 2026-05-03 |
+| X3.5 | タスクトレイ常駐(✕ で hide、シングルインスタンス、Windows 自動起動 + `--minimized`、tray live indicator) | ✅ 2026-05-04 |
+| X3+X4 | 配信録画(yt-dlp `--live-from-start`、Streamlink オプション)+ VOD 取り直し(Twitch helix archive / YouTube actualEndTime ポーリング)+ メタデータ駆動 + 録画済み動画 UI + 編集画面連携 + 規約警告 | ✅ 2026-05-04 — **自動録画機能シリーズ完成** |
+| 補完 | streamMonitor → streamRecorder の subscriber race 修正 + 詳細 debug logs(`[stream-recorder:debug]`) | ✅ 2026-05-04 |
+| 補完 | `[twitch-poll]` debug logs(querying / response / missing)+ Twitch user_id 再取得ボタン | ✅ 2026-05-04 |
+| 補完 | OS スリープ防止(`powerSaveBlocker prevent-app-suspension`、reference-counted、UI トグル) | ✅ 2026-05-04 |
+| 補完 | 録画 subprocess の `before-quit` shutdown フック(ゾンビ yt-dlp プロセス漏れ対策、`writeMetadataSync` で確実なメタ commit) | ✅ 2026-05-04 |
+| 補完 | 配信者カードにフォロワー / 登録者数 + 開設日表示(impostor 判別)+ 手動入力フォールバック UI(Twitch login / YouTube `@handle` or `UCxxx` 直接) | ✅ 2026-05-04 |
+| 補完 | 開設日表示削除 + フォロワー数による品質警告(`< 1K` 🚨 critical / `< 10K` ⚠ low、確認ダイアログで強警告) | ✅ 2026-05-04 |
+| 🚨 緊急修正 | Twitch 録画 0 B バグ(`--live-from-start` を YouTube 専用に分岐)+ cookies 統合(`getCookiesArgs` を recordSession にも threaded) | ✅ 2026-05-04 |
+| 🔒 事故再発防止 | API キー ハイブリッド保存(暗号化 .bin + Documents 平文 JSON バックアップ + read-back verify + 自動復元)+ JSON エクスポート/インポート + UI(API 管理画面トップに backup banner / import-export ボタン / import preview ダイアログ) | ✅ 2026-05-04 |
+| 🔍 検索品質向上 | 配信者検索のハイブリッド化(Gemini 主導 → 失敗時 Twitch `/helix/search/channels` + YouTube `search.list` フォールバック)+ 5 分キャッシュ + データソース badge(✓ Gemini / ⚠ API / 👤 手動)+ follower 降順ソート | ✅ 2026-05-04 |
+| 🔍 検索品質向上 | API fallback 結果のフォロワー / 登録者数足切りフィルタ(default 20 万、`AppConfig.searchMinFollowers`)+ 閾値プリセット UI + 0-hit 時の閾値緩和ボタン(Gemini / 手動入力は閾値無視) | ✅ 2026-05-04 |
+| 🛡️ 録画継続堅牢化 | yt-dlp 早期終了の自動再起動(probeIsStillLive 経由 + ファイル名ローテーション + max 5 回)+ process tree kill(`taskkill /F /T` で orphan ffmpeg 防止)+ streamMonitor の 3 連続 missing 判定で API blip 誤停止防止 + UI に「N ファイル分割」表示 | ✅ 2026-05-04 |
+| 🎬 メイン画面 UX | 「新着動画」セクション(load phase の DropZone 下、24 時間以内の auto-record + URL DL 統合フィード、クリックで編集画面へ遷移、録画継続中は警告 + 録画中バッジ) | ✅ 2026-05-04 |
+| X5 | YouTube ライブ検知精度向上(scheduledStartTime 活用、ライブ予定リマインド) | 将来 |
+| Streamlink 同梱 | `resources/streamlink/streamlink.exe` を手動配置(現状 yt-dlp フォールバックで動作) | ユーザ手動 |
+| 録画 自動削除 | N 日経過後の自動クリーンアップ | 将来 |
+| WebSub / EventSub | ポーリングから push 型に移行(秒オーダーの検知遅延短縮) | 将来 |
+
+---
+
 ## 🚧 進行中
 
 - **プログレッシブ DL + 並行文字起こし** — 詳細は `docs/PROGRESSIVE_DL_SPIKE_REPORT.md` 参照
@@ -45,12 +91,57 @@
 
 ## 🔵 次にやる(MVP 直近候補)
 
-(現在進行中へ移動)
+- **✅ 動画 DL 高速化 5 段階再設計(全段階完了)+ 段階 6a 並列化追加**
+  - 段階 1 ✅ 完了: yt-dlp `--concurrent-fragments 8` + ベンチログ(2026-05-03)
+  - 段階 2 ✅ 完了: 音声優先 DL + AI 抽出早期実行(2026-05-03)
+  - 段階 3 ✅ 完了: YouTube/Twitch 埋め込みプレイヤー導入(2026-05-03)
+  - 段階 4 ✅ 完了: 編集中のプレイヤー切替ロジック(2026-05-03)
+  - 段階 5 ✅ 完了: Twitch 動作確認 + 微調整(2026-05-03)
+  - 段階 6a ✅ 完了: URL 入力時の並列化(コメント分析 + グローバルパターン)(2026-05-03)
+  - 段階 6b ✅ 完了: yt-dlp `--cookies-from-browser` 統合(YouTube bot 検出回避 + 認証必要動画対応)(2026-05-03)
+  - 段階 6c ✅ 完了: cookies.txt ファイル直接指定(ブラウザクッキー全滅環境向け、優先度: ファイル > ブラウザ)(2026-05-03)
+  - 段階 6d ✅ 完了: format selector 緩和 + `--js-runtimes node` 全経路適用(2026-05-03)
+  - 段階 7 ✅ 完了: Twitch チャット GraphQL 直接実装 + cookies プラットフォーム別分離(2026-05-03)
+  - 段階 8 ✅ 完了: Twitch クッキー認証 + 波形低密度プレースホルダ + 自動スクロール race 修正(2026-05-03)
+  - **残課題**(発覚時に別タスク化):
+    - prod build (`file://`) での Twitch 埋め込み拒否対策(custom protocol / localhost bridge)
+    - Twitch ライブ配信中の取得対応(段階 7 は VOD のみ対応)
+    - Twitch サブスク限定 VOD の認証対応 — 段階 7 で `ytdlpCookiesFileTwitch` フィールドは追加済、あとは `fetchTwitchVodChat` に `Cookie:` ヘッダ送る経路を作る + Settings UI で「Twitch サブスク認証用」ヒントを足す
+    - **Twitch GraphQL persisted query hash の rotation 対応** — `PersistedQueryNotFound` エラーが出たら `twitchGraphQL.ts` の `VIDEO_COMMENTS_QUERY_HASH` を yt-dlp 最新値とすり合わせる(現状は手動)
+    - **Twitch GraphQL Client-Integrity トークン実装** — クッキー認証で integrity check が突破できなくなった場合の備え。yt-dlp の Twitch 抽出器で Client-Integrity 取得フローを参照、`gql.twitch.tv/integrity` から短命トークンを取得 → Client-Integrity ヘッダで送る。**現状はクッキーで通るので未実装、退化したら着手**
+    - cookies.txt の有効期限切れ検出 + 「The provided YouTube account cookies are no longer valid」警告のハンドリング
+    - クッキーローテーション対応(複数 cookies.txt 切替)— YouTube 側仕様の影響を受ける、根本解決困難なため当面静観
+    - WebM 出力増による export.ts 互換性チェック(VP9-in-MP4 → 編集 → 再 export)
+    - 動画 DL 完了通知の永続表示(現状 toast 3 秒のみ)
+    - DL 完了前から動画再生可能に(`<iframe>` で YouTube / Twitch 埋め込み)
+    - 「DL 中でも切り抜き範囲を選び始められる」体験
+    - 設計判断: 埋め込みプレイヤーから `currentTime` を取得する postMessage / Player API、コメント分析グラフとの時刻同期、Twitch の VOD ID 抽出
+  - **段階 4: 編集中のプレイヤー切替ロジック**(埋め込み ↔ ローカル動画)
+    - DL 完了 → 自動で埋め込みからローカル MP4 に切替
+    - 切替時の現在再生位置維持
+    - 編集モードはローカル動画必須(範囲指定の精度)
+  - **段階 5: Twitch 動作確認 + 微調整**
+    - YouTube 中心の改修だった既存パスを Twitch でも検証
+    - HLS の挙動差(fragment の細かさ・rate limit)、chat replay の取得方法差
+    - 必要なら quality 選択 UI / format selector を Twitch 専用化
+
+- **Phase 2b: パターン分析の自動再実行トリガー**
+  - 蓄積数が前回分析時から +500 件超えたら自動で `runPatternAnalysis` を呼ぶ
+  - 起動時 + batch done 時に判定
+  - 現状は手動ボタンのみ(API 管理画面の「パターン分析を実行」)
+
+- **Phase 2 残りパターン**
+  - `viewVelocity`(再生数 / 経過日数)
+  - `thumbnailPatterns`(顔検出 / 色分布 / OCR テキスト数)— 画像処理依存で重い、別タスク化
+  - `chapterPatterns`(useChapters 比率 / 頻出 chapter title)
+  - `topVideos`(上位 N 動画のスナップショット、AI プロンプトでサンプル提示用)
 
 ---
 
 ## 🟡 検討中(優先度未確定)
 
+- **AI 抽出キャッシュのクリア手段** — 設定画面に「キャッシュをクリア」ボタン追加。現状 `userData/comment-analysis/<videoKey>-extractions.json` および `-summaries.json` は永続(TTL なし)で、強制再抽出する手段が UI に存在しない。M3 以降の設定 UI 整備時に統合実装
+- **AI 抽出のフィードバック保存** — ユーザが「採用 / 却下」した結果を蓄積し、将来のプロンプト精緻化や個人パターン学習(IDEAS 12)に流用。型は `aiConfidence` のスロットだけ既に確保済み。M3 以降
 - **字幕パディング**(前 100ms / 後 300ms) — キュー境界が読み終わる前に消える対策
 - **無音区間自動マーク** — VAD で無音区間を検出して自動的に削除候補化
 - **キューの手動分割** — 1 キュー内で話者が変わる場合の分割対応(現状は 1 キュー = 1 話者前提)
@@ -77,6 +168,14 @@
 
 ### Low
 
+- **Gemini キーの正確な quota 取得手段(Cloud Billing API 等)** — 現状の `gemini_request_log` は自前カウントの概算で、AI Studio dashboard の実値とズレ得る(別アプリ / 同じキーの別経路の呼び出しは検知不能)。Cloud Billing API / Cloud Monitoring API で正確値を引ける可能性があり、運用 1 ヶ月後にズレ幅を観察してから着手判断
+- **Gemini キーごとの命名機能** — 現状はインデックス順「キー 1 / キー 2」表示のみ。「メイン用」「サブ用」「テスト用」のような名前を付けられると 50 キー運用時に管理しやすい。YouTube も未対応、両側で同時に検討
+- **動画読み込み時の自動 Gemini 先読み** — 現状はボタン押下時に extract → upload → analyze を全部走らせるので 1-3 分待たされる。動画読み込み完了タイミングで裏でこれらを走らせておけば、ユーザがボタンを押した瞬間に refine だけ走って即返る UX に。リスク: ユーザが分析を実行しないかもしれない動画でも quota を消費する → 動画長 N 分以上のみ先読み等のヒューリスティックが必要
+- **Gemini timeline summary の UI 可視化** — 現状は AI プロンプトに渡すだけでユーザに見せていない。動画上部の細い帯で "0:00-3:00 配信開始挨拶 / 3:00-20:00 ゲームプレイ" のような構造を表示すれば、ユーザが「どこから見るか」判断しやすくなる。`GeminiAnalysisDialog` を再活用するか、CommentAnalysisGraph に重ねる帯の形か検討
+- **Gemini モデル選定の運用後再評価** — 現状 `gemini-2.5-flash` を選択(2026-05-03 時点)。無料枠が 500 RPD と窮屈、運用 1 ヶ月後に消費ペースを観察して以下を判断: (1) 2.5-flash-lite への退避(reasoning 質トレードオフ)/ (2) 3-flash 系が出たら移行 / (3) thinkingBudget で latency と品質のバランス調整 / (4) 無料枠縮小傾向への対応(API キー追加運用)
+- **コンテンツ語抽出の拡張(tf-idf / 配信者別併用)** — 現在の global.json は単純頻度 + viewBoost フィルタなので、コンテンツ語(神回 / 発狂 / APEX 等)が hashtag / SEO 語に埋もれて出てこない。tf-idf 化して各配信者の特徴語を抽出するか、配信者別パターンと併用するかで意味的キーワードを浮上させる。Phase 2 残りタスクの一環として位置付け
+- **quota 80% 超え時の UI 通知ポップアップ** — 現状はログのみ(`batch summary` 後に `⚠ quota at X% — consider adding new API keys` を出す)。Settings UI のトースト or バッジで気付きやすくする。本格運用 1 週間目以降の課題
+- **SLEEP_TIERS 閾値の調整(運用 1 週間後にデータドリブンで再評価)** — 初期値は 3/10/20/30 min × 20%/10%/5%/0%。実際の新規率分布を `batch summary` ログから集計して、「20% 以上が滅多に出ない」or「3 分間隔が頻発しすぎ」等の偏りが見えたら閾値調整。運用 1 週間 ~ 1 カ月後を目安
 - **単語単位編集** — 1 キュー内の特定単語だけ削除(Gladia の word-level timestamps があれば実装可能)
 - **キャラ名自動補完** — TranscriptionContextForm でゲーム名から候補表示
 - **設定永続化拡張** — `previewMode` / FFmpeg パス / 出力品質などをユーザ設定に

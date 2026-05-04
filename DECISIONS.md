@@ -15,6 +15,1895 @@
 
 ---
 
+## 2026-05-04 - メイン画面に「新着動画」セクション追加(URL DL + 自動録画 統合 24h フィード)
+
+- 誰が: Claude Code(Opus 4.7)
+- 何を: load phase の DropZone 下に「新着動画」セクション。直近 24 時間以内の auto-record + URL DL 動画を時系列降順で表示、クリックで編集画面へ遷移
+- 動機: ダウンロード / 録画した動画にアクセスするのに「URL DL → エクスプローラ」「自動録画 → 登録チャンネル画面 → 録画済み動画」と分断されていた。「最近触った動画一覧」がメイン画面で見えないと作業フローが止まる
+- 設計:
+  - **URL DL は履歴永続化なし、ディレクトリスキャン**:`AppConfig.defaultDownloadDir` を `fs.readdir` + `fs.stat` で mtime で判定。yt-dlp の出力 ext(.mp4 / .mkv / .webm / .m4v / .mov)のみ
+  - **録画は streamRecorder.list() を再利用**:既存メタデータ駆動。`startedAt` を時刻軸として採用(録画継続中もフィードに出る = 監視ビュー兼用)
+  - **VOD 優先 / 録画 fallback**:VOD ファイル(クリーン MP4)があればそちら、なければ live capture のファイル名を採用
+  - **dedup**:両ソースの絶対パスでセット dedup(録画フォルダと DL フォルダが偶発的に重なるケース対策)
+  - **24 時間カットオフ**:`MAX_AGE_HOURS = 24`(component 定数、将来 AppConfig 化の余地)
+  - **自動更新**:`REFRESH_INTERVAL_MS = 60_000`(録画ファイルサイズ反映 + 24h 期限切れの自動消去)
+  - **クリック動作**:`useEditorStore.setFile(filePath)` 経由 = 既存編集フローに合流。ただし `recordingStatus === 'recording'` の場合は「録画継続中ファイルは再生不可の場合があります」警告ダイアログ
+  - **0 件は非表示**(空状態のセクションヘッダだけ残ると不格好)
+- UI 詳細:
+  - サムネは現状アイコンプレースホルダ(`Film` icon)。ffmpeg サムネ生成は別タスク
+  - 録画継続中は赤丸パルスの「録画中」オーバーレイ
+  - SourceBadge(緑系の Recording / 紫系の DL)
+  - 16:9 アスペクト固定、grid-template-columns auto-fill 220px+
+- 影響:
+  - `src/main/recentVideos.ts`(新規 90 行):listRecentVideos 単体実装
+  - `src/main/index.ts`: `recentVideos:list` IPC 追加
+  - `src/preload/index.ts` + `src/common/types.ts`: `recentVideos.list(maxAgeHours)` API + `RecentVideo` 型 + `IpcApi.recentVideos`
+  - `src/renderer/src/components/RecentVideosSection.tsx`(新規 130 行)+ CSS module
+  - `src/renderer/src/App.tsx`: load phase に `<RecentVideosSection />` マウント
+  - `src/renderer/src/App.module.css`: `.bodyEmpty` を `flex-direction: column` + `justify-content: flex-start` + `padding-top` で縦積み許可。DropZone の center 配置は若干上にずれるが視覚的バランスは維持
+- やらないこと: サムネ生成 / 履歴永続化 / 削除機能 / 7日 / 30日切替 / ソート切替 / 検索 / ページング / メタデータ表示(コーデック等)
+- 残課題:
+  - 既存「録画済み動画」(`MonitoredCreatorsView`)は専門画面として維持。新着動画は「全部一覧」で役割分担
+  - サムネ生成(別タスク)
+- コミット: 未コミット
+
+---
+
+## 2026-05-04 - 録画継続の堅牢化(自動再起動 + 連続 missing 判定 + プロセスツリー kill)
+
+- 誰が: Claude Code(Opus 4.7)
+- 何を: yt-dlp が途中で死んでも配信が続いていれば自動再起動。streamMonitor の ended 判定を 3 連続 missing に変更。process tree kill で orphan ffmpeg を防ぐ
+- 動機:
+  - 実機テストで録画ファイルが配信時間より短い症状(柊ツルギ 3:06 / 加藤純一 554MB)
+  - 同時に **orphan ffmpeg 12 個**観察。原因:yt-dlp が HLS フラグメント取得を ffmpeg に委譲後に親自身は早期終了 → app は yt-dlp PID しか持ってない → kill 対象がすでに死んでて ffmpeg だけ orphan として残存
+  - streamMonitor が Twitch API の一時的不調(1 ポール missing)で ended 誤判定し録画停止 → 別 streamId として再録画 = ファイル分割
+- 設計:
+  - **process tree kill**(`taskkill /F /T /PID <yt-dlp-pid>`):`stop()` / `killSync()` で yt-dlp とその子 ffmpeg を一括 kill。これがないと orphan が増殖
+  - **probeIsStillLive(SessionDeps)**:orchestrator が platform 別 probe 関数を inject。Twitch は `helix/streams?user_id=<>`(1 unit)、YouTube は `videos.list?id=<>&part=liveStreamingDetails`(1 quota)で `actualEndTime` をチェック
+  - **auto-restart**:yt-dlp の `proc.on('exit')` で stop 要求でなければ probeIsStillLive → 還元時:
+    - still live + restartCount < 5 → 5 秒クールダウン → ファイル名ローテーション(`recordingId.live.001.mp4` ...) → respawn
+    - offline → 通常完了処理
+    - restartCount ≥ 5 → 失敗マーク(`yt-dlp restarted 5 times — giving up`)
+  - **probe 失敗時は true(defensive)**:transient API blip で誤って finalise しないため。MAX_RESTARTS が backstop
+  - **`liveSegments[]` メタデータ**(additive):単一セグメント録画は省略(JSON tidy + 旧データ後方互換)。複数セグメントの場合のみ配列で記録、`files.live` は最新 active のみ(既存コード後方互換)
+  - **`ENDED_MISS_THRESHOLD = 3`**:streamMonitor が 3 連続 missing で初めて ended 発火。grace 中は `liveStreams` Map に prior info を carry forward(UI / recorder が "missing 1/3" 段階で停止しないため)
+  - **連続 missing 判定**:`missingCounts: Map<key, number>`、復帰で reset、ENDED_MISS_THRESHOLD で発火後 delete
+- ログ追加:
+  - `[stream-recorder] yt-dlp exit: ... elapsed=Xh, segment=N`
+  - `[stream-recorder] checking if stream is still live (restartCount=N/5)`
+  - `[stream-recorder] probe result: stillLive=true/false`
+  - `[stream-recorder] cooldown 5000ms before respawn`
+  - `[stream-recorder] respawning ${kind} (restart N/5) → <new path>`
+  - `[stream-monitor] <key>: missing N/3, holding`
+  - `[stream-monitor] <key>: missing 3/3 → ended`
+  - `[stream-monitor] <key>: live again (miss counter reset)`
+- 影響:
+  - `src/main/streamRecorder/recordSession.ts`: 大規模改修(279 → 460 行)。`info` / `quality` / `restartCount` 保持 + `respawn()` / `maybeRestartOrFinalise()` / `buildLiveFilePath()` / `killProcessTreeWindows()` 追加
+  - `src/main/streamRecorder/index.ts`: `probeIsStillLive` クロージャ inject(Twitch helix + YouTube videos.list)
+  - `src/main/streamRecorder/storage.ts`: `refreshFileSizes` が `liveSegmentSizes` も更新
+  - `src/main/streamMonitor/index.ts`: `ENDED_MISS_THRESHOLD=3` + `missingCounts` Map + diff ロジック書き換え(grace 中は `effective` Map に carry-forward)
+  - `src/common/types.ts`: `RecordingMetadata` に `liveSegments?` / `liveSegmentSizes?` / `restartCount?` 追加
+  - `src/renderer/src/components/MonitoredCreatorsView.tsx`: `RecordingRow` で複数セグメントの合計サイズ + 「N ファイル分割(再起動 M 回)」表示
+- やらないこと: ffmpeg concat による複数ファイル結合(別タスク)/ 録画再開時の音声ノイズ補正 / yt-dlp が最初から起動失敗するケース / 配信者の意図的中断検知 / ENDED_MISS_THRESHOLD の AppConfig 化(将来)
+- 残課題:
+  - **既存の orphan ffmpeg 12 個は手動で kill 必要**(`taskkill /F /IM ffmpeg.exe` または該当 PID 個別)。これからの起動で同じ問題は発生しないはず
+  - 「N ファイル分割」UI で全結合 / セグメント選択ダイアログは未実装(現状は最新セグメントを開く、別タスク)
+  - 既存の不完全録画ファイル(柊ツルギ 6.4 GB / 加藤純一 554 MB)はそのまま残置、手動再生 / 編集可能
+- コミット: 未コミット
+
+---
+
+## 2026-05-04 - 配信者検索結果のフォロワー / 登録者数足切りフィルタ
+
+- 誰が: Claude Code(Opus 4.7)
+- 何を: API fallback の検索結果に最小フォロワー / 登録者数フィルタを適用。デフォルト 20 万人(`AppConfig.searchMinFollowers`)、UI から変更可能、0-hit 時に閾値緩和ボタン
+- 動機: ハイブリッド検索が動作したものの、API fallback が小規模 / ゴミアカウントを大量に返す。例:「橘ひなの」検索 → YouTube 5 件(本物 1M + 切り抜き 174K + 11K + 6.7K + 974)。ユーザの登録対象は基本 大手 / 事務所所属(にじさんじ / ホロライブ / ぶいすぽ等)= 全員 20 万超なので、20 万足切りで候補が大幅に絞れる
+- 設計:
+  - **フィルタ対象は API fallback のみ**:Gemini 結果は Gemini が「本物」と特定済み = pass-through。手動入力も pass-through(ユーザの明示的意思)
+  - **null counts は pass-through**:Twitch app-token で `/channels/followers` が読めないケース → 「不明」を罰しない
+  - **閾値プリセット**:5 万 / 10 万 / 20 万 / 50 万 / 100 万 + 自由入力(0 = 閾値なし)
+  - **0-hit relaxation**:`filteredOut > 0` の時のみ「閾値を下げて再検索」ボタン群を表示。**現在の閾値より厳しい候補のみ**ボタン化(20 万 → 10 万・5 万・なし、5 万 → なし のみ)
+  - **override は in-flight のみ**:再検索ボタンは `searchAll({minFollowersOverride})` を渡す。AppConfig は変更しない
+- 影響:
+  - `src/common/config.ts`: `AppConfig.searchMinFollowers` 追加 + `DEFAULT_CONFIG = 200_000`
+  - `src/main/config.ts`: load / save の round-trip
+  - `src/main/creatorSearch.ts`: `searchCreators` に `minFollowers` 引数追加 + filter step 5 + `SearchCandidatesResult.{filteredOut, thresholdApplied}` 追加
+  - `src/main/index.ts`: IPC `creatorSearch:searchAll` のシグネチャ拡張(後方互換のため bare string も受ける)
+  - `src/preload/index.ts` + `src/common/types.ts`: `searchAll(args)` シグネチャ + `HybridSearchResult.{filteredOut, thresholdApplied}` 追加
+  - `src/renderer/src/components/MonitoredCreatorsView.tsx`: `ThresholdWidget` + `RelaxationHint` 追加、`SearchState.done` に `filteredOut` / `thresholdApplied` 追加、`runSearch(query, override?)` ヘルパで relaxation 再検索 + 既存 `handleSearch` ラッパ
+  - `formatThreshold(n)` ヘルパ追加(20 万 / 100 万 / 閾値なし)
+- 動作確認:
+  - `npm run build` 通る、main / web / node typecheck 通る
+  - Gemini 結果 → 閾値無視で表示
+  - 手動入力 → 閾値無視で表示
+  - API fallback 結果が閾値で除外 → 「N 件除外」warning
+- やらないこと: 同名グループ表示の自動グルーピング / カテゴリ別分類 / 国別フィルタ / ジャンル別フィルタ / トレンド表示
+- 残課題: 閾値変更後の再検索は Cache TTL(5 分)に当たると古い結果が返る → 緩和ボタンに force-refresh option 必要かも(別タスク)
+- コミット: 未コミット
+
+---
+
+## 2026-05-04 - 配信者検索のハイブリッド化(Gemini 主導 → API フォールバック)
+
+- 誰が: Claude Code(Opus 4.7)
+- 何を: `creatorSearch.searchCreators()` を新設、Gemini 検索失敗時に Twitch `/helix/search/channels` + YouTube `search.list` で自動フォールバック。複数候補表示 + データソース badge UI
+- 動機:
+  - Gemini が片方しか答えない / 同名別人を返す / SAFETY null / 確率的にゆらぐ
+  - 例: 「加藤純一」を 09:51 は `kato_junichi0817` と返したのに、別タイミングで `jun_kato_0817`(impostor)を返した
+  - Gemini に 100% 依存する設計だと「キーは効いているのに結果は不正確」状態が見抜けない
+- 設計:
+  - **Step 1 Gemini**: 既存 `askGemini` のまま(0 quota / 速い)
+  - **Step 2 Gemini 結果解決**: `fetchTwitchProfile` / `fetchYouTubeProfile`(handle 1 quota)
+  - **Step 3 Twitch fallback**: Gemini がプロフィールに着地しなかった時のみ `/helix/search/channels?query=&first=10` → 各候補 follower 取得(5 並列、各 1 unit)→ follower 降順で上位 5 件
+  - **Step 4 YouTube fallback**: `search.list` (100 quota) → 各候補 `channels.list` で subscriber 取得(1 quota × 5)→ subscriber 降順で上位 5 件
+  - **キャッシュ**: query 毎、5 分 TTL の in-memory `Map`(Twitch / YouTube 別個)。double-click / 連続検索の quota 浪費を防ぐ
+  - **同時実行抑制**: Twitch enrichment は 5 並列(800/min レート制限に余裕)、YouTube は 5 件のみで十分速いので逐次
+- quota 消費(平均 / 最悪):
+  - **Gemini ヒット**: 0(従来通り)
+  - **Twitch fallback のみ**: search 1 + follower × 5 = 6 unit(800/min の 0.75% / 検索)
+  - **YouTube fallback のみ**: search.list 100 + channels.list × 5 = 105 quota(46 キー × 10K = 460K/日 → 4380 検索/日まで OK)
+  - **両方 fallback**: 111 quota(YouTube 主因)
+- データソース UI:
+  - ✓ Gemini 推測(緑、`#4ade80`)
+  - ⚠ API 検索結果(黄、`#f59e0b`)— 確認ダイアログでも警告強調
+  - 👤 手動入力(青、`accent-primary`)
+  - 旧 `confidence: 'low'` 不確実 chip は撤廃(`source` で完全代替)
+- 影響:
+  - `src/main/twitchHelix.ts`: `searchTwitchChannels` + `TwitchChannelHit` 型 追加
+  - `src/main/dataCollection/youtubeApi.ts`: `searchChannelsByName` + `ChannelSearchHit` 型 追加(既存 `searchChannelByName` は seedCreators で使われてるので残置)
+  - `src/main/creatorSearch.ts`: `searchCreators` orchestrator + キャッシュ + concurrency helper + `SearchCandidatesResult` / `CandidateSource` 型 追加
+  - `src/main/index.ts`: IPC `creatorSearch:searchAll` 追加
+  - `src/preload/index.ts` + `src/common/types.ts`: API + 型(`HybridSearchResult` / `CreatorCandidateSource`)追加
+  - `src/renderer/src/components/MonitoredCreatorsView.tsx`: `SearchCard.confidence` → `source` リネーム + `SourceBadge` コンポーネント追加。`handleSearch` を `searchAll` 一発呼び出しに簡素化(115 → 60 行)
+- やらないこと: ページング(上位 5 件のみ)/ 検索履歴永続化 / サジェスト / 国別フィルタ / 同一人物の Twitch+YouTube 自動関連付け / Gemini プロンプト改造
+- 残課題: 「もっと見る」ボタン(現状 5 件で打ち切り)、`api-fallback` の応答時間が 1-3 秒で見えるので「検索中...」スピナーをカード単位で出すべき
+- コミット: 未コミット
+
+---
+
+## 2026-05-04 - API キー ハイブリッド保存 + JSON エクスポート/インポート(事故再発防止)
+
+- 誰が: Claude Code(Opus 4.7)
+- 何を: 全 API キーを「暗号化 .bin(現状)+ 平文 JSON バックアップ」の二重化に変更。エクスポート / インポート機能を追加
+- 動機(事故): 2026-05-04 朝に **Gemini API キー 50 個が永久消失**。userData/geminiApiKeys.bin が現在の DPAPI master key で復号不能(GCM auth fail / CTR モードでもランダム出力 → 別 master key で暗号化されたとしか説明つかない)。同じく失われたと思われていた YouTube も実は **過去の保存バグで 1 個しか保存されていなかった** ことが調査で判明。Gladia / Anthropic / Twitch Secret は救出成功
+- 設計:
+  - **平文バックアップ**: `~/Documents/jikkyou-cut-backup/api-keys.json`(userData の外、エクスプローラからアクセス可、アンインストールで消えない、admin 不要)
+  - **JSON 構造**: `$schema = 'jikkyou-cut-api-keys-v1'`、`lastBackupAt`、`warning`、`keys.{gemini[], youtube[], gladia, anthropic, twitchClientId, twitchClientSecret}`
+  - **保存ロジック**(`saveAt`): encrypt → write .bin → 読み戻し検証 → 平文バックアップ更新(atomic write via .tmp + rename)。検証失敗は warn ログのみ(.bin は残す)、バックアップ書き込みが安全網
+  - **読み込みロジック**(`loadAt`): .bin → 失敗時に平文バックアップへ自動フォールバック → 再暗号化して .bin に書き戻し
+  - **ensureBackupInitialized**(boot 時): 既存の全 .bin を試し、復号できたものだけバックアップに転記。idempotent(既に値があるスロットは触らない、復元したキーで上書きしないため)
+  - **検証(read-back verify)**: encrypt → write の直後に read → decrypt → 値一致を確認。今回の Gemini 消失のような「保存したつもりが復号不能」を即座に warn ログで surface
+- エクスポート / インポート:
+  - エクスポート: `dialog.showSaveDialog` → 全キーを JSON で書き出し(平文バックアップと同形式)
+  - インポート: ファイル選択 → 差分プラン表示(`Gemini: 50 個 (現在 0)` 形式) → マージ / 完全置き換え選択 → 適用
+  - バリデーション: `gemini` / `youtube` は `AIza... [A-Za-z0-9_-]{30,}`、`anthropic` は `sk-ant-...` で 50 文字超。形式 NG はスキップ + UI に件数表示
+  - main 側に短命の `pendingImports` Map を持ち、preview → apply で plaintext を renderer 経由させない
+- 移行: 既存ユーザは初回起動時に `ensureBackupInitialized` が走り、復号できる .bin から自動で平文バックアップ生成。失敗 .bin はバックアップに何も入らないので「データロス」は発生しない
+- やらないこと: マスタパスワード方式(UX 悪化) / クラウド同期 / バックアップ世代管理(将来) / Linux・macOS 対応(Windows 優先、ただし `os.homedir()` ベースなので動くはず)
+- 影響:
+  - `src/main/secureStorage.ts` 全面書き換え(168 → 480 行)。public API はソース互換(`saveSecret` / `loadGeminiApiKeys` 等のシグネチャ維持)
+  - `src/main/index.ts`: boot 時 `ensureBackupInitialized` 呼び出し / `apiKeysBackup:*` 5 ハンドラ追加 / `twitch:setClientCredentials` で `updateTwitchClientIdInBackup` 呼ぶ
+  - `src/preload/index.ts`: `apiKeysBackup` API 追加
+  - `src/common/types.ts`: `IpcApi.apiKeysBackup` + 周辺型(`ApiKeysBackupStatus`, `ApiKeysImportPlan` 等)
+  - `src/renderer/src/components/ApiManagementView.tsx`: `BackupSection` / `ImportExportSection` / `ImportPreviewDialog` 追加。既存 `*KeysSection` に `onChanged` プロパティ追加(保存時にバックアップ status banner を再取得)
+  - `src/renderer/src/components/ApiManagementView.module.css`: backup banner / import/export / import dialog の CSS 追加
+- 緊急救出スクリプト(参考): `scripts/recover-keys.cjs`(Local State の os_crypt.encrypted_key を DPAPI で復号 → master key で .bin を AES-256-GCM 復号)。安全網が機能しなかった過去事案用、新規ユーザは不要
+- コミット: 未コミット
+
+---
+
+## 2026-05-04 - 緊急修正:Twitch 録画 0 B バグ(`--live-from-start`)+ cookies 統合
+
+- 誰が: Claude Code(Opus 4.7)
+- 何を: 段階 X3 完成以降 **Twitch 録画が一度も成功してなかった** 真因を特定し修正。同時に副次バグの cookies 未統合も修正
+- 真因確定:
+  - `recordSession.spawnYtDlp` が **無条件で `--live-from-start`** を渡していた
+  - yt-dlp の公式仕様: **`--live-from-start` は YouTube 専用機能**(Twitch HLS は過去フラグメント取得不可)
+  - Twitch URL に `--live-from-start` を渡すと yt-dlp は「配信開始時点」を永遠に探し続ける → フラグメント 1 つも書かない → **0 byte 無限ループ**
+  - `--retries infinite` のおかげで永遠に retry し続けるので「動いてるように見える」のが質悪い
+  - 影響: 5/3 22:08 柊ツルギ 0 B / 5/4 09:08 加藤純一 0 B、両方この症状
+- 副次バグ:
+  - recordSession で **cookies が yt-dlp 録画コマンドに渡されてなかった**(直前のタスクで `creatorSearch` / `urlDownload` には統合済だったが、recording 経路だけ漏れ)
+  - 公開配信なら不要だが、年齢制限 / サブスク限定で 401 になる潜在的問題
+- 修正:
+  - **`spawnYtDlp` 内**:
+    ```ts
+    const liveFromStartArgs = info.platform === 'youtube' ? ['--live-from-start'] : [];
+    // ... args に ...liveFromStartArgs スプレッド
+    ```
+  - **`RecordingSession` constructor に `cookiesArgs: string[]` を追加**:呼び出し側(orchestrator)が `getCookiesArgs(...)` で事前構築した cookies args を渡す
+  - **orchestrator(`streamRecorder/index.ts`)**: `onStreamStarted` で session 構築前に `getCookiesArgs({ cookiesBrowser, cookiesFile, cookiesFileYoutube, cookiesFileTwitch, platform: info.platform })` を呼んで渡す。`urlDownload` と同じ優先順位(プラットフォーム別 > 汎用 > ブラウザ > なし)
+  - **診断ログ追加**:
+    ```
+    [stream-recorder] platform=twitch, liveFromStart=false, cookies=<none>
+    [stream-recorder] platform=youtube, liveFromStart=true, cookies=--cookies C:\...
+    ```
+    spawn 直前に出すので、再発した時に「Twitch なのに liveFromStart=true」みたいな状態が即座に分かる
+- 検証 spawn コマンドの実例:
+  - **修正前**(全プラットフォーム共通):
+    ```
+    yt-dlp <url> --js-runtimes node -f bestvideo+bestaudio/best/best
+      -o <path> --live-from-start --no-part --concurrent-fragments 4
+      --retries infinite --fragment-retries infinite --print after_move:filepath
+      --no-warnings --no-playlist
+    ```
+  - **修正後 Twitch**(`--live-from-start` 削除、cookies 追加):
+    ```
+    yt-dlp https://www.twitch.tv/kato_junichi0817 --js-runtimes node
+      -f bestvideo+bestaudio/best/best -o <path> --no-part
+      --concurrent-fragments 4 --retries infinite --fragment-retries infinite
+      --print after_move:filepath --no-warnings --no-playlist
+      [--cookies C:\path\to\twitch-cookies.txt]
+    ```
+  - **修正後 YouTube**(`--live-from-start` 維持、cookies 追加):
+    ```
+    yt-dlp https://www.youtube.com/watch?v=xxx --js-runtimes node
+      -f bestvideo+bestaudio/best/best -o <path> --live-from-start
+      --no-part --concurrent-fragments 4 --retries infinite
+      --fragment-retries infinite --print after_move:filepath
+      --no-warnings --no-playlist
+      [--cookies C:\path\to\youtube-cookies.txt]
+    ```
+- ゾンビプロセス対応:
+  - 5/4 朝の 0 B 録画放置で yt-dlp pid=32968 (61.6 MB アイドル、~1.5h 経過)が孤児として残ってた
+  - `Stop-Process -Id 32968 -Force` で即 kill 済
+  - shutdown フック(直前タスクで実装)が正しく動いていれば本来この孤児は出ないはずだが、アプリがクラッシュ / 強制 kill された経路ではフックは発火せず → `previous app session ended unexpectedly` で boot recovery にフォールバック、ただし subprocess 自体は orphan のまま生き残る
+  - これは Windows の child process detach デフォルト挙動。完全防止には Job Object 経由の spawn が必要(将来 TODO)
+- 不採用案:
+  - **`--live-from-start` を全プラットフォームで使う(回避策なし)** → Twitch で永続 0 B、致命的
+  - **Streamlink 切替** → spec の方針通り yt-dlp で動くなら不要、Streamlink 配置はオプショナルのまま
+  - **cookies なし時の error にする** → 公開配信は cookies 不要、勝手に必須化したら UX 悪化
+- 影響ファイル:
+  - `src/main/streamRecorder/recordSession.ts`(`cookiesArgs` フィールド追加 + constructor opts、`spawnYtDlp` で platform 分岐 + cookies + 診断ログ)
+  - `src/main/streamRecorder/index.ts`(orchestrator が `getCookiesArgs` で事前構築 + RecordingSession に渡す)
+- 観察すべき点:
+  - **完走テストで .mp4 サイズが増えるか**: 1-2 分後 / 5 分後 / 30 分後 / 1 時間後 で順次増加していくのが期待挙動。停滞してたら別問題
+  - **YouTube 録画は未テスト**: spec 範囲外、YouTube live は 加藤純一の Twitch ほど身近ではない。X3 完成テスト時の検証が必要
+  - **cookies path が存在しない場合**: `getCookiesArgs` は path validation せずに `--cookies <path>` を返す。yt-dlp が起動時に「ファイル無い」エラーで死ぬ可能性 → recordSession の exit handler で `status='failed' + errorMessage='yt-dlp exited code=N'` で記録される
+  - **shutdown フックで kill されない経路**: クラッシュ / タスクマネージャ強制終了 / Windows shutdown(時々)。これは Windows のプロセス親子関係の限界、Job Object 化が必要(将来)
+
+---
+
+## 2026-05-04 - 開設日表示削除 + フォロワー数による品質警告
+
+- 誰が: Claude Code(Opus 4.7)
+- 何を: 配信者カードから開設日表示を削除し、代わりに **フォロワー / 登録者数による impostor 検出バッジ** を追加
+- 経緯:
+  - 直前タスク完了後の実機テストで、Gemini の同名別人ヒット時にフォロワー数の差が圧倒的に分かりやすいことが判明:
+    - JunichiKato(impostor): **15 フォロワー**
+    - 柊ツルギ(本物): **436K フォロワー**
+  - 数字だけで本物 vs 偽物が一発判別できるため、開設日は冗長 → 削除
+  - 「Twitch follower count は app-only Client Credentials で取れない」と先のタスクで書いたが、**実際には取れる**ことが実機で判明。条件次第で 401 にならず total が返ってくる(broadcaster_id クエリのみで scope 不要なケースがある模様)
+- 設計判断:
+  - **閾値は 1K / 10K の 2 段階**:
+    - `< 1K` (`critical`): 🚨 誤登録の可能性大(JunichiKato の 15 はここ)
+    - `< 10K` (`low`): ⚠ 要確認(個人勢の小規模 VTuber 等が落ちる範囲)
+    - `>= 10K` (`ok`): バッジ無し(柊ツルギの 436K はここ)
+    - `null` (`unknown`): バッジ無し(API 制約 / 取得失敗 → 「不明」表示のまま)
+  - **警告のみ、自動排除しない**:小規模配信者を意図的に登録したい場合に詰むのを避ける(個人勢 VTuber でフォロワー数千の人もいる)。ユーザの判断を尊重
+  - **確認ダイアログでの強警告**(`critical` のみ):
+    - 赤い警告ボックスで「{countLabel}が {N} と少なく、本人ではない可能性が高いです。本当に登録しますか?」
+    - 登録ボタンが「登録する」→「**それでも登録する**」に変わる(止まる機会を増やす)
+  - **`low` の確認ダイアログ**: 既存の confidence='low' 警告と同じ Box で「{countLabel}が {N} と少なめです。本人で合っているか確認してください。」
+  - **Twitch / YouTube 共通ロジック**: フォロワー数も登録者数も同じ閾値・同じ UI。プラットフォーム差を吸収するため `getFollowerWarning(count)` ヘルパに集約
+- なぜ 1K/10K の閾値か:
+  - 1K: JunichiKato の 15 を確実に critical に落とせる + 仮に Gemini が「30 フォロワーの全くの別人」を返した時にも捕まえられる安全マージン
+  - 10K: 個人勢 / 小規模配信者の境界線として一般的な水準。これ未満は「VTuber デビュー直後 / マイナーストリーマー」の領域なので「合ってますか?」と聞くのが妥当
+  - これらは spec で明示された値、実測による調整で動かす想定(将来 TODO)
+- 不採用案:
+  - **完全除外**(spec 案 A):個人勢を登録したい時に詰むので不採用
+  - **1K-10K も除外**(spec 案 C):同上、警告で十分
+  - **ソート(検索結果のフォロワー降順)**: spec が「実装簡単なら入れる」と任意指示。現状の検索結果は最大 2 枚(Twitch + YouTube)なのでソートしても見栄えが変わらない → スキップ
+- 影響ファイル:
+  - `src/renderer/src/components/MonitoredCreatorsView.tsx`:
+    - `FOLLOWER_THRESHOLDS` 定数 + `FollowerWarning` 型 + `getFollowerWarning` ヘルパ + `FollowerWarningBadge` コンポーネント追加
+    - `formatYearMonth` 削除(呼び出しが消えたため未使用)
+    - `SearchResultCard` の stats 行から `· 開設: 2018-03` 部分を削除、代わりに `<FollowerWarningBadge>` 表示
+    - `RegisteredRow` の stats 行から同上削除、`<FollowerWarningBadge>` 表示
+    - `ConfirmAddDialog` を拡張: stats 行に `フォロワー: 15` を inline 追加、warning='critical' なら赤い警告 box + 登録ボタン文言を「それでも登録する」に
+- 観察すべき点:
+  - **Twitch follower 取得の信頼性**: 直前タスクで「app-only token では取れない」と書いていたが実機で取れた(JunichiKato の 15 / 柊ツルギの 436K)。Helix の `/channels/followers` は **broadcaster_id クエリだけなら scope 無しでも total を返すケースがある模様**(API ドキュメントでは scope 必須となっているが、実装上の挙動が違う可能性)。Twitch 側の仕様変更で 401 に戻る可能性ゼロではないので、null フォールバック経路は維持
+  - **YouTube subscriber count の hidden**: `hiddenSubscriberCount=true` の channel は count=null → warning='unknown' → バッジ無し。ここに「非公開」表示を入れる UX 改善は将来余地
+  - **既存 Twitch 登録の追従**: pre-2026-05-04 登録は `followerCount=null` → 「不明」表示 + バッジ無し。「↻ 再取得」で更新可能(直前タスクで実装済)
+  - **閾値の妥当性**: 実運用で「個人勢 VTuber 5K フォロワーが low 警告で煩わしい」となれば 10K → 5K に下げる、逆に「もう少し厳しく」なら 20K に上げる。ユーザフィードバック次第
+
+---
+
+## 2026-05-04 - 配信者カードにフォロワー / 登録者数表示 + 手動入力フォールバック
+
+- 誰が: Claude Code(Opus 4.7)
+- 何を: 検索結果 / 登録済みカードに **フォロワー数 / 登録者数 + アカウント開設日** を表示し、Gemini が同名別人を返した時のために **手動入力フォールバック UI** を追加
+- 経緯: ユーザが「加藤純一」検索で Gemini が `JunichiKato @junichikato`(本物は `kato_junichi0817`)を返した。**フォロワー数で本人と同名別人を一目で区別** + **正しいログイン名を直接入力できる救済策** を整備
+
+### Part 1 — フォロワー / 登録者数 + 開設日
+
+- **Twitch**:
+  - `searchUserByLogin` の `TwitchUser` に `createdAt` 追加(Helix `/users` の `created_at` フィールド)
+  - 新規 `getTwitchFollowerCount(broadcasterId)` 追加 — `/helix/channels/followers?broadcaster_id=X` を叩く
+  - **app-only Client Credentials トークンでは 401 で帰ってくる**(エンドポイントは `moderator:read:followers` scope 必須)→ null 返す → UI で「不明」表示
+  - `creatorSearch.fetchTwitchProfile` が両方 fetch + パススルー
+- **YouTube**:
+  - `getChannelByHandle` / `getChannelById` の `part` を `snippet` → `snippet,statistics` に変更(同 1 quota unit)
+  - `ChannelLookup` に `createdAt`(snippet.publishedAt)+ `subscriberCount`(statistics.subscriberCount、`hiddenSubscriberCount=true` なら null)追加
+  - `creatorSearch.fetchYouTubeProfile` が両方 fetch + パススルー
+- **`MonitoredCreator` 拡張**:
+  - Twitch: `followerCount?: number | null` + `accountCreatedAt?: string`
+  - YouTube: `subscriberCount?: number | null` + `accountCreatedAt?: string`
+  - 両方 optional — pre-2026-05-04 の登録 entry は undefined、UI は「不明」で fallback
+  - `monitoredCreators:add` IPC が新フィールド受領、`refetchTwitch` が follower + createdAt も更新
+- **UI**:
+  - `SearchResultCard` に `フォロワー / 登録者: 1.2K · 開設: 2018-03` 行追加
+  - `RegisteredRow` に同じ行追加(誤登録に気づく機会を増やす — spec 1-6)
+  - `formatCount(n)`:`< 1000` そのまま / `< 1M` `1.2K` / `< 1B` `1.2M`
+  - `formatYearMonth(iso)`: `2018-03` 形式
+
+### Part 2 — 手動入力フォールバック
+
+- **`fetchYouTubeProfile` シグネチャ拡張**: `{ handle?: string | null; channelId?: string | null }` に。`channelId` が来たら `getChannelById` で直接取得、無ければ `handle` で `getChannelByHandle` フォールバック
+- **UI**: 検索フォームの下に `▶ Gemini で見つからない場合、手動で入力する` の collapsible section
+  - Twitch ログイン名直接入力 → `fetchTwitchProfile(login)`
+  - YouTube `@handle` or `UCxxx` 直接入力 → `UC[A-Za-z0-9_-]{22}` regex で channelId 判定 → `fetchYouTubeProfile({ channelId or handle })`
+  - 取得結果は **既存の検索結果カード形式** で表示(confidence='manual' でラベル表示)、追加ボタン → 確認ダイアログ → 登録の通常フローに乗る
+- **`SearchCardCommon.confidence`** に `'manual'` を追加。手動入力経由のカードは「不確実(要確認)」の代わりに「手動入力」バッジを表示
+
+### 不採用案
+
+- **Twitch follower count を user OAuth flow で取得** — 大規模な scope 拡大、ユーザに OAuth フロー強制、本来の auto-record スコープを超える
+- **search.list フォールバック** — 段階 X1 完成版で 100 quota コストを理由に削除済み、復活させない
+- **動画本数 / プロフィール文 / フォロワー履歴グラフ** — spec の「やらないこと」、将来分
+
+### 影響ファイル
+
+- `src/main/twitchHelix.ts`(`createdAt` を `TwitchUser` に + `getTwitchFollowerCount` 追加)
+- `src/main/dataCollection/youtubeApi.ts`(`ChannelLookup` に `createdAt` + `subscriberCount`、`getChannelByHandle/ById` で statistics 取得 + `toChannelLookup` ヘルパ抽出)
+- `src/main/creatorSearch.ts`(profile types + fetch 拡張、`fetchYouTubeProfile` の channelId path)
+- `src/main/index.ts`(`monitoredCreators:add` ハンドラが新フィールド受領、`refetchTwitch` が follower + createdAt 更新、`creatorSearch:fetchYouTubeProfile` シグネチャ更新)
+- `src/common/types.ts`(`creatorSearch.fetchTwitchProfile/fetchYouTubeProfile` 戻り値型 + `monitoredCreators.add` 引数型)
+- `src/common/config.ts`(`MonitoredCreator` に optional フィールド)
+- `src/main/config.ts`(`normaliseMonitoredCreators` で新フィールド round-trip)
+- `src/renderer/src/components/MonitoredCreatorsView.tsx`(`SearchCard` 型拡張、card 構築で新フィールド、`SearchResultCard` / `RegisteredRow` で stats 行表示、`formatCount` / `formatYearMonth`、manual input collapsible UI、`handleManualTwitchFetch` / `handleManualYouTubeFetch`)
+
+### 観察すべき点
+
+- **Twitch follower count が常に null になる**:Client Credentials の制約。実機でも基本「不明」表示。**創設日**(これは取れる)が impostor 判別の主軸になる。本物の有名人は数年前のアカウント、impostor は最近のことが多い
+- **登録時の値が古くなる問題**:spec 通り「登録時 snapshot、再取得ボタンで更新」。Twitch は「↻ 再取得」で follower + createdAt 更新可能、YouTube は別途実装が必要(将来 — 現状は削除 → 再追加)
+- **手動入力で channelId 判定**:`UC[A-Za-z0-9_-]{22}` regex で 24 文字 UC 始まりのみ channelId 扱い。`@xxx` プレフィックス含む文字列は handle 扱い。プレフィックス無しのハンドル名(例: `kato`)は handle 扱い → `getChannelByHandle('@kato')` が呼ばれる(`normaliseHandle` で `@` 補完)
+- **`hiddenSubscriberCount=true` チャンネル**:YouTube で「登録者数を非公開」設定の channel は `subscriberCount` null になる。UI は「不明」。これは仕様
+
+---
+
+## 2026-05-04 - 録画 subprocess の `before-quit` shutdown フック追加(ゾンビプロセス漏れ対策)
+
+- 誰が: Claude Code(Opus 4.7)
+- 何を: アプリ終了時に in-flight 録画 subprocess を確実に kill する shutdown フック追加
+- 経緯:
+  - 5/3 22:08 開始の録画(柊ツルギ)が 0 byte で失敗、メタが `previous app session ended unexpectedly` で残った
+  - ユーザ環境で 10 個のゾンビ yt-dlp プロセス(各 ~62 MB、合計 ~616 MB)を発見
+  - 真因: Electron の `spawn(yt-dlp, ..., { windowsHide: true })` は子プロセスを **detached** として起動するので、親(Electron main)が死んでも子は生き残る
+  - 録画開始 → アプリ quit / crash → yt-dlp.exe が orphan として残り続ける、を毎回繰り返してた
+- 修正:
+  - **`RecordingSession.killSync()`** 追加:既存の `async stop()` の同期版。`stopRequested = true` 設定 + `proc.kill()` だけ、exit を待たない
+  - **`streamRecorder.shutdownSync()`** 追加:active map を全走査し、各 session に対して
+    1. `writeMetadataSync(meta with status='failed', errorMessage='app shutdown — recording interrupted')` で同期メタ書き込み(boot recovery が「クラッシュ」と「正常 shutdown」を区別できるように)
+    2. `session.killSync()` で subprocess に SIGTERM
+    3. `powerSave.release(...)` で OS スリープ防止タグ解放
+    4. active map clear、filesize timer stop
+  - **`storage.writeMetadataSync()`** 追加:`writeFileSync` + `mkdirSync` 経由で同期書き込み。before-quit のような「これが最後の処理」hook で async write が flush 保証無いのを回避
+  - **`app.on('before-quit')`** 内で `streamRecorder.shutdownSync()` を呼ぶ
+- なぜ同期にしたか:
+  - `before-quit` は Electron が process tear-down する直前 hook。preventDefault しない限り次の tick でプロセスが死ぬ
+  - async write は `await` してても Electron の tear-down sequence と race する可能性あり
+  - `writeFileSync` は OS file system に commit するまでブロックする → メタが確実に disk に着地
+  - subprocess kill の方は同期 spawn の `proc.kill()` 自体が同期 syscall なので問題なし
+- 取りこぼしパターン:
+  - **アプリクラッシュ** / **タスクマネージャ強制終了**:before-quit 発火しない → 引き続き boot recovery で `previous app session ended unexpectedly` メッセージ。これは仕方ない
+  - **PC 強制シャットダウン**:同上
+  - **Ctrl+C(dev terminal)/ Tray 終了 / ✕ ボタン(closeToTray=false)/ Windows shutdown**:全部 before-quit 発火するので shutdown フックが動く
+- 影響ファイル:
+  - `src/main/streamRecorder/storage.ts`(`writeMetadataSync` 追加、`writeFileSync` / `mkdirSync` import)
+  - `src/main/streamRecorder/recordSession.ts`(`killSync` 追加)
+  - `src/main/streamRecorder/index.ts`(`shutdownSync` + `activeCount` 追加)
+  - `src/main/index.ts`(`before-quit` で `streamRecorder.shutdownSync()` 呼出)
+
+---
+
+## 2026-05-04 - 加藤純一バグ調査ハンドル + スリープ防止機能
+
+- 誰が: Claude Code(Opus 4.7)
+- 何を: 2 件の小タスクを 1 タスクで:
+  1. 「加藤純一の Twitch 配信が認識されない」バグを **可視化 + 自己修復ハンドル** で対応(リモートで真因確定不可なのでユーザに調査ツールを渡す形)
+  2. 録画中の OS スリープ防止(`powerSaveBlocker`)実装
+
+### Part 1 — 加藤純一バグ調査ハンドル
+
+- 真因確定の制約: Claude Code 側からは Twitch API を直接叩けない + ユーザの `userData/config.json` を読めない → 真因 A〜E のどれかは **ユーザが実機で確認する必要**。代わりに「真因が即座にログから読める + 真因 A(stale user_id)なら 1 ボタンで自己修復」の 2 点を整備
+- **`twitchHelix.getLiveStreams` 詳細ログ追加**:
+  - `[twitch-poll] querying user_ids: [...]` — 投げた user_id リスト
+  - `[twitch-poll] response entry: user_id=, user_login=, type=, title=` — Twitch から live で返ってきた個別エントリ(`type=''` = unlisted の検証用)
+  - `[twitch-poll] missing (not in response): [...]` — 投げたが返ってこなかった id
+  - これで「リクエストに含めてる」「Twitch が live と認識していない」の切り分けが即座に付く
+- **「↻ 再取得」ボタン追加**(MonitoredCreatorsView の Twitch 行のみ):
+  - 新 IPC `monitoredCreators:refetchTwitch({ twitchUserId })` を main 側に追加
+  - 内部で stored `twitchLogin` から `searchUserByLogin()` を呼んで最新の user_id を取得
+  - 旧 entry を delete + 新 entry を upsert(`enabled` / `addedAt` は保持)
+  - ログ: `[refetch-twitch] <login>: <oldUserId> → <newUserId> (UPDATED)` or `(no change)`
+  - UI には alert で「user_id が更新されました: A → B」/「user_id は最新の状態でした(変更なし)。配信検知されない場合は他の原因です」を表示
+- **想定原因と切り分けフロー**:
+  | ログ症状 | 想定原因 | 対処 |
+  |---|---|---|
+  | `querying user_ids: [..., kato_id]` + `missing: [kato_id]` で配信中なのに missing | A: stale user_id / B: ログイン名間違い | 「↻ 再取得」 → user_id 更新 → 次 poll で取れるか確認 |
+  | `response entry: user_id=kato_id, type=''` | C: Twitch unlisted 配信 | helix/streams の仕様で取れる(type='' でも data[] に入る)→ 自動的に解決 |
+  | `querying user_ids:` に kato_id 自体が無い | 登録漏れ / `enabled=false` | 配信者リストで「監視中」が ON か確認 |
+  | `[stream-monitor] poll start: 0 twitch` | Twitch 認証情報未設定 | 設定 → Twitch 認証 |
+
+### Part 2 — スリープ防止機能(`src/main/powerSave.ts`)
+
+- Electron `powerSaveBlocker.start('prevent-app-suspension')` を thin wrap
+- 「**`prevent-app-suspension`** を選択」the reason: ユーザは寝てる → ディスプレイ ON は不要、CPU + ネットワークだけ生きてれば録画継続。Electron docs 曰く Windows ではこれが system sleep も止める(良い意味で)
+- **Reference-counted API**(複数同時録画対応):
+  - `acquire(reason)` / `release(reason)` をタグベースで Set 管理
+  - 1 個でも acquire されてれば `powerSaveBlocker` は engaged
+  - 全 release で `powerSaveBlocker.stop`
+  - タグは `recording:<recordingId>` 形式で各 RecordingSession 個別に持つ
+- **ライフサイクル**: `streamRecorder.onStreamStarted` 内で `powerSave.acquire(...)` → `onStreamEnded` 内で `powerSave.release(...)` → `app.on('will-quit')` で `releaseAll`(belt-and-braces)
+- **`AppConfig.preventSleepDuringRecording`**(default `true`)で gate。default true の理由は spec 通り「録画機能の主用途が深夜無人運用なので、知らずにスリープして録画切れる事故を防ぐ」
+- UI: MonitoredCreatorsView のステータスバー直下に `SleepPreventionRow`(🔋 アイコン + チェックボックス + 「録画中: ● 防止 ON」インジケータ + 説明文「ディスプレイは消えても録画は継続します」)
+- ログ:
+  - `[power-save] blocker started: id=<n>`
+  - `[power-save] acquire: recording:<id> (active=N)`
+  - `[power-save] release: recording:<id> (active=N)`
+  - `[power-save] blocker still active: N consumer(s) — [<list>]`(他に 1 件以上残っている時)
+  - `[power-save] blocker stopped (was id=<n>)`(全 release)
+
+### 影響ファイル
+
+- `src/main/twitchHelix.ts`(`[twitch-poll]` debug logs 追加)
+- `src/common/types.ts`(`monitoredCreators.refetchTwitch` IPC + `preventSleepDuringRecording` 将来 UI 用)
+- `src/preload/index.ts`(`refetchTwitch` expose)
+- `src/main/index.ts`(`monitoredCreators:refetchTwitch` IPC handler、`powerSave` import + `will-quit` で `releaseAll`)
+- `src/common/config.ts`(`preventSleepDuringRecording` フィールド + DEFAULT)
+- `src/main/config.ts`(load/save round-trip)
+- `src/main/powerSave.ts`(新規、約 80 行)
+- `src/main/streamRecorder/index.ts`(`powerSave.acquire` / `.release` を session start/end に hook)
+- `src/renderer/src/components/MonitoredCreatorsView.tsx`(`SleepPreventionRow` + `handleRefetchTwitch` + RegisteredRow に「再取得」ボタン)
+
+### 観察すべき点
+
+- **加藤純一バグの真因が「アカウント名が違う」だった場合**: 「↻ 再取得」では解決しない(`searchUserByLogin` は登録時のログイン名で検索するので、登録時に間違ったログインが入っていれば再取得しても同じログインで再検索 → 同じ結果)。その場合は「削除 → 別の名前で再検索 → 追加」が必要。実機ログで `missing: [...]` が継続するなら hand-edit or 再登録
+- **スリープ防止 + ディスプレイ電源**: `prevent-app-suspension` はディスプレイの電源管理は触らない → 通常の電源プラン通りに画面は消える。ユーザは画面消えても安心して寝られる + 録画は CPU レベルで動く
+- **`powercfg /requests` で確認**: Windows のコマンドプロンプトで `powercfg /requests` 実行 → SYSTEM セクションに `[PROCESS] electron.exe / jikkyou-cut.exe` が出れば blocker engaged
+- **同時録画の reference-count**: 加藤純一 + 柊ツルギの 2 配信同時録画で、片方の手動停止でも blocker は維持(もう片方が active なまま) → 残った 1 件が終わるまでスリープしない
+- **`will-quit` での `releaseAll`**: アプリ再起動シナリオで blocker leak しないように。Electron は通常 process exit で OS が回収するが、明示的 release で `powercfg /requests` のクリーンさを保つ
+- **加藤純一が YouTube に来ている可能性**: spec 想定原因 D。ユーザが Chrome で確認した URL が `twitch.tv` だったか確認推奨。`youtube.com/@kato` だったら登録プラットフォームを変更
+
+---
+
+## 2026-05-04 - 段階 X3+X4: 配信録画 + 編集統合(自動録画機能シリーズ完成)
+
+- 誰が: Claude Code(Opus 4.7)
+- 何を: 配信検知ポーリング(段階 X2)が発火する `streamMonitor:started` / `streamMonitor:ended` イベントを受けて、yt-dlp(主)/ Streamlink(任意)で **配信を自動録画 → 配信終了後に VOD 取り直し → 既存編集画面に流し込む** までの一気通貫を実装。これで自動録画機能シリーズが完成
+- 機能シリーズ全体像(完成):
+  | 段階 | 内容 | 状態 |
+  |---|---|---|
+  | X1 | Twitch + YouTube 配信者登録 UI | ✅ 2026-05-03 |
+  | X2 | 配信検知ポーリング | ✅ 2026-05-03 |
+  | X3.5 | タスクトレイ常駐 | ✅ 2026-05-04 |
+  | X3 | 配信開始 → yt-dlp 起動連携(録画本体) | ✅ 2026-05-04(本タスク) |
+  | X4 | 録画完了通知 + ファイル管理 + 編集画面連携 | ✅ 2026-05-04(本タスク) |
+  | X5 | YouTube ライブ検知精度向上 | 未着手(将来) |
+
+### 設計判断
+
+- **yt-dlp 主役 / Streamlink フォールバック**: spec が想定した「Streamlink 主、yt-dlp フォールバック」を **逆転**。理由:
+  - yt-dlp は同梱バイナリ(`resources/yt-dlp/yt-dlp.exe`)で確実に動く
+  - Streamlink バイナリは Claude Code が単体ダウンロードできない上、ユーザの手動配置が必要
+  - 段階 1-6d で yt-dlp 関連の最適化(JS runtime、cookies、format selector)が既に完成している
+  - Streamlink が `resources/streamlink/streamlink.exe` に存在する **時だけ** 優先採用、無ければ yt-dlp が `--live-from-start` で代替。本実装はユーザが今夜何もせずに動く前提
+- **`--live-from-start` + `--retries infinite` + `--fragment-retries infinite`**: 通常 DL 系(段階 6d)は `--retries 30 --abort-on-unavailable-fragment` で fragment 失敗を hard error にしているが、ライブは fragment 遅延が日常なので **infinite + no abort** に切り替え。録画中の数秒のジッタで全体を落とすほうが事故
+- **VOD 再取得の責務分離**: 既存の `urlDownload.downloadVideoOnly` を流用しない。理由:
+  - downloadVideoOnly は output template が `%(title)s.%(ext)s` 固定でファイル名が制御できない
+  - 録画は `<recordingId>.vod.mp4` という決定論的な名前が必要(メタデータと整合させるため)
+  - downloadVideoOnly は abort-on-unavailable-fragment を付けるが、配信終了直後の VOD 化はちょい遅れがあるので、ここでは別実装が安全
+  - → `streamRecorder/vodFetch.ts` で yt-dlp を直接 spawn(cookies / JS runtime / format selector などは流用)
+- **VOD 再取得のリトライ戦略**:
+  - Twitch: `helix/videos?type=archive&first=1` を取得 → 5 分バックオフ × 3 試行。`published_at` を `startedAt` と比較してアーカイブが「現セッション分」かを確認
+  - YouTube: `liveStreamingDetails.actualEndTime` が populated になるまでポーリング → 5 分バックオフ × 4 試行(最長 20 分)。actualEndTime さえ立てば video_id は変わらないので URL は固定
+  - どちらも null で帰ってきたら `status='completed'` で確定(live ファイルを最終物として扱う)+ errorMessage に理由を記録。録画自体は失敗扱いにしない
+- **メタデータ駆動**: 録画の真実源は `<recordingDir>/<platform>/<creator>/<recordingId>.json`。 in-memory 状態(`active: Map<creatorKey, RecordingSession>`)はあくまで running subprocess の管理用で、UI 表示は always disk から読む。アプリ再起動で active マップは空になるが、ファイルは残る + crash recovery で stale 'recording' を 'failed' にマーク
+- **クラッシュ耐性 (boot-time recovery sweep)**: `recoverInterruptedRecordings` が `recording` / `live-ended` / `vod-fetching` のメタを `failed` に書き換える。前プロセスが録画中にクラッシュした場合の partial mp4 / mkv は残し、メタの status を更新するだけなので何度起動しても安全
+- **FILE 自動再生サイズ更新**: 15 秒間隔で active session の `refreshFileSizes` → IPC push。renderer の UI が録画中のファイルサイズを段々増やしていく挙動を見せる。stat() 1 回 / 録画 / 15s なので無視できるコスト
+- **同時録画上限 5**: spec 通り。回線が住宅向けの想定(平均 100 Mbps)、5 配信同時で実効 ~50 Mbps × 5 = 250 Mbps なので回線の半分使う計算。6 配信目以降は warning ログで黙ってスキップ
+- **ディスク空きチェック**: 録画開始前に `freeBytes` で残量取得。50 GB 未満で warning、10 GB 未満で abort。途中で枯渇したら yt-dlp 自体が「No space left on device」で死ぬので、メタ status は 'failed' に推移する
+- **`onMetadataChange` コールバック**: RecordingSession は disk + IPC を直接知らない。orchestrator が `deps.onMetadataChange` を渡し、その中で `writeMetadata` + IPC を実行する形にして、テスト容易性 + 責務分離を保つ
+
+### ファイル/フォルダ構造
+
+```
+<recordingDir>/                        # 既定: <userData>/recordings
+  twitch/
+    葛葉_kuzuha/                        # sanitised displayName + creatorKey suffix
+      twitch_kuzuha_2026-05-04_03-15-00.json    # メタデータ
+      twitch_kuzuha_2026-05-04_03-15-00.live.mkv  # streamlink、または .live.mp4 等(yt-dlp 任せ)
+      twitch_kuzuha_2026-05-04_03-15-00.vod.mp4   # yt-dlp 後追い
+  youtube/
+    加藤純一_UC...../
+      youtube_UC...._2026-05-04_04-00-00.{json,live.*,vod.mp4}
+```
+
+メタデータ構造例:
+```json
+{
+  "recordingId": "twitch_kuzuha_2026-05-04_03-15-00",
+  "platform": "twitch",
+  "creatorKey": "kuzuha",
+  "displayName": "葛葉",
+  "title": "APEX ランクマ",
+  "startedAt": "2026-05-04T03:15:00Z",
+  "endedAt": null,
+  "sourceUrl": "https://www.twitch.tv/kuzuha",
+  "files": { "live": "...live.mp4", "vod": null },
+  "fileSizeBytes": { "live": 2147483648, "vod": null },
+  "status": "recording",
+  "folder": "C:\\Users\\Sakan\\AppData\\Roaming\\jikkyou-cut\\recordings\\twitch\\葛葉_kuzuha"
+}
+```
+
+### IPC 表面
+
+`window.api.streamRecorder.{list, stop, delete, getRecordingDir, revealInFolder, onProgress}`:
+- `list()` — メタデータ全件 + 最新 fileSizeBytes
+- `stop({ creatorKey })` — 強制停止(graceful → 'live-ended' → 'vod-fetching' → 'completed')
+- `delete({ recordingId })` — メタ + live + vod 全削除
+- `getRecordingDir()` — 設定 UI 表示用
+- `revealInFolder({ recordingId })` — Explorer で該当ファイルをハイライト表示
+- `onProgress(cb)` — 'streamRecorder:progress' イベント subscribe
+
+### UI
+
+- **MonitoredCreatorsView** に新セクション「録画済み動画 (N 件、合計 XX GB)」追加。録画行は:
+  - 状態バッジ:`recording` / `live-ended` / `vod-fetching` / `completed` / `failed` の色付き表示
+  - ファイル合計サイズ + 開始-終了時刻
+  - 「編集を開始」ボタン → `closeMonitoredCreators()` → `setFile(absPath)` で既存 ClipSelectView に遷移(ローカルファイル drop と完全同経路)
+  - 「フォルダを開く」「停止」「削除」アクション
+- **SettingsDialog → 動画ダウンロードタブ** に「自動録画」セクション追加:
+  - 自動録画 ON/OFF(初回 ON で disclaimer dialog)
+  - 録画品質ラジオ(best / 1080p / 720p)
+  - VOD 取り直しチェックボックス
+  - 録画フォルダ表示 + パスをコピー
+- **disclaimer dialog**: 「配信者の許諾を得たコンテンツのみで使用してください」「無断録画は規約違反の可能性があります」「自己責任です」 → 「はい、許諾を得ている」で `recordingDisclaimerAccepted = true` 永続化、以降は出ない
+
+### ストリームモニター連携の追加 API
+
+段階 X3.5 で `subscribeStatus(cb)` を追加していたのを、`subscribeStreamStarted(cb)` / `subscribeStreamEnded(cb)` まで拡張。in-process subscriber が同じイベントを IPC 経由でなく直接受け取れる。recorder はこれで反応する
+
+### 影響ファイル
+
+- `src/common/config.ts`(`recordingEnabled` / `recordingDir` / `recordingQuality` / `recordingVodFallback` / `recordingDisclaimerAccepted` 5 フィールド + DEFAULT)
+- `src/common/types.ts`(`RecordingMetadata` / `RecordingStatus` / `RecordingProgressEvent` 型 + IpcApi に `streamRecorder` namespace)
+- `src/main/config.ts`(load/save round-trip)
+- `src/main/twitchHelix.ts`(`getLatestArchiveVod` + `parseTwitchDuration` 追加)
+- `src/main/streamMonitor/index.ts`(`subscribeStreamStarted` / `subscribeStreamEnded` 追加 + `send` 内分岐)
+- `src/main/streamRecorder/storage.ts`(新規、約 180 行 — メタ I/O + crash recovery + freeBytes + sanitise / formatStartedAt ヘルパ)
+- `src/main/streamRecorder/recordSession.ts`(新規、約 170 行 — yt-dlp / streamlink subprocess ライフサイクル)
+- `src/main/streamRecorder/vodFetch.ts`(新規、約 160 行 — Twitch / YouTube VOD URL 解決 + downloadVod)
+- `src/main/streamRecorder/index.ts`(新規、約 240 行 — orchestrator)
+- `src/main/index.ts`(`streamRecorder` import + boot + IPC 5 handler + monitor subscription + window attach)
+- `src/preload/index.ts`(`streamRecorder` namespace expose)
+- `src/renderer/src/components/MonitoredCreatorsView.tsx`(録画状態の useState + onProgress 購読 + handleOpenInEditor / handleStopRecording / handleDeleteRecording / handleRevealRecording + 「録画済み動画」セクション + `RecordingRow` + `formatBytes` / `formatDateRange`)
+- `src/renderer/src/components/SettingsDialog.tsx`(`RecordingSettingsSection` + `RecordingDisclaimer` 追加)
+
+### 観察すべき点
+
+- **深夜長時間運用のリスク**:
+  - yt-dlp プロセス stdout/stderr バッファ枯渇 → これは yt-dlp 側の onhandlers で読み出し続けているので問題なし
+  - ディスク full → 自動 abort 経路あり、stale 'recording' は次回起動の crash recovery で 'failed' にマーク
+  - **PC スリープ問題**: spec 範囲外。Windows のスリープ許可状態で寝かせると録画中でもスリープ → 録画切れる。`powercfg /requestsoverride PROCESS jikkyou-cut.exe SYSTEM` 等の対策は将来検討
+- **Streamlink の有無**:
+  - 現状 `resources/streamlink/streamlink.exe` は **同梱されていない**
+  - streamRecorder は startup 時の検出で yt-dlp フォールバックに transparent に切替
+  - ユーザ後配置手順は完了報告に明記
+- **Twitch アーカイブ無効化**: 配信者が Twitch 設定で「過去の配信を保存」OFF にしてると VOD 化されない → `getLatestArchiveVod` が null で帰ってくる → `status='completed'` + errorMessage 「VOD unavailable」で完了。live 録画は手元に残るので最低限価値あり
+- **YouTube 処理待ち時間**: 長配信(6 時間以上)は actualEndTime セット後も「処理中」状態が長引くことあり。yt-dlp 自体は処理中でも DL 開始するが、最初に取れた時点のフッテージが時間ベースで欠ける可能性。X5 でリトライ拡張検討
+- **同時録画 5 制限**: 段階 X1 で 50 配信者まで登録可能なので、運悪く 6 人同時に live → 6 人目以降スキップ。実害は低い(深夜帯に同時 6 配信は稀)が、UI で「録画スキップしました」通知を出す改善余地
+- **ファイル名サニタイズ**: 配信タイトルは保存しない(folder 名は creator displayName のみ)。yt-dlp の `%(title)s` を使うと配信途中のタイトル変更で混乱するので、recordingId を ID として使用 → タイトルはメタの `title` フィールドにのみ保存
+- **編集連携**: `handleOpenInEditor` は `closeMonitoredCreators` → `setFile` の 2 段階。setFile が `phase: 'clip-select'` に遷移するので、registered-channels phase からの戻り遷移と setFile の遷移が race することはない(closeMonitoredCreators の set 完了後に setTimeout 0 で setFile を流す)
+
+---
+
+## 2026-05-04 - タスクトレイ常駐機能(段階 X3.5)
+
+- 誰が: Claude Code(Opus 4.7)
+- 何を: ウィンドウ ✕ ボタンを「タスクトレイに最小化」に変更し、PC 起動からずっと配信検知 / 録画(段階 X3 で実装予定)を動かせる土台を整えた
+- 機能シリーズ全体像(更新):
+  | 段階 | 内容 | 状態 |
+  |---|---|---|
+  | X1 | Twitch + YouTube 配信者登録 UI | ✅ 2026-05-03 |
+  | X2 | 配信検知ポーリング | ✅ 2026-05-03 |
+  | X3.5 | タスクトレイ常駐 + Windows 自動起動(本タスク、X3 の前提インフラ) | ✅ 2026-05-04 |
+  | X3 | 配信開始 → yt-dlp 起動連携(録画本体) | 🔜 次タスク |
+  | X4 | 録画完了通知 + ファイル管理 | 未着手 |
+  | X5 | YouTube ライブ検知精度向上 | 未着手 |
+
+### 設計判断
+
+- **Windows 専用**: spec の方針通り。`process.platform === 'win32'` ガードで macOS / Linux は no-op(close 処理 + tray 作成 + loginItemSettings の 3 箇所)。**X-button が macOS で従来挙動のまま動くことを保証**
+- **`closeToTray` のデフォルト ON**: アプリの本質が「配信を見逃さず録画する」なので、誤クリックで監視が止まる方が事故。spec が「ユーザの意図しない挙動を避けるためデフォルト OFF にしてもいい」としていたが、初回 hide 時のバルーン通知で挙動を伝える形で **デフォルト ON を採用**。バルーンは 1 プロセス 1 回だけ
+- **同期判定の `cachedCloseToTray`**: Electron の `close` event は同期的に `preventDefault()` を呼ぶ必要があるので、`loadConfig()` の await を挟めない。boot 時 + `settings:save` IPC で常に最新値をキャッシュ
+- **`actuallyQuit()` の単一経路**: 「✕ ボタンで quit に逃げない」を保証するため、本当に終了する経路は明示関数 `actuallyQuit()` を経由。`isQuitting` フラグで close handler が抜ける
+- **メニュー Quit を `role: 'quit'` から click handler に**: `role: 'quit'` は内部で `app.quit()` を呼ぶが、これは `before-quit` 経由で各ウィンドウに `close` を送る → close handler が hide に化けて quit が止まる事故。click → `actuallyQuit()` で確実に抜ける
+- **`before-quit` で `isQuitting = true`**: タスクトレイ右クリック「終了」が走った時の保険。`actuallyQuit()` は `isQuitting=true` 設定済だが、外部経路(macOS の Cmd+Q 等)を考えるとここでも立てておく
+- **シングルインスタンス**: `requestSingleInstanceLock()` を **モジュールトップレベル** で呼ぶ。`app.whenReady()` 内に置くとタイミング依存になるため、最早タイミングで判定 + quit。`second-instance` イベントで既存ウィンドウを surface
+
+### Windows 自動起動(`loginItemSettings`)
+
+- Electron の `app.setLoginItemSettings({ openAtLogin, args })` で Windows のスタートアップ登録/解除
+- `args: ['--minimized']` でブートランチ時の引数を制御。process.argv で受け取って `mainWindow.hide()`
+- 適用タイミング: boot 時(`app.whenReady` で `applyLoginItemSettings(cfg)`)+ 設定変更時(`settings:save` IPC が saveConfig 後に呼ぶ)。idempotent なので頻繁な呼び出しは無問題
+- `startMinimized` は `startOnBoot` ON 時のみ有効化(checkbox の disabled 制御 + UI 文言で明示)
+
+### タスクトレイのインフラ
+
+- `src/main/tray.ts` 新規。シングルトン `tray: Tray | null`
+- アイコン 2 種類(プレースホルダ生成):
+  - `resources/tray-icon.png`(32×32、青背景 + 白「JC」) — 通常状態
+  - `resources/tray-icon-live.png`(同 + 右上の赤ドット) — 配信中状態
+  - PowerShell `System.Drawing` で生成。配布段階で正式デザインに差し替える前提
+  - `package.json` の `extraResources` に登録 → packaged build にも同梱
+- 左クリック: ウィンドウの toggle visibility(Twitch / Discord / 1Password と同様の idiom)
+- 右クリックメニュー: 「jikkyou-cut を開く」「登録チャンネル を開く」(ショートカット導線) /「配信監視: ●」(disabled、informational) /「終了」
+- 「登録チャンネル を開く」: ウィンドウを show → 次 tick で renderer に `menu:openMonitoredCreators` 送信(直送だと hide → show のレースで React hydration と衝突)
+- 配信中インジケータ: tooltip(`jikkyou-cut(N 人配信中)`)+ アイコン swap + メニュー label。`StreamMonitor` が in-process subscriber として tray を呼び出す
+
+### `StreamMonitor.subscribeStatus()` 追加
+
+- 段階 X2 では status 通知は IPC のみだった
+- 段階 X3.5 で tray が in-process で同じ status を欲しがる → IPC は self-loop でナンセンス
+- `subscribeStatus(listener)` 追加: in-process listener を Set で管理、`send('streamMonitor:status', payload)` 内で IPC + listeners 両方に流す
+- subscribe 時に `getStatus()` を即時 push → 新規 subscriber が次 poll を待たずに最新状態を見られる
+
+### 影響ファイル
+
+- `src/common/config.ts`(`closeToTray` / `startOnBoot` / `startMinimized` フィールド + DEFAULT)
+- `src/main/config.ts`(load/save round-trip)
+- `src/main/tray.ts`(新規、約 160 行)
+- `src/main/streamMonitor/index.ts`(`subscribeStatus()` + `statusListeners` Set + `send` で in-process フォーク)
+- `src/main/menu.ts`(`buildMenu` シグネチャ変更: `{ getMainWindow, onQuit }`、`role: 'quit'` → click handler)
+- `src/main/index.ts`(`isQuitting` / `launchedMinimized` / `cachedCloseToTray` 状態 + `showMainWindow` / `actuallyQuit` / `applyLoginItemSettings` ヘルパ + close handler + single-instance lock + second-instance handler + tray creation + tray live-count subscription + before-quit + will-quit)
+- `src/renderer/src/components/SettingsDialog.tsx`(一般タブにタスクトレイ + PC 起動時の checkbox 3 個 + ヒント文)
+- `package.json`(`extraResources` に tray-icon 2 ファイル追加)
+- `resources/tray-icon.png`(新規、378 bytes)
+- `resources/tray-icon-live.png`(新規、570 bytes)
+
+### 観察すべき点
+
+- **BrowserWindow ライフサイクル**: window-all-closed が発火しなくなる(close → hide で window はずっと存在)。`isQuitting` ガードを忘れると Linux / 非トレイ環境でアプリが終了しなくなる
+- **Renderer のバックグラウンド挙動**: hide されたウィンドウの renderer は React 自体は生きているが、`requestAnimationFrame` は paused される。段階 X3 で録画 UI を出すなら、進捗表示が止まる現象が出るかもしれない。録画進捗は main → IPC pull モデルで作る方針で OK
+- **multi-monitor / DPI**: 32×32 のアイコンは標準 DPI 想定。HiDPI モニタでぼやける可能性 → 配布前に 16/32/48px の multi-resolution `.ico` 生成検討
+- **トレイバルーン通知**: Windows 10/11 ではモダントーストに置き換わる過渡期で、`displayBalloon` は内部で適切に shim されるが、グループポリシーで通知禁止されている環境では失敗する。失敗は cosmetic のみ
+- **autorun + 多重起動**: Windows で「スタートアップ + 既起動チェック」を組み合わせた時、PC 起動時に jikkyou-cut が `--minimized` で起動 → ユーザがデスクトップから手動でショートカットダブルクリック → second-instance 検知 → 既存(隠れてる)ウィンドウを show。実機検証推奨
+- **段階 X3 への接続**: 録画機能は背景動作を前提に設計可能。`streamMonitor:started` イベント受信 → main で yt-dlp 起動 → 録画完了で `streamMonitor:recording-done` を tray + UI に通知、というフローが綺麗に組める
+
+---
+
+## 2026-05-03 - 配信検知ポーリング機構(段階 X2/X4)
+
+- 誰が: Claude Code(Opus 4.7)
+- 何を: 段階 X1 完成版で登録した配信者を **1 分間隔で定期チェック** し、配信開始 / 終了を検知する機構を実装。**録画は段階 X3、トースト通知は段階 X4 のため本タスクではしない**。最低限の UI フィードバック(登録チャンネル画面の配信中バッジ + メイン画面のフローティング指示)は入れた
+- 機能シリーズ全体像(更新):
+  | 段階 | 内容 | 状態 |
+  |---|---|---|
+  | X1 | Twitch + YouTube 配信者登録 UI | ✅ 2026-05-03 |
+  | X2 | 配信検知ポーリング(本タスク、Twitch + YouTube、1 分間隔、配信開始/終了イベント発火) | ✅ 2026-05-03 |
+  | X3 | 配信開始 → yt-dlp 起動連携(録画本体) | 🔜 次タスク |
+  | X4 | 録画完了通知 + ファイル管理 | 未着手 |
+  | X5 | YouTube ライブ検知精度向上(scheduledStartTime 活用、ライブ予定リマインド) | 未着手 |
+
+### 設計判断
+
+- **ポーリング間隔 = 1 分(`POLL_INTERVAL_MS = 60_000`)**: spec 通り。Twitch のレート制限(800 req/min)からは桁違いに余裕。YouTube は quota がボトルネックなので RSS 経由で削減
+- **多重実行防止**: `inflight` フラグ。スリープ復帰直後など、setInterval がバーストで発火しても次の tick まで早期 return
+- **状態は in-memory Map**: `Map<'platform:id', LiveStreamInfo>`。プロセス再起動で消えるが、再 poll で 1 分以内に再構築されるので永続化不要(spec 準拠)
+- **イベント発火タイミング**: 各 poll の最後に「前回 set との差分」を計算して `streamMonitor:started` / `streamMonitor:ended` を発火。`streamMonitor:status` は **毎 poll 必ず** 発火(UI 上の last-poll タイムスタンプを更新するため)
+- **detectedAt の不変性**: ポーリングを跨いで配信中状態が継続している場合、`detectedAt` は最初に検知した時刻のまま据え置く(UI で「X 分前から配信中」を計算するため、tick 毎に更新したらカウントがリセットしてしまう)
+
+### YouTube quota 戦略 — RSS feed が主役
+
+`search.list?eventType=live` (100 quota / channel / poll) は単純に高すぎるので採用せず。代わりに:
+
+1. **RSS feed**(`https://www.youtube.com/feeds/videos.xml?channel_id=UCxxx`)で channel の最近 15 件動画 ID を取得 — **0 quota**(API key 不要、公開 XML)
+2. 上位 5 件を `videos.list?part=liveStreamingDetails`(1 quota / 50 ids batched)に投げて、`actualStartTime` あって `actualEndTime` 無いものが live
+3. 1 channel あたり: RSS 0 quota + videos.list 1 quota = **1 quota**
+
+**比較**:
+| 方式 | 1 channel 1 poll | 10 channel × 1440 poll/day | 必要 key 数(10K/key/day) |
+|---|---|---|---|
+| `search.list` 方式 | 100 quota | 1,440,000 quota/day | **144 個** |
+| RSS + `videos.list` 方式 | 1 quota | 14,400 quota/day | **2 個** |
+
+RSS パースは正規表現で `<yt:videoId>([A-Za-z0-9_-]{11})</yt:videoId>` を grep。xml2js 等のフルパーサは過剰なので不採用。フィードフォーマット変更で破綻したら `[stream-monitor] youtube RSS fetch failed` ログで気付く
+
+### 信頼性のトレードオフ
+
+- **RSS のラグ**: 配信開始から RSS 反映まで数秒〜十数秒。1 分間隔 poll なら無視できるレベル
+- **Premiere の扱い**: feed には載るが `actualStartTime` が空の状態で予約。実際にライブ化してから `actualStartTime` が埋まる → 正しく live として検知される
+- **検知漏れの可能性**: 短時間配信(5 分以内)が poll 間隔の谷に挟まると見逃す。これは段階 X3 の録画機能には致命的でないが、段階 X4 で「気付いたら録画開始」体験を高めるなら間隔短縮 or EventSub への移行検討
+
+### 配置
+
+- `src/main/streamMonitor/index.ts` — `StreamMonitor` クラス + シングルトン export。ポーリングループ + 状態管理 + IPC 通知
+- `src/main/streamMonitor/twitchPoll.ts` — `pollTwitchUsers(clientId, secret, userIds)` の薄いラッパ。エラーは log + 空 Map で吸収
+- `src/main/streamMonitor/youtubePoll.ts` — RSS fetch + parse + `videos.list` ハンドリング。チャンネル毎の RSS フェイルは個別吸収(他のチャンネルは続行)
+- `src/main/twitchHelix.ts` — 既存の `getStreamStatus`(単一 user_id)に加えて `getLiveStreams(userIds)`(配列、最大 100 ids/req batch)を追加
+- `src/main/dataCollection/youtubeApi.ts` — `fetchVideoLiveDetails(videoIds)`(videos.list?part=liveStreamingDetails、最大 50 ids/req batch、1 quota)追加
+
+### IPC
+
+`window.api.streamMonitor`:
+- `getStatus()` — 現在の `{ enabled, isRunning, lastPollAt, nextPollAt, liveStreams[] }`
+- `setEnabled(enabled)` — toggle、`saveConfig({ streamMonitorEnabled })` + `start()`/`stop()` + 即時 status 返却
+- `pollNow()` — 手動再 poll(UI の「今すぐ」ボタン用)
+- `onStatus(cb)` / `onStreamStarted(cb)` / `onStreamEnded(cb)` — イベント subscribe(unsubscribe を返す)
+
+### UI
+
+- **登録チャンネル画面** に `MonitorStatusBar` セクション追加(画面トップ): 監視 ON/OFF チェックボックス + 「最終チェック: N 分前 / 次回: N 分後」ラベル + 「今すぐ」ボタン + 配信中人数表示
+- **`RegisteredRow`** に `liveStream` prop 追加: 配信中の場合、配信タイトル(リンク化、外部ブラウザで開く)+ 「配信中(N 分前から)」赤バッジ表示。サブテキストは配信中時 → 配信タイトル / 非配信時 → handle/login
+- **App.tsx に floating 指示子**: `liveCount > 0` のとき右上に固定の「N 人配信中」ピル状ボタン。クリックで登録チャンネル画面に飛ぶ。`monitored-creators` / `api-management` phase は早期 return で除外、編集系 phase(load / clip-select / edit)でのみ表示
+- 60 秒 tick で「N 分前」表示を更新(再 poll を待たずに UI を進ませる)
+
+### AppConfig
+
+- `streamMonitorEnabled: boolean`(default `false`)
+- データ収集と同じ「永続マスタースイッチ」パターン: 起動時に `streamMonitorEnabled === true` ならポーリング自動開始
+- `monitoredCreators[].enabled` は **per-creator のフィルタ**(段階 X1 で予約済)。`streamMonitorEnabled` がマスター、`creator.enabled` が個別。両方 `true` でないと poll 対象外
+
+### エラー処理
+
+- Twitch credentials 未設定: 起動時に `[stream-monitor] twitch creators registered but credentials not set` 警告 → Twitch 分岐スキップ、YouTube 分岐は続行
+- Twitch 401(token 期限): `helixGetWithRefresh` が内部 retry-once、二回目も 401 なら helix 側でエラー throw → twitchPoll が log + 空 Map で吸収 → 全体は継続
+- Twitch 429: `helixGet` のリトライループで 5s × 3 retry、超えたら同上
+- YouTube RSS タイムアウト(8s): channel 毎にスキップ、他は継続
+- YouTube quota 超過: `callApi` が key を `markDailyDisabled` → 残 key でローテーション、全部 disable なら null 返却 → live 取得失敗、その channel はスキップ
+- ネットワーク全体失敗: `poll()` の `try/catch` で吸収、次の interval で再試行
+
+### 影響ファイル
+
+- `src/common/config.ts`(`streamMonitorEnabled` フィールド + DEFAULT)
+- `src/common/types.ts`(`LiveStreamInfo` / `StreamMonitorStatus` 型 + IpcApi に `streamMonitor` namespace)
+- `src/main/config.ts`(`streamMonitorEnabled` の load/save round-trip)
+- `src/main/twitchHelix.ts`(`getLiveStreams` バッチ + `TwitchLiveStream` 型)
+- `src/main/dataCollection/youtubeApi.ts`(`fetchVideoLiveDetails` + `VideoLiveDetail` 型)
+- `src/main/streamMonitor/index.ts`(新規、`StreamMonitor` クラス、約 200 行)
+- `src/main/streamMonitor/twitchPoll.ts`(新規、薄いラッパ)
+- `src/main/streamMonitor/youtubePoll.ts`(新規、RSS パース + `videos.list` 呼び出し)
+- `src/main/index.ts`(`streamMonitor` import + `attachWindow` + IPC 3 handler + autostart)
+- `src/preload/index.ts`(`streamMonitor` namespace expose + イベントリスナー)
+- `src/renderer/src/components/MonitoredCreatorsView.tsx`(`MonitorStatusBar` + `LiveBadge` + `liveByKey` map + 60s tick)
+- `src/renderer/src/App.tsx`(global live-count subscription + floating indicator)
+
+### 観察すべき点
+
+- **YouTube quota の実測**: 配信者数 × 1440 poll/day × ~1 quota/poll = N 日のキー消費。段階 X3 で録画頻度高めると視聴者数が増えてサムネ更新も増えるかも。実機で 1 週間 quota ログを観測したい
+- **RSS パース崩壊**: YouTube が atom feed フォーマット変えたら `<yt:videoId>` regex が外れる。検出方法: `[stream-monitor] poll done` で 0 件しか出ない状態が連続 → ログ確認
+- **配信中状態の永続化**: 再起動で消えるので、再起動直後の 1 分間は「誰も live じゃない」表示になる。spec 準拠だが UX で気になるなら lastPollAt + liveStreams を userData に書く案あり(将来 TODO)
+- **floating indicator の被り**: 編集 phase で右上にあるボタン群と重なる可能性。`top: 8, right: 12` で位置調整したが、ヘッダ右側のボタンと衝突したら z-index / 配置見直し
+- **multiple windows のサポート**: `attachWindow` が 1 ウィンドウしか覚えない。macOS で `Cmd+N` 等で複数ウィンドウ開かれた場合、最後に open したウィンドウだけにイベントが届く。本アプリは single-window 前提なので OK
+- **段階 X3 の準備状況**: `LiveStreamInfo.url` が録画 URL として使える(Twitch は `https://www.twitch.tv/<login>` で live を yt-dlp に渡せる、YouTube は `https://www.youtube.com/watch?v=<videoId>` で OK)。`videoId` / `streamId` も保持しているので X3 の録画スクリプト書きやすい
+
+---
+
+## 2026-05-03 - 段階 X1 完成版: 登録チャンネル画面 + Gemini 検索 + YouTube 両対応
+
+- 誰が: Claude Code(Opus 4.7)
+- 何を: 段階 X1 初版で「設定 → 配信者管理タブ」「Twitch のみ」「ログイン名直接検索」だった構造を、ユーザの新ビジョンに沿って大幅に作り直した:
+  1. 設定ダイアログのタブから **メイン画面のメニュー(登録チャンネル)経由の全画面ビュー** に移動
+  2. Twitch-only から **YouTube + Twitch 両対応** に拡張
+  3. ログイン名直接検索ではなく、**Gemini に日本語名で問い合わせ → 各プラットフォームの API でプロフィール解決** の 2 段階フロー
+  4. 「追加」前に **必ず確認ダイアログ**(誤登録防止)
+- 経緯:
+  - 段階 X1 の初版を実装した直後、ユーザから「設定画面の中に隠れているのは導線として弱い」「最終的に YouTube も対象にしたい」「ログイン名なんて覚えてられない、表示名で検索したい」というフィードバック
+  - 録画機能(段階 X3)のメイン画面導線として全画面ビューが自然
+  - Gemini 経由にすると VTuber / 配信者の表示名 ↔ プラットフォーム ID のマッピング知識を活用できる(2.5-flash モデルの一般知識で十分)
+- 機能シリーズ全体像(変更なし):
+  | 段階 | 内容 | 状態 |
+  |---|---|---|
+  | X1 | Twitch + YouTube 配信者登録 UI(本タスクで完成) | ✅ |
+  | X2 | 配信検知ポーリング | 🔜 次タスク |
+  | X3 | yt-dlp 起動連携(録画本体) | 未着手 |
+  | X4 | 録画完了通知 + ファイル管理 | 未着手 |
+  | X5 | YouTube ライブ検知の Live Streaming API 実装 | 未着手(段階 X1 完成版で型は既に YouTube 対応済) |
+
+### 実装内容
+
+- **Gemini 検索アプローチ**:
+  - `src/main/gemini.ts` に `generateTextWithRotation(prompt)` 追加 — Files API を使わない純テキスト generateContent 呼び出し、`responseMimeType: 'application/json'` 強制、既存の `GeminiKeyRotator` を再利用(401/403 → 24h mute、429/5xx → 60s mute)
+  - `src/main/creatorSearch.ts` 新規 — Gemini プロンプト + Twitch/YouTube プロフィール解決
+  - プロンプト: 「VTuber / 配信者の知識データベースとして、YouTube と Twitch の handle / login と confidence を JSON で返せ」
+  - confidence は `'high' | 'medium' | 'low'` の 3 段階、UI で `'low'` を「不確実(要確認)」バッジ表示 + 確認ダイアログでも警告強調
+  - `stripFences` ヘルパで code-fence 付きで返ってきた場合のフォールバック(responseMimeType 指定でも稀に fence 付きで返す)
+- **YouTube プロフィール解決の cheap-first ordering**:
+  - `src/main/dataCollection/youtubeApi.ts` に `getChannelByHandle(@xxx)` / `getChannelById(UCxxx)` 追加(各 1 unit)
+  - `creatorSearch.fetchYouTubeProfile` のロジック:
+    1. handle 指定あり → `channels.list?forHandle=` を 1 unit で試す
+    2. 失敗 → `searchChannelByName(query)` を 100 unit で(段階 X1 既存)
+    3. ヒット → `channels.list?id=` を 1 unit で thumbnail 含む詳細取得
+    4. 全 fail → null
+  - 50 キーローテーション機構をそのまま再利用、quota は SQLite に per-key/per-day 記録される既存メカ
+- **MonitoredCreator 型のマイグレーション**:
+  - 旧(段階 X1 初版): `{ platform: 'twitch'; userId; login; ... }`
+  - 新: discriminated union `'twitch'` / `'youtube'`
+    - Twitch: `twitchUserId` / `twitchLogin`
+    - YouTube: `youtubeChannelId` / `youtubeHandle`
+  - load 時に **旧フィールド名(`userId`/`login`)も認識** して新フィールド名(`twitchUserId`/`twitchLogin`)に翻訳。次回 save で自動的に新形式で書き直される
+  - 共通フィールド: `platform`、`displayName`、`profileImageUrl`、`addedAt`、`enabled`
+  - `monitoredCreatorKey(c)` ヘルパで platform-stable id を取得(IPC remove/setEnabled の key)
+  - **同一人物が両プラに居る場合、別エントリとして登録**(段階 X3 で異なる URL から録画するため)
+- **画面遷移**:
+  - `EditorPhase` に `'monitored-creators'` 追加、`RestorablePhase` から除外(swap-in phase なので previousPhase に積まれない)
+  - `openMonitoredCreators` / `closeMonitoredCreators` アクションを `editorStore` に追加 — `openApiManagement` / `closeApiManagement` と完全同形
+  - 両 swap-in phase 間の相互遷移は **早期 return で禁止**(`previousPhase` の不変条件を壊さないため)
+  - メニュー: `登録チャンネル`(`Ctrl+Shift+M`)→ IPC `menu:openMonitoredCreators` → store action 経由で phase swap
+- **IPC 再編**:
+  - 削除: `twitch:searchUserByLogin`、`twitch:listMonitoredCreators`、`twitch:addMonitoredCreator`、`twitch:removeMonitoredCreator`、`twitch:setCreatorEnabled`(段階 X1 初版)
+  - 残存: `twitch:getClientCredentials`、`setClientCredentials`、`clearClientCredentials`、`testCredentials`(認証管理)
+  - 新規: `creatorSearch:askGemini`、`fetchTwitchProfile`、`fetchYouTubeProfile`、`monitoredCreators:list`、`add`、`remove`、`setEnabled`
+  - 設定 IPC は **monitoredCreators の add/remove/setEnabled の 3 操作だけ** で済む(`add` は idempotent: 既存 entry は `addedAt`/`enabled` 保持しつつ in-place 置換)
+- **UI 構造**:
+  - `MonitoredCreatorsView.tsx`(新規)— 全画面、3 セクション(検索 / 検索結果カードグリッド / 登録済みリスト)
+  - 検索結果カード: アイコン + 表示名 + handle/login + プラットフォームタグ(色分け) + 「追加」ボタン(既登録なら disabled「登録済み」)
+  - 確認ダイアログ: backdrop クリックでキャンセル、`stopPropagation()` で内部クリックは閉じない、low confidence 時は警告バナー追加
+  - 登録済み行: アイコン + 表示名 + handle/login + プラタグ + 監視中チェックボックス(段階 X2 用) + 削除ボタン(`window.confirm` 経由)
+- **設定ダイアログのタブ再編**:
+  - 旧: `general` / `download` / `creators`(段階 X1 初版)
+  - 新: `general` / `download` / `twitch-auth`
+  - `creators` タブ → 全画面 `MonitoredCreatorsView` に移動
+  - `twitch-auth` タブは旧 `CreatorManagementTab` の認証セクションだけを抽出した `TwitchAuthTab.tsx`(新規)
+  - 旧 `CreatorManagementTab.tsx` 削除
+  - `general` タブの「配信者の自動録画」説明文を「メニュー → 登録チャンネル」へ誘導するように更新
+
+### 不採用案
+
+- 確認ダイアログをスキップするオプション → 「誤登録防止」明示要件、UX 高速化より安全性優先
+- 検索履歴 / お気に入り → 過剰実装、登録は数十件規模なので不要
+- マイグレーション失敗時の rollback → 壊れたら手動で config.json 削除、復元価値より複雑度コスト
+- 検索候補のサジェスト → Gemini 1 回で済むので不要
+- Gemini-2.5-flash 以外のモデル指定 → 既存の MODEL 定数を流用、用途特化しない
+
+### 影響ファイル
+
+- `src/common/config.ts`(MonitoredCreator → discriminated union、`monitoredCreatorKey` ヘルパ)
+- `src/common/types.ts`(IpcApi に `creatorSearch` / `monitoredCreators` namespace、`onMenuOpenMonitoredCreators` 追加、旧 twitch namespace 削減)
+- `src/main/config.ts`(`normaliseMonitoredCreators` でレガシー Twitch shape を新形式に翻訳)
+- `src/main/menu.ts`(「登録チャンネル」エントリ追加)
+- `src/main/gemini.ts`(`generateTextWithRotation` 追加)
+- `src/main/dataCollection/youtubeApi.ts`(`getChannelByHandle` / `getChannelById` 追加)
+- `src/main/creatorSearch.ts`(新規)
+- `src/main/index.ts`(IPC 再編 — 旧 twitch:list/add/remove/setEnabled 削除、新 creatorSearch / monitoredCreators IPC 追加、`monitoredCreatorKey` import)
+- `src/preload/index.ts`(creatorSearch / monitoredCreators namespace expose、onMenuOpenMonitoredCreators)
+- `src/renderer/src/store/editorStore.ts`(monitored-creators phase + openMonitoredCreators / closeMonitoredCreators)
+- `src/renderer/src/App.tsx`(monitored-creators phase の早期 return + menu listener + import)
+- `src/renderer/src/components/MonitoredCreatorsView.tsx`(新規、約 380 行)
+- `src/renderer/src/components/MonitoredCreatorsView.module.css`(新規)
+- `src/renderer/src/components/TwitchAuthTab.tsx`(新規、旧 CreatorManagementTab の auth セクション抽出)
+- `src/renderer/src/components/SettingsDialog.tsx`(creators タブ → twitch-auth タブ、CreatorManagementTab → TwitchAuthTab import)
+- `src/renderer/src/components/CreatorManagementTab.tsx`(削除)
+
+### 観察すべき点
+
+- **Gemini の精度**: 2.5-flash の VTuber 知識カバレッジ。小規模 / 新人配信者は `confidence='low'` か null になる可能性。実機で「柊ツルギ」「葛葉」「加藤純一」など主要配信者で当てて、精度を計測
+- **YouTube quota**: cheap-first ordering(handle が当たれば 1 unit、外れたら 100+1 unit)の効果測定。検索フォーム連打されても 50 keys × 10K/day で大丈夫だが、handle が常に外れるケース(マイナーな配信者多用)で quota 食う可能性あり
+- **Twitch Client Credentials の token キャッシュ**: 段階 X1 初版で実装した token キャッシュが `creatorSearch.fetchTwitchProfile` でも効くこと(同じ `searchUserByLogin` を呼んでいる)。複数連続検索でトークン取り直し発生しないことを実機で確認
+- **マイグレーション動作**: 段階 X1 初版で Twitch 配信者を登録していたユーザの config.json が、新形式で読み込まれて再保存されること。レガシーフィールド `userId`/`login` が次回 save で消えること
+- **Gemini API キー未設定時**: `generateTextWithRotation` が `'Gemini API キーが未設定です'` を throw → UI で `error` ステータス表示。API 管理画面への誘導はまだ無い(将来 TODO)
+- **YouTube API キー未設定時**: `searchChannelByName` / `getChannelByHandle` が null を返す → 検索結果に YouTube カードが出ない。ユーザが「あれ?」となる可能性、API 管理画面への誘導文言を将来 UX 改善
+- **handle の正規化**: `@` プレフィックスの有無を `normaliseHandle` で吸収しているが、Gemini が `@` 抜きで返してきた場合は自動で `@` 補完される
+
+---
+
+## 2026-05-03 - 配信者自動録画機能シリーズ 段階 X1: Helix クライアント + 配信者登録 UI
+
+- 誰が: Claude Code(Opus 4.7)
+- 何を: 新機能シリーズ(Twitch 配信者を登録 → 配信開始検知 → 自動録画 → 通知)の **段階 X1 のみ**。 Helix API クライアント実装 + 配信者登録 UI まで。**録画機能は段階 X3、ポーリングは段階 X2、通知は段階 X4** で別タスク化
+- 機能シリーズの全体像:
+  | 段階 | 内容 | 状態 |
+  |---|---|---|
+  | X1 | Twitch Helix クライアント + 配信者登録 UI | ✅ 本タスク |
+  | X2 | 配信検知ポーリング(`getStreamStatus` 定期呼出) | 未着手 |
+  | X3 | 配信開始検知 → yt-dlp 起動連携(録画本体) | 未着手 |
+  | X4 | 録画完了通知 + ファイル管理 | 未着手 |
+  | X5 | YouTube 対応(`MonitoredCreator.platform = 'youtube'` 拡張) | 未着手 |
+- 実装内容:
+  - **新規 `src/main/twitchHelix.ts`**(約 270 行):
+    - **Client Credentials flow** で OAuth token 取得(`https://id.twitch.tv/oauth2/token`、grant_type=client_credentials)。app token なので scope なし、read-only 公開エンドポイント(helix/users / helix/streams)用
+    - メモリトークンキャッシュ + fingerprint(`clientId.length:clientId:secret.length`)で credentials 切替を検知
+    - 並行リクエストの dedupe(`inflightToken` プロミス共有)
+    - **expiresAt - 60s 余裕** で proactive refresh、401 で自動 retry-once + キャッシュクリア
+    - `searchUserByLogin(login)` — `helix/users?login=X`、見つからなければ null(throw しない、UI で「ユーザが見つかりません」表示)
+    - `getStreamStatus(userId)` — `helix/streams?user_id=X`、empty data[] = `{ isLive: false }` で正規化(段階 X2 が使う、本タスクでは「認証テスト」の代替として役に立つ予定だが今は未使用)
+    - 429 rate limit は 5s × 3 retry、404 / 401 / 403 / network error は別文言で throw
+    - 各 fetch に 10s timeout(AbortController)
+  - **secureStorage に Twitch スロット追加**:
+    - `userData/twitchClientSecret.bin`(DPAPI 暗号化)
+    - 既存 Gladia / Anthropic / YouTube / Gemini と同じ `saveAt`/`loadAt`/`deleteAt`/`existsAt` パターン
+    - **renderer に生 Secret を返す API は無い**(`hasTwitchSecret` で presence のみ返す)
+  - **AppConfig 拡張**:
+    - `twitchClientId: string \| null`(平文、公開情報)
+    - `monitoredCreators: MonitoredCreator[]`(配信者リスト)
+    - 新型 `MonitoredCreator { platform: 'twitch'; userId; login; displayName; profileImageUrl; addedAt; enabled; }` を `src/common/config.ts` に追加。platform は段階 X5 で `'youtube'` 拡張予定の discriminator
+    - load/save round-trip + `normaliseMonitoredCreators` でドロップ malformed エントリ + dedup userId
+    - DEFAULT_CONFIG に追加(既存ユーザは config.json マイグレーションで `[]` フォールバック)
+  - **IPC**: `window.api.twitch.{getClientCredentials, setClientCredentials, clearClientCredentials, testCredentials, searchUserByLogin, listMonitoredCreators, addMonitoredCreator, removeMonitoredCreator, setCreatorEnabled}`
+    - `setClientCredentials` は plaintext で受け取り即座に save → cache クリア(古い token を破棄)
+    - `addMonitoredCreator` は idempotent(同じ userId は in-place 置換、`addedAt`/`enabled` 保持)
+    - 各 mutation 系は更新後の配列を返す(renderer 側の round-trip を 1 IPC で済ませるため)
+  - **SettingsDialog タブ化**:
+    - **3 タブ構造**: 「一般」「動画ダウンロード」「配信者管理」
+    - 「一般」: 既存 API 管理画面への hand-off + 配信者自動録画機能の説明文(X1 段階)
+    - 「動画ダウンロード」: 段階 6c-d で追加した cookies / browser 設定をそのまま移動
+    - 「配信者管理」: 新コンポーネント `CreatorManagementTab.tsx`(認証 + 検索 + リスト)
+    - タブ stripe の CSS は `SettingsDialog.module.css` に minimal 追加(横並び、active 時 border-bottom + accent color)
+  - **`CreatorManagementTab.tsx`**(新規、約 360 行):
+    - **Section 1**: Client ID / Secret 入力。Secret は `type="password"` + `autoComplete="new-password"` + 「変更する場合のみ入力」プレースホルダ。`hasSecret` で「✓ 設定済み / ⚠ 未設定」表示。保存後に Secret 入力欄を即座にクリア(肩越し閲覧 / paste-into-screenshot 事故防止)
+    - **Section 2**: ログイン名で検索 → ユーザカードプレビュー(アイコン + 表示名 + login + id) → 「追加」ボタン → リスト反映。Enter キーで検索発火
+    - **Section 3**: 配信者カードリスト。アイコン + 表示名 + login + 登録日 + 「監視中」チェックボックス(段階 X2 のフラグ)+ 削除ボタン(`window.confirm` 経由)
+    - 認証テストは「認証テスト」ボタンで `getAccessToken` を試行 → 「✓ 認証成功」or「⚠ 認証失敗:<エラー>」
+- 経緯:
+  - IDEAS.md の「配信アーカイブ → 自動動画化」の最初の一歩。録画機能は最終ゴールだが、まずは「配信者を登録できる、永続化される、リスト表示される」までで凍結
+  - Webhook / EventSub は将来 TODO(段階 X4 以降で検討)。Client Credentials のみで十分な範囲を 段階 X1 の境界線とした
+- 不採用案:
+  - User Token / OAuth Authorization Code → 不要(X1-X4 は全 read-only 公開エンドポイント)
+  - Webhook / EventSub → 公開 endpoint 必須でデスクトップアプリでは複雑。代わりに段階 X2 で polling
+  - Client Secret の暗号化以外の保護(HSM 連携等)→ 過剰
+  - 配信者のサムネイル定期更新 → 将来 TODO、頻繁に変わらないので登録時 1 回だけ
+  - 認証エラーの自動リカバリ → 401 時の token refresh 1 回のみ、それ以上はユーザに対応を委ねる
+- 影響ファイル:
+  - `src/common/config.ts`(`MonitoredCreator` + AppConfig 2 フィールド + DEFAULT)
+  - `src/common/types.ts`(`twitch` IPC namespace + MonitoredCreator import)
+  - `src/main/config.ts`(`normaliseMonitoredCreators` + load/save round-trip)
+  - `src/main/secureStorage.ts`(`saveTwitchSecret` 等 4 関数)
+  - `src/main/twitchHelix.ts`(新規)
+  - `src/main/index.ts`(twitch:* IPC handler 9 個 + import)
+  - `src/preload/index.ts`(`twitch` namespace expose)
+  - `src/renderer/src/components/CreatorManagementTab.tsx`(新規)
+  - `src/renderer/src/components/SettingsDialog.tsx`(タブ構造 + activeTab state + body 条件分岐)
+  - `src/renderer/src/components/SettingsDialog.module.css`(`.tabStrip` / `.tabButton` / `.tabButtonActive` 追加)
+- 観察すべき点:
+  - **rate limit**: 800 points/min(app token)で十分余裕、UI 操作だけでは届かない。段階 X2 の polling で配信者数 × 頻度がボーダー(50 配信者を 1 分毎なら 50/min、安全圏)
+  - **token 期限切れ**: ~60 日で自動取得し直す(`expiresAt - 60s` で proactive refresh)。401 が来たら 1 回だけ refresh + retry、それでも 401 なら credentials 不正
+  - **既存ユーザの影響**: `monitoredCreators` field が無い古い config.json は `[]` フォールバック、`twitchClientId` も `null` フォールバック。既存挙動と bit-identical
+  - **Client ID が公開情報なのは Twitch developer console の規約**: dev console で「Application 登録 → Client ID 表示 + Client Secret 生成」のフロー、Client ID は OAuth リダイレクト URL に載るため公開前提
+  - **Secret 暗号化保存の限界**: DPAPI なのでアプリと同じユーザ権限で動く別プロセスからは復号可能。攻撃者がアプリと同等権限を取った時点でアプリ全体が危険なので妥当な脅威モデル
+
+---
+
+## 2026-05-03 - Twitch クッキー認証 + 波形低密度プレースホルダ + 自動スクロール race 修正(段階 8)
+
+- 誰が: Claude Code(Opus 4.7)
+- 何を: 段階 7 直後の実機テストで発覚した 3 件のバグを 1 タスクで修正
+  - **Bug A**(Twitch チャット 58 件で打ち切り): Twitch GraphQL の integrity gateway が無認証リクエストを 1-2 ページ目で `failed integrity check` で拒否
+  - **Bug B**(波形グラフが空): 58 件のチャット → ほぼ全 bucket が commentCount=0 → rolling score も全部 0 近似 → 波形は描画されてるが y=100 の平らな線で視認不能
+  - **Bug C**(自動スクロールデフォルト OFF にリグレッション): `useState(true)` のはずなのにデフォルト OFF に見える。programmatic scroll の race condition で初回起動直後に `setAutoScroll(false)` が誤発火してた
+
+### Bug A — Twitch クッキー認証経路追加
+
+- **`twitchGraphQL.ts`**:
+  - `readTwitchCookieHeader(cookiesFile)` 追加。Netscape format を行ごとパースして domain に `twitch.tv` を含むエントリを `name=value; ...` 形式で返す。`#HttpOnly_` プレフィックスのドメインも認識
+  - **セキュリティ**: 値は **絶対にログに出さない**。読み込んだクッキー名(auth-token / persistent / 等)だけログに出す
+  - `fetchPage(vodId, cursor, signal, cookieHeader)` シグネチャに 4 番目の引数追加。`cookieHeader != null` のとき `Cookie:` ヘッダを送る
+  - `fetchTwitchVodChat(vodId, options?)` の `options.cookiesFile` を起動時に 1 度だけ読み、ループ内全 fetch で共有
+  - `errors[]` の文字列が `failed integrity check|integrity` にマッチしたら新ステータス `'integrity'` を返す
+  - integrity 検出時の **クッキー有無で別ログ**:
+    - `cookies=none`: 「Set Twitch cookies in settings to bypass this gate.」
+    - `cookies=set`: 「Cookies may have expired; re-export from the browser and update settings.」
+- **`chatReplay.ts`**: Twitch 経路で `options.cookiesFileTwitch ?? options.cookiesFile` を `fetchTwitchVodChat({ cookiesFile })` に渡す。段階 7 で `cookiesFileTwitch` フィールドを予約していたのを今回実利用化
+- **クッキー browser path は転送しない**: `--cookies-from-browser` は yt-dlp 専用機構(DPAPI / Chrome cookie DB をネイティブ復号する必要)、本コードベースで再実装するのは過剰。ファイル指定経由のみサポート
+
+### Bug B — 波形グラフ低密度プレースホルダ
+
+- **真因確定**: `bucketize` は durationSec / 5 個のバケットを常に生成、空 bucket も保持。`computeRollingScores` も `bucketsPerWindow > buckets.length` 以外で空配列にならない。58 件 → 2076 buckets(2h53m)→ 2052 samples が出るが、ほぼ全 sample で `total=0` → SVG path は y=100 の平らな線(視認不能)
+- 修正: コンポーネント描画時に `messageCount < 10` の判定を入れ、波形 SVG の上に **半透明オーバーレイ** で「コメント密度が不足しています(N 件) Twitch クッキー設定 or 動画 DL 完了後にローカル動画で編集してください」を表示
+- 波形 SVG 自体は引き続き描画(seek-on-click や segment 操作が機能するため)、`pointerEvents: 'none'` でオーバーレイは透明にマウス通過
+- **閾値 10 の根拠**: 4h 配信で ≥10 件あれば rolling score がピーク 1 つは作る。それ以下だと normalisation の母数不足で全 sample が低値
+- **Y 軸スケーリング再設計は不採用**: `s.total` は既に max-normalized なので、コメント数自体が増えれば自然にピークが立つ。少件数時は本質的に「データ不足」なのでプレースホルダで意思を伝える方が正直
+
+### Bug C — 自動スクロール race 修正
+
+- **真因確定**: `useState(true)` は正、checkbox `checked` 連動も正。問題は `handleScroll` の programmatic-scroll detection
+  - 旧設計: `lastProgrammaticScrollTopRef` に **最新の target 1 つだけ** を保持、scroll event の `top` と ±4 px 比較
+  - 失敗ケース: ClipSelectView マウント直後に currentSec が複数回変動 → auto-scroll effect が連発 → ref が 2 つ目の target で上書き → 1 つ目の scroll event 到着時に `Math.abs(actualTop1 - target2) > 4` → user-scroll と誤判定 → `setAutoScroll(false)`
+- 修正: 単一値の ref を **時間窓に変更**。programmatic scroll の直前に `programmaticScrollUntilRef.current = Date.now() + 150ms` を立て、handleScroll は `Date.now() < deadline` の間は user-scroll 判定をスキップ
+- **150ms の根拠**: スクロールイベントは scrollTo 後 1-2 frame 以内に到着。最遅でも 50ms 程度。150ms はバースト 3-4 連発でも全部カバーできて、ユーザの実際のホイール入力に被るほど長くない
+- 旧 `PROGRAMMATIC_SCROLL_TOLERANCE_PX` 定数は撤去
+
+### 影響ファイル
+
+- `src/main/commentAnalysis/twitchGraphQL.ts`(Cookie ヘッダ + integrity ステータス + log差分化)
+- `src/main/commentAnalysis/chatReplay.ts`(Twitch 経路で cookiesFileTwitch ?? cookiesFile を forward)
+- `src/renderer/src/components/CommentAnalysisGraph.tsx`(LOW_DENSITY_THRESHOLD + オーバーレイ JSX)
+- `src/renderer/src/components/LiveCommentFeed.tsx`(`programmaticScrollUntilRef` 時間窓 + `PROGRAMMATIC_SCROLL_TOLERANCE_PX` 撤去)
+
+### 観察すべき点
+
+- **クッキー期限切れ頻度**: ユーザの実機 Twitch ログイン状態がどれくらいで切れるか。`cookies=set` で integrity 失敗したらクッキー再 export を促すログが出る
+- **integrity gateway 仕様変更**: Twitch が `failed integrity check` の文言を変更 or HTTP ステータスベース(403 等)に変えたら検出 regex が外れる。`PersistedQueryNotFound` と同じく ad-hoc な対応窓口が必要
+- **GraphQL に `Client-Integrity` トークン要求が広がった場合**: 現状は cookies で通る前提。仕様が硬化したら proper integrity token 取得実装が必要(yt-dlp 内部実装を参考)
+- **150ms 時間窓の十分性**: 極端な長 layout pass(初回マウント + 大量 messages)で 150ms を超えるかどうか。超えたら `setAutoScroll(false)` 誤発火が再発するので 250ms に拡大検討
+- **波形 LOW_DENSITY_THRESHOLD=10 の妥当性**: コメント 9 件で「不足」表示は厳しすぎ?ユーザのフィードバック次第で 5 や 3 に下げる余地あり
+
+---
+
+## 2026-05-03 - Twitch チャット GraphQL 直接実装 + cookies プラットフォーム別分離(段階 7)
+
+- 誰が: Claude Code(Opus 4.7)
+- 何を: Twitch VOD のチャット取得を yt-dlp `--sub-langs rechat` から **公開 GraphQL 直接 fetch** に変更。同時に cookies.txt をプラットフォーム別 (`ytdlpCookiesFileYoutube` / `ytdlpCookiesFileTwitch`) に分離可能化
+  - **新規ファイル `src/main/commentAnalysis/twitchGraphQL.ts`**:
+    - `fetchTwitchVodChat(vodId)` — `https://gql.twitch.tv/gql` に `Client-ID: kimne78kx3ncx6brgo4mv6wki5h1ko`(yt-dlp も使ってる Twitch 公開クライアント ID)+ persisted query hash `b70a3591ff0f4e0313d126c6a1502d79a1c02baebb288227c582044aa76adf6a` で `VideoCommentsByOffsetOrCursor` を POST。cursor で paging、`hasNextPage=false` or 空 cursor で終了
+    - 600ms throttle / 5s linear backoff / max 3 retry / 5000 page hard cap
+    - 404 = VOD 削除、401/403 = sub-only(将来クッキー対応で解決予定)、`PersistedQueryNotFound` = hash ローテーション(yt-dlp 最新値とすり合わせ要)— いずれも空配列で返す(throw しない)
+    - `cancelTwitchVodChat()` で AbortController + `cancelRequested` フラグ経由のキャンセル
+    - 結果は `ChatMessage[]`(既存型)、page 境界での重複は `timeSec|author|text` キーで dedupe
+  - **`chatReplay.ts` 構造変更**:
+    - `parseTwitchJson` 撤去(rechat フォーマット用、不要に)
+    - `downloadChatJson` を `downloadYouTubeChatJson` にリネーム + YouTube 専用化、内部の if/else platform 分岐を削除、`--sub-langs live_chat` 固定、ファイル拡張子も `.live_chat.json` 固定
+    - `fetchChatReplay` のシグネチャに `cookiesFileYoutube` / `cookiesFileTwitch` 追加。`extractVideoId` の `platform` を見て YouTube は yt-dlp 経路、Twitch は GraphQL 経路にディスパッチ
+    - GraphQL 結果が **0 件のときキャッシュに書かない**(rate limit / hash rotation の transient で stale 「no chat」が永続化するのを防ぐ)。逆に YouTube 経路は 0 件でも `writeCache` する(yt-dlp 0 件 = 確定的、再試行価値なし)
+    - `cancelChatReplay` は両 transport を unconditional cancel
+  - **`AppConfig` 拡張**:
+    - `ytdlpCookiesFileYoutube: string \| null`
+    - `ytdlpCookiesFileTwitch: string \| null`
+    - 既存 `ytdlpCookiesFile` は **汎用フォールバック** として残す
+    - 既存ユーザの config.json は `ytdlpCookiesFile` のみで動く(後方互換)。両プラットフォーム別フィールドが無ければ `null` フォールバック
+  - **`getCookiesArgs` 再設計**:
+    - 旧: `({ cookiesBrowser, cookiesFile })`
+    - 新: `({ cookiesBrowser, cookiesFile, cookiesFileYoutube, cookiesFileTwitch, platform })`
+    - 優先順位: **プラットフォーム別ファイル > 汎用ファイル > ブラウザクッキー > なし**
+    - `classifyUrlPlatform(url)` ヘルパを export。URL から `'youtube' | 'twitch' | 'unknown'` を返す。downloadVideo / downloadAudioOnly / downloadVideoOnly が `args.url` から推定して `platform` を渡す
+  - **SettingsDialog UI**:
+    - 旧: クッキーファイル 1 行
+    - 新: 「汎用(両プラットフォーム)」「YouTube 専用(汎用より優先)」「Twitch 専用(汎用より優先)」の 3 行に分割
+    - `renderCookieRow` 関数で 3 行を構造的に同一に
+    - 各行に独立 missing 警告。dialog open 時に 3 ファイル並列 validate
+- 経緯:
+  - 段階 6d まででユーザの実機 Twitch VOD で `[chat-replay] yt-dlp exited 1: ERROR: Unable to download video subtitles for 'rechat': HTTP Error 404` を確認
+  - yt-dlp の Twitch rechat 抽出器が 2026-05 頃に Twitch 側 deprecation で死んでいた(yt-dlp 自身も内部で GraphQL に乗り換えつつある)
+  - `kimne78kx3ncx6brgo4mv6wki5h1ko` は Twitch 公式 web client ID、`b70a3591...` は `VideoCommentsByOffsetOrCursor` の persisted query hash(両方とも twitch.tv 自体が first-party バンドルで配布している値、無認証で公開 VOD chat 取得可能)
+- なぜプラットフォーム別 cookies を同時に入れたか:
+  - 段階 6c でファイル指定に切り替えた際、cookies.txt が「YouTube 用」と「Twitch 用」を区別せず単一ファイル前提だった
+  - Twitch 経路に YouTube cookies が漏れる(無害だがログがノイジー)+ 将来 Twitch サブスク VOD 認証対応する時に分離されている方が clean
+  - GraphQL 経路は **クッキー不要**(公開 VOD は Client-ID だけで OK、Twitch 専用 cookies は将来サブスク VOD 対応用の予約フィールド)
+- 不採用案:
+  - chat-downloader CLI を別プロセスで呼ぶ → Python 依存追加、UX 悪化
+  - yt-dlp 側にパッチ送る → コミュニティ依存、待ち時間長い
+  - GraphQL hash の自動更新 → yt-dlp ソースのスクレイピング必要、過剰
+  - Twitch ライブチャット取得 → VOD のみ対象、ライブは別タスク
+  - 既存 YouTube 経路の変更 → リスク回避、touch しない
+- セキュリティ配慮:
+  - クッキーファイル中身は依然として読まない・コピーしない・ログに出さない(段階 6c の方針継続)
+  - GraphQL 経路はクッキー渡さない(本タスクでは)。サブスク VOD 対応は future TODO
+- 影響ファイル:
+  - `src/main/commentAnalysis/twitchGraphQL.ts`(新規、約 290 行)
+  - `src/main/commentAnalysis/chatReplay.ts`(`downloadChatJson` → `downloadYouTubeChatJson` リネーム + YouTube 専用化、`parseTwitchJson` 撤去、`fetchChatReplay` ディスパッチ、`cancelChatReplay` 両 transport 対応)
+  - `src/main/commentAnalysis/index.ts`(`AnalyzeCommentsOptions` に cookies 2 種追加)
+  - `src/main/urlDownload.ts`(`getCookiesArgs` リファクタ、`CookiesPlatform` / `classifyUrlPlatform` 追加、3 download 関数のシグネチャに cookies 2 種追加)
+  - `src/main/index.ts`(URL DL × 3 + commentAnalysis IPC で 2 種類の cookies フィールドを config から injection)
+  - `src/common/config.ts`(`ytdlpCookiesFileYoutube` / `ytdlpCookiesFileTwitch` 追加 + DEFAULT)
+  - `src/main/config.ts`(load/save round-trip + `normaliseCookiesPath` ヘルパ抽出)
+  - `src/renderer/src/components/SettingsDialog.tsx`(3 行構成、`renderCookieRow` 関数化)
+- 観察すべき点:
+  - **GraphQL hash の rotation**:`PersistedQueryNotFound` エラーが出たら yt-dlp の最新 hash と sync 要(`twitchGraphQL.ts` の `VIDEO_COMMENTS_QUERY_HASH` 定数を更新)
+  - **rate limit**:600ms throttle で問題なさそうだが Twitch 側の挙動は不安定で、長時間配信(4h+)で 429 連発しないか実機検証要
+  - **paging 速度**:1 page ~100 messages、~1.6s/page → 4h 配信(50K messages)で約 8 分。許容内だが進捗 UI を出してない
+  - **キャッシュ無効化条件**:Twitch GraphQL は 0 件キャッシュしない(rate limit / hash rotation 対策)。挙動が違うので意識しておく
+
+---
+
+## 2026-05-03 - format selector 緩和 + JS runtime 指定(段階 6d)
+
+- 誰が: Claude Code(Opus 4.7)
+- 何を: yt-dlp に `--js-runtimes node` を全経路で渡し、format selector の avc1 / mp4 制約を撤廃して fallback を簡素化
+  - **`--js-runtimes node` を 4 箇所追加**: `downloadVideo` / `downloadAudioOnly` / `downloadVideoOnly`(urlDownload.ts)+ `downloadChatJson`(chatReplay.ts)
+    - Node.js は npm run dev / packaged build 両方で PATH 上に存在する前提(electron-vite が node を起動してる時点で確実)
+    - yt-dlp が PATH 経由で自動検出
+  - **buildFormatSelector を簡素化**:
+    - 旧: `bestvideo[ext=mp4][vcodec^=avc1]<h>+bestaudio[ext=m4a] / bestvideo[ext=mp4][vcodec^=avc1]<h>+bestaudio / bestvideo<h>+bestaudio<h> / best[ext=mp4]<h>/best<h>`(4 段、avc1+m4a 優先)
+    - 新: `bestvideo<h>+bestaudio / best<h> / best`(3 段、コンテナ / コーデック非指定)
+    - 旧 `worst` 経路 `worstvideo[ext=mp4]+worstaudio[ext=m4a]/worstvideo+worstaudio/worst[ext=mp4]/worst` も同形式で簡素化
+  - **downloadAudioOnly の `-f` 緩和**:
+    - 旧: `bestaudio[ext=m4a]/bestaudio`
+    - 新: `bestaudio[ext=m4a]/bestaudio[ext=webm]/bestaudio`(webm/opus を明示候補に)
+  - **friendlyDownloadError 拡張**: 新カテゴリ `(E) format-not-available`(`/Requested format is not available|No suitable formats|format not available/i`)→「利用可能な動画フォーマットが見つかりません。動画が削除・地域制限されているか、yt-dlp のバージョンが古い可能性があります。」
+- 経緯:
+  - 段階 6c でクッキーファイル指定が動いて bot 検出は突破できたが、yt-dlp が次に「Requested format is not available」で落ちた
+  - ユーザの実機で `yt-dlp --list-formats` を実行 → format 自体は存在(140 m4a / 251 opus / 299 1080p60 mp4 等)
+  - stderr に `WARNING: No supported JavaScript runtime could be found.` を確認 → JS runtime 不在で YouTube の nsig / SABR 解決ができず、解決済 format が空集合になっていた
+  - YouTube は近年 JS runtime 必須化(deprecated → 段階的に必須)、PhantomJS / deno / node のいずれかが必要
+- なぜ avc1+mp4 制約を撤廃したか:
+  - 元々の意図: 「Chromium が H.264 + AAC をネイティブ再生」だから avc1+m4a を優先 → Merger は pure remux で済む
+  - 現実: Chromium ~70 以降 MP4+VP9 ネイティブ再生対応、avc1 制約の必要性は低下
+  - JS runtime 不在のときに `bestvideo[ext=mp4][vcodec^=avc1]` の解決失敗 → 第 4 候補の `best[ext=mp4]/best` まで降りて picky になっていた
+  - 制約撤廃 → fallback chain が短くて読みやすい + JS runtime と組み合わせて確実に format 解決成功
+- WebM 出力の影響(`bestvideo<h>+bestaudio` で VP9 を引いた場合):
+  - `--merge-output-format mp4` + `Merger:-c:v copy` で MP4+VP9 になる(Chromium で再生可能)
+  - audio は `-c:a aac -b:a 192k` で AAC 化されるので Chromium 互換維持
+  - audioExtraction.ts は `ffmpeg -i input.* -vn ...` でコンテナ自動判別、webm/m4a/mp4 全部対応
+- 不採用案:
+  - yt-dlp バイナリの更新(段階 1 で最新版確認済み)
+  - deno インストール推奨(node で十分、追加依存を避ける)
+  - format selector を quality 別に複雑分岐(柔軟さで十分カバー)
+  - クッキーローテーション対応(YouTube 側仕様、TODO で将来検討)
+  - WebM → MP4 自動変換(FFmpeg は両対応で不要)
+- 影響ファイル:
+  - `src/main/urlDownload.ts`(`buildFormatSelector` 簡素化、3 関数に `--js-runtimes node` + audio の `-f` 緩和、friendlyDownloadError に (E) 追加)
+  - `src/main/commentAnalysis/chatReplay.ts`(`--js-runtimes node` 追加)
+- 観察すべき点:
+  - WebM 出力が増えた場合の export.ts 互換性(現状 `-c:v copy` で MP4 化、ffmpeg は VP9-in-MP4 を生成するが extra check 推奨)
+  - yt-dlp の警告「The provided YouTube account cookies are no longer valid」が出た場合の挙動(将来 TODO)
+
+---
+
+## 2026-05-03 - cookies.txt ファイル直接指定機能追加(段階 6c)
+
+- 誰が: Claude Code(Opus 4.7)
+- 何を: 段階 6b の `--cookies-from-browser` 統合に加えて、yt-dlp `--cookies <file>` 経路を追加。SettingsDialog の「動画ダウンロード」セクションにファイル選択 UI を追加し、ブラウザクッキーよりも **優先** する設計に
+  - **AppConfig 拡張**: `ytdlpCookiesFile: string | null`(default `null`)
+    - `src/common/config.ts` の DEFAULT 追加
+    - `src/main/config.ts` の load/save で round-trip。空文字列は `null` に正規化、`null` を明示的に保存できる(クリアボタン経由)
+  - **getCookiesArgs を再設計**: シグネチャを `(opts: { cookiesBrowser, cookiesFile })` に変更。優先順位は `cookiesFile (--cookies <path>) > cookiesBrowser (--cookies-from-browser <browser>) > [] (anonymous)`
+  - **新規 IPC**:
+    - `dialog:openCookiesFile` — Electron `showOpenDialog` のラッパ、フィルタは .txt + すべて
+    - `cookiesFile:validate` — `fs.stat` で存在 + サイズ + 拡張子を返す。**ファイル中身は読まない**(セキュリティ)
+  - **SettingsDialog UI**(動画ダウンロード セクション内、ブラウザクッキー使用ラジオの下):
+    - 「またはクッキーファイル(優先度: 高)」ラベル + 現在のパス表示(rtl で末尾ファイル名見える、ホバー title で全パス)+ ファイル選択ボタン + クリアボタン
+    - ファイル選択時に validate を呼んで存在/サイズ/拡張子をチェック → 警告のみ alert、保存はする(spec: 「ファイル指定はクリアしない、ユーザの意図的な事前設定もありうる」)
+    - dialog open 時にも再 validate(ユーザがファイル移動 / 削除した場合に warning 表示)
+    - ヒント文 + 「※ クッキーファイルは認証情報を含みます。第三者と共有しないでください」の警告
+  - **friendlyDownloadError 拡張**:
+    - 新カテゴリ `(D) cookies-file-not-found` を追加(`/cookies file (?:does not exist|not found|cannot be opened)|No such file or directory.*cookies/i`)
+    - 既存 `(C) クッキーロック` メッセージに「クッキーファイル指定もご検討ください」追記
+- 経緯: 段階 6b 完了直後、ユーザの実機(Windows 11)で全ブラウザのクッキー読み取りが失敗:
+  - Chrome: `Could not copy Chrome cookie database`(プロセスロック、ブラウザを閉じても発生)
+  - Edge: `Failed to decrypt with DPAPI`(Windows 11 の DPAPI 変更で yt-dlp の復号ロジックが追従できてない)
+  - Firefox: 同様
+  - → ブラウザクッキー経路は環境依存で全滅 → 最も確実な「cookies.txt ファイル直接指定」を追加
+- 優先順位の設計判断:
+  - **ファイル > ブラウザ**(両方設定された場合)
+  - 理由: cookies.txt は Chrome 拡張「Get cookies.txt LOCALLY」等で **手動 export** したもの = ユーザの **明示的意思**。一方ブラウザクッキーは「自動取得」で、ファイル指定があるなら最新の意思はファイル側
+  - 両方を組み合わせる選択肢は不採用。yt-dlp の引数としては併用可能だが、stderr で混乱を招く + 「ファイルを優先」の SettingsDialog 文言と一致しない
+- セキュリティで配慮した点:
+  - **ファイル中身は読まない・ログに出さない・コピーしない**。`validateCookiesFile` は `fs.stat` で size と existence のみ取得
+  - パス自体はログに出す(機密情報は中身、パスではない)
+  - SettingsDialog に注意書き「※ クッキーファイルは認証情報を含みます。第三者と共有しないでください」を明示
+  - ファイル妥当性チェックは警告のみ(エラーで保存をブロックしない) — ユーザの意図的な事前設定 / 一時的なファイル移動を許容
+- 不採用案:
+  - cookies.txt の自動取得(ブラウザ拡張不要にする)→ 不可能(各ブラウザの DRM ライセンスフラグメント越えが困難)
+  - パスを暗号化保存 → 複雑、効果限定的(コピーされたら復号鍵もアプリと一緒)
+  - クッキー期限切れ自動検出 → 困難(yt-dlp 実行時のエラーで十分)
+  - 複数クッキーファイルの切替 → オーバーキル
+- 影響ファイル:
+  - `src/common/config.ts`(`ytdlpCookiesFile` 追加 + DEFAULT)
+  - `src/common/types.ts`(`CookiesFileValidation` 型 + IpcApi に 2 メソッド追加)
+  - `src/main/config.ts`(load/save round-trip + 空文字列正規化)
+  - `src/main/fileDialog.ts`(`openCookiesFileDialog` + `validateCookiesFile`)
+  - `src/main/index.ts`(2 IPC handler 追加 + URL DL × 3 / commentAnalysis IPC で `cookiesFile` も注入)
+  - `src/main/urlDownload.ts`(`getCookiesArgs` リファクタ + downloadVideo / downloadAudioOnly / downloadVideoOnly のシグネチャに `cookiesFile` 追加 + friendlyDownloadError の(D)分岐追加)
+  - `src/main/commentAnalysis/index.ts`(`AnalyzeCommentsOptions.cookiesFile` 追加)
+  - `src/main/commentAnalysis/chatReplay.ts`(`fetchChatReplay` / `downloadChatJson` のシグネチャに `cookiesFile` 追加)
+  - `src/preload/index.ts`(`openCookiesFileDialog` + `validateCookiesFile` を expose)
+  - `src/renderer/src/components/SettingsDialog.tsx`(クッキーファイルセクション、ファイル選択 / クリア / 警告表示)
+- 観察すべき点:
+  - cookies.txt の有効期限が切れた時の挙動(yt-dlp が「cookies expired」相当の stderr を出すかは未検証)
+  - ユーザ環境でブラウザクッキー全滅 → ファイル指定で本当に動くか実機検証
+
+---
+
+## 2026-05-03 - --cookies-from-browser 統合(YouTube bot 検出回避)
+
+- 誰が: Claude Code(Opus 4.7)
+- 何を: yt-dlp に `--cookies-from-browser <browser>` を統合し、SettingsDialog で Chrome / Edge / Firefox / Brave / 使用しない を選択できるようにした
+  - **AppConfig 拡張**: `ytdlpCookiesBrowser: 'none' | 'chrome' | 'edge' | 'firefox' | 'brave'`(default `'none'`)
+    - `src/common/config.ts` に union type + `YTDLP_COOKIES_BROWSER_VALUES` 配列を追加
+    - `src/main/config.ts` の load/save に `normaliseCookiesBrowser` を通して domain 外の値が来たら `'none'` フォールバック
+  - **getCookiesArgs ヘルパ**: `urlDownload.ts` で export、`'none'` なら `[]`、それ以外は `['--cookies-from-browser', <browser>]`
+  - **適用先**: `downloadVideo` / `downloadAudioOnly` / `downloadVideoOnly`(全 3 つの URL DL 経路)+ `chatReplay.ts` の `downloadChatJson`(コメント分析の yt-dlp 呼び出し)
+  - **設定の取得タイミング**: 各 IPC handler が起動時に `loadConfig()` を呼んで都度反映 → 設定変更後の **次の URL 入力** で即座に効く(アプリ再起動不要)
+  - **friendlyDownloadError の 3 カテゴリ分類**(stderr 分岐順):
+    1. **クッキーロック** (`/cookies database is locked|could not copy cookies|Permission denied.*cookies/i`) — bot 検出より先に判定。クッキー有効化中はこっちが原因のことが多い
+    2. **bot 検出** (`/Sign in to confirm you'?re not a bot/i`) — 「設定で『ブラウザクッキー使用』を有効に(推奨: Edge / Chrome)」
+    3. **認証必要** (`/Sign in to confirm your age|members?-only|This video is private|age-restricted/i`) — 「年齢制限 / メンバー限定 / 非公開。設定で『ブラウザクッキー使用』を有効に」
+- 推奨が Edge の理由: Windows 11 デフォルトでほぼ全ユーザがインストール済み + yt-dlp の Chromium edge クッキー抽出器が安定 + クッキーロックが Chrome より穏やか(observed)
+- 既存ユーザへの影響:
+  - DEFAULT_CONFIG.ytdlpCookiesBrowser = 'none' なので新規 / 既存共に既存挙動と bit-identical
+  - bot 検出が出てから設定 UI で有効化する流れ(オプトイン)
+  - 既存 config.json に `ytdlpCookiesBrowser` フィールドが無い場合は `normaliseCookiesBrowser(undefined)` → `'none'` フォールバック
+- データ収集経路は **対象外**: バックグラウンド unattended 実行 → クッキーロックで破綻する + ユーザ個人アカウントでクォータ消費が増える、リスクが大きい。spec 通り URL DL + commentAnalysis のみ
+- 不採用案:
+  - `cookies.txt` 直接指定 → ユーザが手動 export する手間 + UX 悪化
+  - 自動でブラウザ検出して切替 → 過剰実装
+  - クッキー有効性の事前チェック → yt-dlp 実行時のエラーで十分
+  - bot 検出後の自動リトライ → 複雑、UX 不明瞭
+- 影響ファイル:
+  - `src/common/config.ts`(union type + DEFAULT 追加)
+  - `src/main/config.ts`(load/save round-trip + normaliser)
+  - `src/main/urlDownload.ts`(getCookiesArgs export + 3 関数のシグネチャ拡張 + friendlyDownloadError 分類拡張)
+  - `src/main/commentAnalysis/index.ts`(`AnalyzeCommentsOptions.cookiesBrowser` 追加 + analyzeComments のシグネチャ拡張)
+  - `src/main/commentAnalysis/chatReplay.ts`(fetchChatReplay + downloadChatJson のシグネチャ拡張、getCookiesArgs を urlDownload から import)
+  - `src/main/index.ts`(URL DL × 3 IPC + commentAnalysis IPC で `loadConfig()` を呼んで cookiesBrowser を注入)
+  - `src/renderer/src/components/SettingsDialog.tsx`(動画ダウンロード — ブラウザクッキー使用 セクション追加、ラジオボタン × 5、useSettings 経由で双方向バインド)
+- 観察すべき点:
+  - クッキーロック頻度(ユーザがブラウザ起動中に DL → friendlyDownloadError(C) が出る頻度)
+  - 個人アカウントでのプライベート動画リーク事故(まずいので警告で対応中)
+- 将来流用可能: Twitch 認証統合(現状未実装)に同じ仕組み(`getCookiesArgs` ヘルパ + friendlyDownloadError の分岐)を流用可能
+
+---
+
+## 2026-05-03 - 段階 6a: URL 入力時の並列化(コメント取得 + グローバルパターン)
+
+- 誰が: Claude Code(Opus 4.7)
+- 何を: 段階 1-5 完了後の追加最適化。**URL 入力直後** に audio DL / video DL / コメント分析 / グローバルパターン読込を **4 つ並列起動**。ClipSelectView オープン時点でコメント分析が走り始め(or 既に完了済み)、グローバルパターンはキャッシュ済みになる
+  - **新規 IPC**: `aiSummary.loadGlobalPatterns()` で main 側の `loadGlobalPatterns()` を expose(返り値は renderer で `unknown` 扱い、opaque cargo として store に保持)
+  - **editorStore 拡張**: `commentAnalysisStatus: CommentAnalysisLoadStatus` + `globalPatterns: unknown | null`、対応 setters。`enterClipSelectFromUrl` / `setFile` / `clearFile` で `commentAnalysisStatus` を idle に reset(stale 値の漏れ防止)
+  - **App.tsx**: audio DL await 完了直後に video DL + コメント分析 + global patterns を **3 つ並列 fire**(audio が条件として要るのは sessionId / sourceUrl / durationSec の確定のため)。各 promise は session 一致チェックを通過したら editorStore に書き込み。`useEffect` で sessionId 消滅(clearFile)を検知して `commentAnalysis.cancel()` 発火
+  - **ClipSelectView**: 既存の commentAnalysis 用 useEffect + 局所 `analysisState` を **完全撤去**、editorStore の `commentAnalysisStatus` を購読するだけに。`AnalysisState` 型と stage 1 から残ってた `[comment-debug:renderer]` ログも全部除去
+  - **'no-source' の判定**: 旧 union の kind から、`!!filePath && !sourceUrl && status.kind === 'idle'` の派生フラグ `isLocalNoSource` に
+- 並列化対象 / 非対象の境界:
+
+  | 処理 | 並列化 | 理由 |
+  |---|---|---|
+  | 音声 DL | ✅ | 段階 2 から並列、本タスクで stable |
+  | 動画 DL | ✅ | 段階 2 で並列化済 |
+  | チャットリプレイ取得 | **✅ 本タスクで追加** | URL からほぼ確実に取得、待ち時間が長い |
+  | グローバルパターン読込 | **✅ 本タスクで追加(symbolic)** | 既存内部読込は ms 級だが spec 準拠 |
+  | Gemini 音声分析 | ❌ 非対象 | API 消費懸念、ユーザ意図確認(ボタン押下)必須 |
+  | AI 抽出本体(Claude Haiku)| ❌ 非対象 | 同上 |
+  | ヒートマップ取得 | ❌ 非対象 | AI 抽出フローで使ってない |
+- Gemini を非対象にした理由:
+  - 段階 6a の目的は「ユーザの待ち時間短縮」だが、Gemini は API リクエスト = 課金 = ユーザ意図必須
+  - URL 入力で自動 fire するとユーザが意図しないキー消費が発生する → 「自動で切り抜き候補を抽出」ボタン押下時のままで明示性を維持
+- session 一致チェックの設計:
+  - `expectedSession = audio.sessionId` をクロージャに保持、各 promise 完了時に `useEditorStore.getState().sessionId === expectedSession` で確認
+  - ユーザが「戻る」を押した(clearFile → sessionId=null)後に late promise が resolve した場合、editorStore への書込を skip
+  - 同じ URL を再入力すると同じ sessionId なので、stale promise の結果も新セッションに書込まれる(意図通り、stable)
+- ローカル drop 時の挙動:
+  - URL 無し → コメント分析 / グローバルパターンの並列 fire は走らない
+  - `setFile` が `commentAnalysisStatus = 'idle'` をセット
+  - ClipSelectView が `isLocalNoSource` true で「ローカル動画(モック表示)」表示
+- キャンセル経路:
+  - `useEffect(() => {... }, [sessionId])` で sessionId が string→null に遷移したら `commentAnalysis.cancel()` を発火 → 進行中の yt-dlp プロセス kill
+  - audio / video DL の cancel は段階 2 から既存
+  - global patterns の cancel: `fs.readFile` だけなので不要(ms オーダ)
+- 体感の変化(理論):
+  - 旧: URL 入力 → audio DL(数十秒)→ ClipSelectView mount → useEffect で comment 起動 → 数秒〜数分待ち
+  - 新: URL 入力 → audio DL(数十秒、裏でコメント取得も並走)→ ClipSelectView mount → 多くの場合 **コメント分析が既に進行中** か **完了済み** で表示される
+  - 大幅短縮ではなく重複待ち時間の解消が主効果
+- 影響: `src/common/types.ts`(`CommentAnalysisLoadStatus` 型 + `aiSummary.loadGlobalPatterns` IPC 型)/ `src/main/aiSummary.ts`(`loadGlobalPatterns` を export)/ `src/main/index.ts`(`aiSummary:loadGlobalPatterns` IPC handler)/ `src/preload/index.ts`(expose)/ `src/renderer/src/store/editorStore.ts`(state + actions + lifecycle reset)/ `src/renderer/src/App.tsx`(並列 fire + sessionId watcher)/ `src/renderer/src/components/ClipSelectView.tsx`(useEffect 撤去 + store 購読 + 局所 state 削除 + debug ログ削除)
+- コミット: (未コミット)
+
+---
+
+## 2026-05-03 - 段階 5/5: Twitch 動作確認 + 微調整(動画 DL 高速化 5 段階再設計 完了)
+
+- 誰が: Claude Code(Opus 4.7)
+- 何を: 段階 1-4 で組んだ audio-first / embed / 切替フローの **Twitch 完走確認** + 失敗時の UX 微調整 3 件。実装は最小、ユーザ実機検証ありき
+  - **EmbeddedVideoPlayer**: `EMBED_READY_TIMEOUT_MS = 10s` watchdog 追加。X-Frame-Options 拒否 / parent パラメータ不一致で iframe が空ロードしたまま無音 fail する Twitch 特有の挙動を明示エラーに変換。`onReady` / Twitch `'ready'` event でタイマー解除、unmount でも掃除
+  - **urlDownload**: `friendlyDownloadError(stderr, sessionId, fallback)` 追加。`HTTP Error 404|410|Video does not exist|Sorry, the streamer` を検出 → Twitch sessionId なら **「Twitch VOD が見つかりません(配信から 14 日以上経過、または非公開の可能性)」**、それ以外は「動画が見つかりません(404)」
+  - 認証必須(`Sign in to confirm` / `age-restricted` / `members-only`)も別ブランチで「ログイン認証が必要な動画です」に変換
+  - audio / video 両 path で stderr を 16 KB rolling buffer で蓄積 → exit code != 0 時に変換に流す
+- parent パラメータの最終値:
+  - **`['localhost', '127.0.0.1', 'jikkyou-cut.local']`** で確定(段階 3 から無変更)
+  - **dev 環境** (`http://localhost:<port>`): `localhost` で確実にマッチ ✅
+  - **prod 環境** (`file://...`): origin に hostname がないため Twitch SDK が **拒否する可能性が高い**。発生したら 10s 後に「Twitch の埋め込み再生に失敗しました。動画 DL 完了後にローカル再生されます。」が出る → ユーザは段階 4 の自動切替で救済される
+  - prod での恒久対策(custom protocol / localhost server)は **段階 5+ 別タスク** へ繰り越し。dev では問題なく動くため必要に応じて
+- X-Frame-Options 対処:
+  - 上記 ready timeout が唯一の検知手段(YT は onError event があるが Twitch は無音で失敗)
+  - 拒否時はエラーメッセージのみ表示、UI は壊れない
+  - 段階 4 のローカル切替は完全に独立して動くため、video DL 完了で自動救済される
+- 14 日問題のエラー表示:
+  - audio DL の段階で yt-dlp が 404/410 → friendlyDownloadError で Twitch 専用文言に変換
+  - ClipSelectView に到達せずに alert で表示(spec の §動作確認 B 通り)
+- Twitch チャットリプレイ対応:
+  - 既存の `chatReplay.ts` が `--sub-langs rechat` で Twitch 対応済(段階 3 以前から)
+  - `parseTwitchJson` が v5 API 形式 (`comments[].content_offset_seconds` / `message.body` / `commenter.display_name`) をパース
+  - **実機での yt-dlp 出力フォーマットは未検証** — 実装は揃ってるが、Twitch 側の API 変更で動かない可能性あり。動作確認はユーザに委ねる
+- 5 段階再設計の総括:
+
+  | 段階 | 内容 | 完了日 |
+  |---|---|---|
+  | 1 | yt-dlp `--concurrent-fragments 8` + バイナリ最新化 + ベンチログ | 2026-05-03 |
+  | 2 | 音声優先 DL + AI 抽出早期実行(audio-first / video-background) | 2026-05-03 |
+  | 3 | YouTube/Twitch 埋め込みプレイヤー導入 | 2026-05-03 |
+  | 4 | 編集中のプレイヤー切替(埋め込み ↔ ローカル動画) | 2026-05-03 |
+  | 5 | Twitch 動作確認 + 微調整 | 2026-05-03 |
+
+  完成形のフロー: URL 入力 → 音声 DL(数十秒)→ ClipSelectView オープン + embed 再生開始 + AI 抽出可能 → 裏で動画 DL → DL 完了で再生位置維持で seamless 切替 → 編集 → 書き出し
+- 影響: `src/renderer/src/components/EmbeddedVideoPlayer.tsx`(ready timeout)/ `src/main/urlDownload.ts`(friendlyDownloadError + audio/video stderr buffering)
+- コミット: (未コミット)
+
+---
+
+## 2026-05-03 - 段階 4/5: 埋め込み ↔ ローカル動画プレイヤー切替ロジック
+
+- 誰が: Claude Code(Opus 4.7)
+- 何を: 動画 DL 完了時に EmbeddedVideoPlayer から VideoPlayer に **再生位置を引き継いで自動切替**。トースト通知 3 秒表示。これで段階 2 の audio-first 体験から段階 4 の seamless 編集体験までが繋がる
+  - **VideoPlayer 拡張**: `initialSec?` / `shouldAutoPlay?` props 追加。`handleLoadedMetadata` で 1 度だけ適用(`initialSeekAppliedRef` flag で多重適用防止)。subsequent metadata events は既存の volume 等の初期化のみ実行
+  - **ClipSelectView 拡張**:
+    - state: `swappedToLocal` / `initialSeekSec` / `shouldAutoPlay` / `embedPlaying` / `toast`
+    - `sessionId` 変更時に swap state リセット
+    - filePath 到着時の useEffect で `embeddedRef.current.getCurrentTime()` を捕捉 → `setSwappedToLocal(true)` で 1 tick 遅延のレンダー切替 → unmount 前に位置を確実に取得
+    - 派生フラグ `useLocalPlayer = !!filePath && (!sessionId || swappedToLocal)` で render 分岐:ローカル drop は即 VideoPlayer、URL DL は捕捉後に切替
+    - Toast 自動消滅 3s + CSS slide-in animation
+  - **EmbeddedVideoPlayer の `onPlayStateChange`** を ClipSelectView に接続 → `embedPlaying` を track → swap 時に `shouldAutoPlay` に転写。embed 再生中の swap → ローカル側も自動再生継続
+- パターン A 採用根拠(自動切替 + 位置維持):
+  - **手動切替ボタン案は却下** — ユーザに切替の判断を委ねるとリロード操作が増える、UX 後退
+  - **DL 完了タイミングの自動切替**が UX 的に最も自然(視聴中に裏で seamless に切替)
+  - 位置引き継ぎが必須 — 切替時に頭から再生し直しは認知負荷が高い
+- 1-tick lag による位置捕捉:
+  - filePath が string になった瞬間に `swappedToLocal=true` を即時 set すると、同レンダーで EmbeddedVideoPlayer が unmount → ref が null → `getCurrentTime()` 取れない
+  - useEffect で「現在 mount されてる embed の ref から読み取り → state 更新 → 次のレンダーで unmount」とすることで、必ず embed mount 中の値を捕捉できる
+  - `getCurrentTime()` 失敗時は 0 にフォールバック(エラー時の embed や API ロード失敗時)
+- トースト通知の意図:
+  - 切替が seamless すぎてユーザが気付かない → 「字幕や削除区間スキップが急に動くようになった理由」が不明になる懸念
+  - 3 秒のトースト「ローカル再生に切替しました」で気付きを与える
+  - フェードアウト時間も含めて画面を圧迫しない位置(右下)
+  - pointer-events: none で操作妨害しない
+- 切替不可逆の判断:
+  - filePath が一度 set されたら、ユーザが「埋め込みに戻したい」要望は想定しない(編集に向かう動線で必要なし)
+  - `swappedToLocal` は false → true の単方向 flag
+  - sessionId が変更された(別 URL を新規入力した)場合のみ reset、これは新規セッションなので妥当
+- 切替時の position 引き継ぎ精度:
+  - YouTube IFrame `getCurrentTime()` は実数秒(精度あり、ms オーダ)
+  - HTMLMediaElement の `currentTime` setter はキーフレームに丸める(動画 codec 次第、典型 ±0.5-2s)
+  - 結果として **±0.5-2 秒のズレ**が発生、許容範囲(編集フェーズで微調整可能)
+  - Twitch の `getCurrentTime()` も同様の挙動を期待(段階 5 で実機確認)
+- エッジケース処理:
+  - embed 一時停止中の DL 完了 → `embedPlaying=false` → `shouldAutoPlay=false` → ローカル側も停止状態で位置だけ移行(spec 通り)
+  - embed エラー(101/150 等)→ `getCurrentTime()` が catch で 0 にフォールバック → ローカル側 0 秒から再生(spec 通り)
+  - ローカル drop(sessionId null)→ `useLocalPlayer = true && (!sessionId || ...)` で即 VideoPlayer、swap 経路を通らない(toast も出ない、spec 通り)
+- 段階 5(Twitch 検証)が次タスク
+- 影響: `src/renderer/src/components/VideoPlayer.tsx`(initialSec / shouldAutoPlay props)/ `src/renderer/src/components/ClipSelectView.tsx`(swap state + useEffect + toast)/ `src/renderer/src/components/ClipSelectView.module.css`(toast styles)
+- コミット: (未コミット)
+
+---
+
+## 2026-05-03 - 段階 3 のリグレッション修正:audio-first 経路でコメント取得が 0 件になる問題
+
+- 誰が: Claude Code(Opus 4.7)
+- 症状: URL 入力 → audio-first DL → ClipSelectView オープン後、LiveCommentFeed が「コメントが取得できていません(ローカル動画 / 取得失敗時)」と表示される。yt-dlp のチャットリプレイは取得可能なはずなのに 0 件
+- 真因(調査結果):
+  - 仮説 A/B/C いずれも当たらず — IPC は sourceUrl ベースで正常、URL も渡っている
+  - **段階 3 で導入した EmbeddedVideoPlayer の onReady 内で `player.getDuration()` を呼び `onDuration → setDuration(0)` を発火していた**
+  - YT IFrame Player / Twitch Embed の `getDuration()` は **iframe 初期 buffering 中は 0 を返す**(metadata 未ロード)
+  - これが editorStore.durationSec を **正しい値(段階 2 の audio probe で設定済)から 0 に上書き**
+  - ClipSelectView の comment analysis useEffect が依存配列に `durationSec` を持つため re-run、gate `durationSec <= 0` で early return + cleanup 関数が `commentAnalysis.cancel()` を発火 → in-flight の yt-dlp チャット取得を kill
+  - 結果: messages = [] で完了 → mockAnalysis fallback → empty state 表示
+- なぜ stage 1/2 で発生しなかったか:
+  - Stage 2 完成時点では filePath null 中はプレースホルダ overlay のみで `<video>` も embed も無し → setDuration を呼ぶ経路が存在しない → audio probe 値が維持
+  - Stage 3 で EmbeddedVideoPlayer をマウントした瞬間に onReady → setDuration(0) パスが発生
+- 修正:
+  - **EmbeddedVideoPlayer.tsx**: `tryEmitDuration(player)` ヘルパ + `durationEmitted` flag を導入。`getDuration() > 0` を確認できるまで onDuration を発火しない。onReady で 1 回試行 + 500ms polling 内でも valid 値が出るまで再試行 → 確定後は再発火しない
+  - **editorStore.setDuration**: 防御的に `sec > 0` のみ受け付ける guard を追加。VideoPlayer / Embedded どちらの将来の経路でも 0 で上書きできないように
+- なぜ防御を 2 段にしたか:
+  - EmbeddedVideoPlayer の修正は根本対処
+  - editorStore の guard は別経路で同じパターンが現れた時の保険(VideoPlayer の `<video>.duration` も実は metadata 前は 0 を返す。これまで偶発的に問題化していなかっただけ)
+- 動作確認方法(実機):
+  1. URL 入力 → ClipSelectView オープン
+  2. LiveCommentFeed のヘッダが「コメント (NN件)」と件数を表示
+  3. コメント本文が時刻付きで表示される
+  4. グラフが密度を反映して描画される
+  5. AI 抽出時の Claude Haiku プロンプトに `候補 C1/C2/...` が含まれる(段階 3 で実装済の C/G prefix 出力)
+- 影響: `src/renderer/src/components/EmbeddedVideoPlayer.tsx` / `src/renderer/src/store/editorStore.ts`
+- コミット: (未コミット)
+
+---
+
+## 2026-05-03 - 段階 3/5: YouTube/Twitch 埋め込みプレイヤー導入
+
+- 誰が: Claude Code(Opus 4.7)
+- 何を: 動画 DL 高速化 5 段階の **段階 3**。video DL 完了を待たずに YouTube IFrame / Twitch Embed プレイヤーで再生開始できるようにする。VideoPlayer は無変更で温存(段階 4 で切替ロジック実装)
+  - **新規 lib** `src/renderer/src/lib/youtubePlayerApi.ts`(YT IFrame API singleton loader、`onYouTubeIframeAPIReady` ベース、30s safety timeout)
+  - **新規 lib** `src/renderer/src/lib/twitchPlayerApi.ts`(Twitch Embed SDK loader、`script.onload` ベース、polling fallback)
+  - **新規 component** `EmbeddedVideoPlayer.tsx` + `.module.css`(forwardRef でビルド済 imperative handle: `play / pause / seekTo / getCurrentTime / getDuration`、500ms `onTimeUpdate` polling、parseSessionId で platform 振り分け)
+  - **ClipSelectView 統合**: video area の分岐を `filePath ? VideoPlayer : sessionId ? EmbeddedVideoPlayer : DL Overlay` の 3 段に。embed の上に DL 進捗 badge(右上)+ プレビュー注意書き(左下)を絶対配置
+  - **ref 統合**: `videoRef`(VideoPlayer 用)+ `embeddedRef`(Embed 用)を並列保持、`handleSeekInternal` が active な方を判定して seekTo を呼ぶ
+- 旧フロー(段階 2 完成時点)の課題:
+  - URL 入力 → 音声 DL → ClipSelectView 開く までは早くなったが、**動画再生は依然として動画 DL 完了待ち**
+  - 大きな視聴体験の改善余地が残っていた
+- 新フロー(段階 3 後):
+  - 音声 DL 完了 → ClipSelectView 開く → **即座に YouTube/Twitch 埋め込みで再生可能**
+  - 動画 DL は引き続きバックグラウンドで進行
+  - 視聴 + 範囲選定 + AI 抽出が DL 完了を待たずに全部動く
+  - 動画 DL 完了後の自動切替は段階 4 で実装(本タスクではユーザがリロードで切替)
+- VideoPlayer 並走方針:
+  - `VideoPlayer.tsx` は **完全に無変更**で温存
+  - `EmbeddedVideoPlayer.tsx` を独立コンポーネントとして新設
+  - ClipSelectView が条件分岐で出し分け(filePath あり = VideoPlayer / sessionId あり = Embedded / どちらもなし = DL overlay)
+  - 段階 4 で「filePath 到着時に Embedded → VideoPlayer に seamless swap」を実装、その時点で本タスクの中間状態は解消
+- 埋め込みプレイヤーの制限事項(spec §7 通り):
+  - **削除区間プレビュースキップ無効** — `decidePreviewSkip` ロジックは `<video>.currentTime` 直接操作前提、iframe には届かない
+  - **字幕オーバーレイ無効** — `SubtitleOverlay` は `<video>` 上にレイヤー、iframe には乗らない
+  - **シーク精度はキーフレーム単位** — YouTube `seekTo(sec, true)` の挙動、フレーム精度が必要なカット確認は DL 完了後に
+  - これらは ClipSelectView の左下 hint(`ℹ プレビュー視聴中 — 字幕確認・カット確認は DL 完了後`)で明示
+- CSP 設定変更の経緯:
+  - 既存の renderer HTML / BrowserWindow webPreferences には **明示的な CSP 設定なし**(Electron デフォルト)
+  - YouTube / Twitch の iframe + 外部スクリプトロードは **デフォルトで通る** ことを確認
+  - 段階 3 では追加の CSP 緩和は不要、`webPreferences: { contextIsolation: true, nodeIntegration: false, sandbox: false }` を維持
+  - 将来 strict CSP を導入する場合の必要追加: `frame-src https://www.youtube.com https://player.twitch.tv` / `script-src ... youtube.com player.twitch.tv`(現時点では spec の記述として残置のみ)
+- Twitch parent パラメータ:
+  - Twitch Embed は `parent: string[]` 必須(任意のホスト名でいくつでも指定可、SDK が match する origin を選ぶ)
+  - 設定値 `['localhost', '127.0.0.1', 'jikkyou-cut.local']`
+  - dev 環境(`http://localhost:<port>`): `localhost` で確実にマッチ
+  - prod 環境(`file://...`): origin に hostname がないので Twitch SDK 側がどう扱うか実機検証が必要 — 現状は推測で 3 値投入、ダメなら段階 5(Twitch 動作確認)で別解決策
+- session ID パース:
+  - `youtube_<11chars>` → YouTube IFrame Player(videoId に投入)
+  - `twitch_<numeric>` → Twitch Player(video に投入、VOD ID)
+  - `url_<sha256>` → 「埋め込みプレイヤー非対応」エラー表示(local drop 等の希少ケース、URL DL 経由なら必ず yt/twitch/url のいずれか)
+- 影響: `src/renderer/src/lib/youtubePlayerApi.ts`(新規)/ `src/renderer/src/lib/twitchPlayerApi.ts`(新規)/ `src/renderer/src/components/EmbeddedVideoPlayer.tsx`(新規)+ `.module.css`(新規)/ `src/renderer/src/components/ClipSelectView.tsx`(分岐 + ref 並列)/ `src/renderer/src/components/ClipSelectView.module.css`(badge + hint)
+- コミット: (未コミット)
+
+---
+
+## 2026-05-03 - 段階 2/5: 音声優先 DL + AI 抽出早期実行
+
+- 誰が: Claude Code(Opus 4.7)
+- 何を: 動画 DL 高速化 5 段階の **段階 2**。URL DL を「音声優先 + 動画バックグラウンド」の二段に分割し、ユーザを動画 DL 完了待ちから解放
+  - **新規 main 関数** `urlDownload.ts` の `downloadAudioOnly()` / `downloadVideoOnly()` / `cancelAudioDownload()` / `cancelVideoDownload()` / `deriveSessionId(url)`(YouTube/Twitch ID 抽出 + URL hash フォールバック)
+  - **新規 IPC** `urlDownload.startAudioOnly` / `cancelAudio` / `onAudioProgress` / `startVideoOnly` / `cancelVideo` / `onVideoProgress`
+  - **editorStore 拡張**: `audioFilePath` / `sessionId` / `videoDownloadStatus { status, progress, error }` state、`enterClipSelectFromUrl()` / `setVideoFilePath()` / `setVideoDownloadProgress()` / `setVideoDownloadFailure()` actions
+  - **App.tsx**: `startDownloadFlow` を再構成。await audio → enterClipSelectFromUrl → background fire video → progress/completion を store に流し込み
+  - **ClipSelectView**: `if (!filePath && !audioFilePath) return null;` に緩和、VideoPlayer の代わりに `videoDlOverlay`(📥 + バー + AI 抽出可能ヒント)を表示、edit ボタンを `filePath` で gate
+  - **aiSummary 統合 IPC**: `audioFilePath` を args に追加。orchestrator は audioFilePath があれば ffmpeg 抽出を **skip**(`audio-extract` phase は `skipped: true` で即座に進行)、ない場合のみ既存の `extractAudioToTemp` 経路
+  - **aiSummary cache key**: 旧 videoFilePath ベース → renderer が `sessionId ?? filePath ?? audioFilePath` を `videoKey` として送る形に。同じ URL の audio→video 遷移で cache が継続使用できる
+- 旧フロー(DL 完了待ち)の課題:
+  - 10 時間配信で 1-2 時間の DL を **何もできずに待たされる**
+  - 段階 1 で並列化したが video の絶対サイズはどうしようもない
+  - AI 抽出が動画ファイル必須だったため早期実行も不可
+- 新フロー:
+  - 数十秒で audio が終わる → ClipSelectView 開く → ユーザは即座に範囲選定 / AI 抽出可能
+  - 動画は裏で DL 中、完了したら `<video>` がロード(seamless)
+  - 「この区間を編集」ボタンだけは動画必須(編集の精度の都合) → DL 完了まで disabled
+- セッション ID 設計:
+  - YouTube: `youtube_<11-char-id>`(`?v=` / `youtu.be/` 両対応)
+  - Twitch: `twitch_<numeric-id>`
+  - その他: `url_<sha256-12char>`
+  - Cache key 統一: refine cache / Gemini cache どちらも sessionId をキーにする → audio→video 遷移してもキャッシュヒット維持
+- 失敗時の扱い:
+  - 音声 DL 失敗: ClipSelectView 開かず、エラーモーダル表示(spec 通り)
+  - 動画 DL 失敗: ClipSelectView は開いたまま、player overlay にエラー表示。AI 抽出は継続実行可、編集ボタンだけ disabled のまま
+  - キャンセル: clearFile が phase=load に戻すので、stale な video DL promise が完了しても sessionId 不一致で setVideoFilePath が no-op
+- やらなかったこと:
+  - 編集中のプレイヤー切替(段階 4)/ 埋め込みプレイヤー(段階 3)/ Twitch 検証(段階 5)
+  - audioFilePath を再生・字幕で使う(編集 phase は引き続き videoFilePath 必須、spec §10 通り)
+  - 既存 `urlDownload.start` の削除(段階 5 まで残置、現在は App.tsx から呼ばれない dead 経路)
+- 段階 3 への接続:
+  - 段階 3 で YouTube/Twitch 埋め込みプレイヤーを導入すれば、video DL 中も再生可能になり「動画 DL 中…」 overlay も置き換わる。
+  - 現状の `videoDlOverlay` は段階 3 で「埋め込み iframe」に進化する見込み(同じ場所、同じ条件 = `filePath` null)
+- 影響: `src/common/types.ts`(audio/video DL 用 args/result + IpcApi 拡張)/ `src/main/urlDownload.ts`(downloadAudioOnly + downloadVideoOnly + cancel + sessionId)/ `src/main/index.ts`(IPC handlers + autoExtract orchestrator audioFilePath 対応)/ `src/preload/index.ts`(expose)/ `src/renderer/src/store/editorStore.ts`(state + actions)/ `src/renderer/src/App.tsx`(startDownloadFlow 再構成)/ `src/renderer/src/components/ClipSelectView.tsx`(null check 緩和 + DL overlay + edit gate + autoExtract args)/ `src/renderer/src/components/ClipSelectView.module.css`(`videoDl*` クラス追加)
+- コミット: (未コミット)
+
+---
+
+## 2026-05-03 - yt-dlp 高速化(段階 1/5: concurrent-fragments + バイナリ更新)
+
+- 誰が: Claude Code(Opus 4.7)
+- 何を: 動画 DL の体感速度改善 5 段階再設計の **段階 1**。yt-dlp の引数に `--concurrent-fragments 8` を追加 + ベンチログ整備
+  - **追加引数** `'--concurrent-fragments', '8'` を [urlDownload.ts:194](src/main/urlDownload.ts:194) に
+  - **新規ログ**: 開始時 `yt-dlp start: url=..., quality=..., version=2026.03.17, concurrent=8`、完了時 `yt-dlp done: 47.2s, size=152.3MB, avg=3.23MB/s`
+  - **yt-dlp バージョンを lazy-cache**: `getYtDlpVersion()` が初回 `--version` spawn 後にキャッシュ、以降の DL はキャッシュ使用(spawn コスト回避)
+  - **新規** `.gitattributes`: `resources/yt-dlp/yt-dlp.exe binary` + `*.exe binary` で EOL 変換による破損防止
+- 5 段階再設計計画(本タスクは段階 1):
+
+  | 段階 | 内容 | 状態 |
+  |---|---|---|
+  | 1 | yt-dlp 高速化(concurrent-fragments + バイナリ更新) | ✅ 本タスク |
+  | 2 | 音声優先 DL + AI 抽出の早期実行(動画 DL 待たず音声だけ先取り) | 次タスク |
+  | 3 | YouTube/Twitch 埋め込みプレイヤー導入(DL 完了前から再生可) | 後続 |
+  | 4 | 編集中のプレイヤー切替ロジック(埋め込み ↔ ローカル動画) | 後続 |
+  | 5 | Twitch 動作確認 + 微調整 | 後続 |
+
+- 旧仕様(シングル接続)の体感:
+  - ユーザ報告で「動画ダウンロードが遅い」、10 時間配信で 1-2 時間
+  - yt-dlp デフォルトは sequential fragment download、HLS/DASH(YouTube の separate video+audio はほぼ全部これ)で帯域を活かせていない
+- `--concurrent-fragments 8` の採用根拠:
+  - 経験則的に 4-12 の範囲が最適、8 はサーバ throttling リスクと並列効果のバランス点
+  - YouTube は per-fragment の rate limit がゆるく、8 並列でも問題なし(過去事例より)
+  - `--concurrent-fragments` は fragment-based DL(HLS/DASH)のみ有効、single-file DL では無視される → 既存の YouTube / その他混在 URL に対して「効くものだけ効く」性質
+  - 並列度を UI で設定可能にする抽象化は **やらない**(先回り抽象化禁止)
+- yt-dlp バイナリ更新前後:
+  - 更新前: `2026.03.17`(`resources/yt-dlp/yt-dlp.exe`)
+  - GitHub releases/latest をダウンロードして比較 → **同一バージョン(SHA256 完全一致)で更新不要**
+  - 既に最新版が同梱されていたため、binary は触らず
+- 進捗パーサの懸念:
+  - `--concurrent-fragments 8` で stdout に複数 fragment の `JCUT_PROGRESS` 行が interleave して出力される
+  - 既存パーサは「最後の進捗行」を採用する単純実装で、percent 値が時間軸で oscillation する可能性
+  - spec の判断「まず既存挙動で動かしてユーザに体感判断」に従い **パーサ無修正で投入**
+  - ユーザが「進捗バーがガタつく」報告した場合の対処策(将来):単調増加保証 = `Math.max(currentPercent, latestPercent)` ロジック追加
+- 次タスク(段階 2): 音声のみ DL 経路を新設し、commentAnalysis / Gemini 分析を動画 DL の完了を待たずに走らせる。総待ち時間が `max(動画 DL, 音声 DL + 分析)` に短縮する想定
+- 影響: `src/main/urlDownload.ts`(args 追加 + ベンチログ + version cache)/ `.gitattributes`(新規)
+- コミット: (未コミット)
+
+---
+
+## 2026-05-03 - Gemini キー UI を YouTube と統一(per-key bar + 個別追加/削除)
+
+- 誰が: Claude Code(Opus 4.7)
+- 何を: Gemini キー登録 UI を textarea ベースの一括保存 → YouTube キーセクションと同形の **常時表示の per-key 一覧 + 使用状況バー + 個別削除** にリライト
+  - **新規 DB テーブル** `gemini_request_log`(`api_key_hash` / `requested_at` / `success` / `status_code` / `model`)+ index `idx_gemini_request_log_key_time`
+  - **新規 main 関数** `database.ts` の `logGeminiRequest()` / `getGeminiKeyUsage()`
+  - **新規 main util** `utils.ts` に `hashApiKey(key) = sha256(key).slice(0, 12)` 追加 — DB には生キー保管せず hash prefix のみ
+  - **gemini.ts の `generateAnalysis`** に呼び出し直後の usage logging を追加(成功/失敗どちらも記録、status_code 込み)
+  - **新規 IPC** `gemini.getKeyUsages()` → `GeminiKeyUsage[]`(keyHash / todayCount / todayLimit / lastError)
+  - **UI 全面リライト**: 旧 textarea + 一括保存 → YouTube quota panel 形式の per-key 行(キー N / マスク / 使用状況バー / RPD 値 / 状態ラベル / 削除ボタン)+ 1-input + 「追加」ボタン(即保存)+ 30 秒間隔の auto-refresh
+- 旧 UI(textarea 一括)の課題:
+  - 複数キー一括貼り付けはペースト時の摩擦が低いが、登録後の編集で「どのキーが何件使ったか」が不可視
+  - 個別削除ができず、1 個直したい時も全削除→再貼り付けが必要
+  - 429/401 エラー時にユーザがどのキーを修正すべきか分からない
+- 新 UI の改善:
+  - キーごとに使用状況バー(`~24 / 500 RPD ● 利用可能`)
+  - 状態ラベル 4 段階: ● 利用可能 / ⚠ もうすぐ上限(≥90%)/ 🔴 上限達成(≥100%)/ 🔴 一時的に利用不可(24h 以内に 401/429)
+  - 1 個ずつ追加・削除でユーザの mental model が明確
+  - YouTube セクションと視覚一貫性が取れた
+- 使用状況の概算性:
+  - **自前カウント**(generateContent 呼び出し時に DB に書く)で、AI Studio dashboard の正確値とはズレ得る
+  - ズレ要因: (a) 別アプリ / 同じキーの別 IPC からの呼び出しは検知できない、(b) Files API の upload/status/delete は 500 RPD カウントに含まれないが想定と乖離する可能性
+  - UI に「~」「(概算)」表記で明示し、ユーザに不正確性を周知
+- `todayLimit = 500` のハードコード根拠:
+  - gemini-2.5-flash の無料枠 RPD(2026-05 時点)
+  - 将来 gemini-3-flash 等への移行 / pay-as-you-go プランで RPD 上限が変わったら再評価
+  - モデルごとに per-model 設定を持たせる抽象化は **やらない**(先回り抽象化禁止)
+- DB 設計判断:
+  - 既存 `api_quota_log` を流用(provider カラム追加)案も検討したが、YouTube は「units / day」で集計済み行、Gemini は「per-request 行」とデータ shape が違いすぎる → 独立テーブルが綺麗
+  - `requested_at` は SQLite の `CURRENT_TIMESTAMP`(UTC、`YYYY-MM-DD HH:MM:SS` 形式)、文字列比較で日付フィルタが安定して動く
+  - lastError は 24h スライディングウィンドウ + status 401/429 限定(5xx は server-side flake で恒久的なキー品質シグナルではない)
+- 影響: `src/main/utils.ts`(`hashApiKey` 追加)/ `src/main/dataCollection/database.ts`(`gemini_request_log` テーブル + `logGeminiRequest` + `getGeminiKeyUsage`)/ `src/main/gemini.ts`(`generateAnalysis` の呼び出し後ログ)/ `src/main/index.ts`(`gemini:getKeyUsages` IPC + `GEMINI_DAILY_RPD = 500`)/ `src/preload/index.ts`(`getKeyUsages` expose)/ `src/common/types.ts`(`GeminiKeyUsage` + `IpcApi.gemini.getKeyUsages`)/ `src/renderer/src/components/ApiManagementView.tsx`(`GeminiKeysSection` 全面リライト)
+- コミット: (未コミット)
+
+---
+
+## 2026-05-03 - Gemini 統合 AI 自動切り抜きパイプライン完成(タスク 2)
+
+- 誰が: Claude Code(Opus 4.7)
+- 何を: タスク 1 で単独動作していた Gemini 音声分析を、既存の AI 自動切り抜きパイプライン(Claude Haiku refine)に統合。「自動で切り抜き候補を抽出」ボタン 1 つで音声構造理解 → コメントピーク統合 → AI 絞り込み → タイトル生成まで一気通貫
+- 変更:
+  - **`AutoExtractProgress` 拡張**: phase に `'cache-check' / 'audio-extract' / 'gemini'` を追加(従来 `'detect' / 'refine' / 'titles'` のみ)。`skipped?: boolean` を追加して Gemini 失敗時の表示
+  - **`buildRefinePrompt` 拡張**: `geminiHighlights?` + `geminiTimeline?` 引数追加。Gemini 結果あれば 3 セクション(`# 音声内容ベースのハイライト候補` / `# 動画全体の構造` / `# 統合判断の指示`)を差し込む
+  - **AI 出力 JSON shape 変更**: 旧 `{ startSec, endSec, reason, predictedTitle }` → 新 `{ candidateIndex, reason, confidence, suggestedStart, suggestedEnd, predictedTitle }`。`candidateIndex` は `'C1' / 'G1' / 'C1+G2'` の文字列で出所明示
+  - **`validateRefinedItems` 緩和**: 旧 ±0.1s strict match → 新 `HALLUCINATION_TOLERANCE_SEC = 30` の loose anchor check(AI が ±5-10s で文脈拡張する案を尊重)。`suggestedStart/End` を優先、legacy `startSec/endSec` も後方互換で受ける
+  - **`refineCacheKey` 拡張**: `geminiHash` 引数追加。Gemini 再実行で自動キャッシュ無効化
+  - **IPC `aiSummary:autoExtract` 再構成**: orchestrator が cache-check → audio-extract → Gemini → autoExtractClipCandidates の順で実行。Gemini 失敗時は warn ログ + skipped フラグで継続(comment-only fallback)
+  - **`autoExtractClipCandidates` 内の messages/dominantCategory 解決**: `parseCommentIndex(candidateIndex)` で C-prefixed pick から直接索引、なければ ±30s tolerance で fuzzy match。G-only pick は messages = [] / dominantCategory = null(タイトル生成は predictedTitle にフォールバック)
+  - **UI**: `🧪 Gemini 分析(テスト)` ボタン削除、Gemini 専用進捗 modal 削除、`GeminiAnalysisDialog` 描画削除(コンポーネントファイル自体は **残置** — 将来「動画の構造を見たい」用途で復活する可能性)。auto-extract 進捗 modal を 5 ステップ表示(`AutoExtractStepIndicator` 新設、Gemini skipped は `⊘` 付きで struck-through)
+  - **キャンセル**: `handleCancelAutoExtract` から `aiSummary.cancel` + `gemini.cancelAnalysis` 両方を発火
+- 設計判断:
+  - **Gemini 失敗 = comment-only 継続**: Gemini quota 切れ等で AI 抽出全体が詰まないように、Gemini 障害は warn 級。M1.5b と同じ動作にフォールバック
+  - **Gemini なしでもボタンは disable しない**: Gemini キー未登録ユーザにも従来機能を提供
+  - **`detect` フェーズは UI に出さない**: sub-ms で完了するので独立ステップにする UX 価値が薄い。`refine` ステップに包含
+  - **C/G プレフィックス文字列を AI に出させた**: 数値 ID で索引より自然言語に近く、AI が間違いにくい(検証済 prompt 例参照)
+  - **`HALLUCINATION_TOLERANCE_SEC = 30s`**: ±5-10s の context-extension は受け入れ、明らかなハルシネーション(99:99 等)は弾く境界値
+- 残置したもの:
+  - `src/renderer/src/components/GeminiAnalysisDialog.tsx` + `.module.css`(将来の「動画構造ビュアー」復活用)
+  - `IpcApi.gemini.analyzeVideo` / `cancelAnalysis` / `onProgress`(統合パスでは別経路で使うが、将来の再活用用に IPC を残す)
+  - `extractAudioToTemp` の `filenamePrefix` パラメータ(orchestrator の `jcut-gemini-audio-` で活用中)
+- キャッシュキー統合:
+  - 旧: `sha256(basename | candidates_sig | tN | globalLastUpdated)`
+  - 新: `sha256(basename | candidates_sig | tN | globalLastUpdated | g=geminiHash)`
+  - `geminiHash` = `sha256(JSON.stringify(highlights start/end/contentType)).slice(0, 8)` または `'no-gemini'`
+  - Gemini cache(`userData/gemini-cache/`)+ refine cache(`userData/comment-analysis/`)の 2 段チェーンで、同じ動画の再抽出は実質 0 秒で返る
+- 影響: `src/common/types.ts` / `src/main/aiSummary.ts`(buildRefinePrompt / validateRefinedItems / refineCacheKey / refineCandidatesWithAI / autoExtractClipCandidates)/ `src/main/index.ts`(aiSummary:autoExtract orchestrator)/ `src/renderer/src/components/ClipSelectView.tsx`(Gemini test button 撤去 + 5 ステップ progress modal)/ `src/renderer/src/components/ClipSelectView.module.css`(Gemini-test 関連 CSS 削除 + skipped class 追加)
+- コミット: (未コミット)
+
+---
+
+## 2026-05-03 - Gemini モデルを 2.5-flash に変更
+
+- 誰が: Claude Code(Opus 4.7)
+- 何を: `src/main/gemini.ts` の `MODEL` 定数を `gemini-2.0-flash-exp` → `gemini-2.5-flash` に変更。あわせて関連コメント(gemini.ts ヘッダ)と UI 説明文(ApiManagementView の help)も更新
+- 旧モデル(`gemini-2.0-flash-exp`)を捨てた理由:
+  - 2026/3/6 以降、新規プロジェクトでは利用不可
+  - 2026/6/1 にシャットダウン予定
+  - 「実験版」位置づけで stable 品質保証なし
+- 候補比較(2026/5 時点):
+  - **`gemini-2.5-flash`**: stable / 無料枠 ~10 RPM / 500 RPD / reasoning 機能 + 1M context + 音声入力 9.5h まで
+  - `gemini-2.5-flash-lite`: stable / 無料枠 ~15 RPM / 1000 RPD / 音声コスト低だが reasoning が弱め
+- `2.5-flash` を選んだ理由:
+  - ハイライト抽出は **構造理解の質が肝心**(spec § 重要な観点で「起承転結」「感情の起伏」が選定基準)、reasoning が強い flash 系が向いている
+  - 1M context は 9.5 時間音声に対応、長尺配信切り抜きにも余裕
+  - 無料枠(500 RPD)+ multi-key rotation で実質運用可能
+- 採用しなかった点:
+  - **2.5-flash-lite**: RPM/RPD は多いが reasoning が弱い → スポンサー読み除外などの判断質が落ちる懸念
+- API endpoint は変更不要(`/v1beta/models/{model}:generateContent` は両モデルで共通)
+- 2.5-flash の挙動差で要観察:
+  - **thinking 機能がデフォルト ON** → レスポンス時間が伸びる可能性。本タスクでは `thinkingConfig.thinkingBudget` で制御せず、デフォルトで運用開始。レイテンシが問題になれば budget を絞る判断
+  - JSON 出力は `responseMimeType: 'application/json'` で同等、コードフェンス混入時は既存 `parseAnalysisResponse` のフェンス剥がしで吸収可能
+- 将来検討:
+  - **`gemini-3-flash` 系**が無料枠で安定提供されたら切替検討(現時点(2026/5)では gemini-3 系は preview / 有料のみ)
+  - 無料枠縮小傾向への対応(API キー追加運用 / 別モデルへの一時退避)
+- 影響: `src/main/gemini.ts`(2 箇所:ヘッダコメント + MODEL 定数)/ `src/renderer/src/components/ApiManagementView.tsx`(GeminiKeysSection の help 文言)
+- コミット: (未コミット)
+
+---
+
+## 2026-05-03 - Gemini 音声分析パイプライン実装(タスク 1)
+
+- 誰が: Claude Code(Opus 4.7)
+- 何を: 動画音声を Gemini に投げて構造理解 + ハイライト候補を取得するバックエンドを実装。タスク 1 のスコープは「Gemini に投げて結果を JSON モーダルで表示するまで」。既存 AI 抽出パイプラインへの統合はタスク 2 持ち越し
+  - **新規ファイル**: `src/main/gemini.ts`(rotator + Files API resumable upload + generateContent + cache + cancel)
+  - **新規ファイル**: `src/main/utils.ts`(`videoKeyToFilenameStem` を aiSummary.ts から共通化、gemini.ts と共有)
+  - **新規ファイル**: `src/renderer/src/components/GeminiAnalysisDialog.tsx` + `.module.css`(タイムライン + ハイライト + JSON コピー結果モーダル)
+  - **拡張**: `secureStorage.ts` に `saveGeminiApiKeys` / `loadGeminiApiKeys` / `clearGeminiApiKeys` / `hasGeminiApiKeys` / `countGeminiApiKeys`(YouTube と同じ DPAPI 多重キーパターン)
+  - **拡張**: `audioExtraction.ts` の `extractAudioToTemp` に `filenamePrefix?` パラメータ追加(default `jcut-audio-`、Gemini path で `jcut-gemini-audio-` を渡してファイル名衝突回避)
+  - **新規 IPC**: `gemini.{hasApiKey, getKeyCount, getKeys, setKeys, clear, validateApiKey, analyzeVideo, cancelAnalysis, onProgress}`
+  - **UI**: `ApiManagementView` に `GeminiKeysSection`(textarea ベース、1 行 1 キー、最大 50 件)
+  - **UI**: `ClipSelectView` ヘッダに「🧪 Gemini 分析(テスト)」ボタン(暫定、タスク 2 で撤去予定)+ 4 フェーズ進捗モーダル
+- 背景:
+  - 現状の AI 自動切り抜き(M1.5b 完了)はコメント密度・キーワードベースで判定 → 「コメントが盛り上がってる ≠ 内容が面白い」というギャップ(スポンサー読み・配信冒頭挨拶などコメントは多いが切り抜き対象として外れる区間が選ばれる)
+  - 解決方針: 動画音声を Gemini API に投げて **音声内容そのもの** を構造理解させ、内容ベースのハイライト候補を取得
+- なぜ Gemini を選んだか:
+  - プロジェクト無限作戦(Google Cloud の無料枠を複数プロジェクトで横断)で実質無料運用可能
+  - 既存の Gladia(編集後文字起こし)とは役割を明確に分離: **Gladia = 編集前最終出力用の transcribe / Gemini = 分析フェーズの構造理解**(同じ動画に対し両方走るのは無駄に見えるが、Gladia は精度優先で時間がかかり、Gemini は分析特化で速度優先)
+  - `gemini-2.0-flash-exp` を選択: Files API 経由で長時間音声を扱える + responseMimeType=application/json で strict JSON 出力 + flash 系で速度・コスト優位
+- 設計判断:
+  - **rotator は in-memory で独立実装**: YouTube の `ApiKeyRotator`(SQLite quota log 依存)と同じ抽象を作るより、Gemini 専用のシンプルな round-robin + mute-on-error にした。「先回り抽象化禁止」原則に従い、quota tracking が将来必要になったら抽象化判断
+  - **Files API は resumable upload を採用**: 2 round-trip だが任意サイズに対応。multipart は単発で済むがバイナリ multipart の手書きが煩雑
+  - **キャッシュは永続(TTL なし)**: 同じ動画に対して同じ音声入力なら同じ結果になる性質、AI 抽出と同じ判断
+  - **`onProgress` は IPC イベントで「extracting → uploading → understanding → parsing」の 4 フェーズ通知**: 進捗 % は出さない(構造理解は 1-3 分かかるため細かいバーは無意味、フェーズ表示で十分)
+  - **キャッシュヒット時も `parsing` イベントを 1 回送る**: モーダルが進捗バー描画完了感を持たずに即座に閉じてしまう UX 問題を回避
+  - **音声抽出は既存 `extractAudioToTemp` を流用**: 16kHz mono 64kbps mp3 で Gemini 内部 downsample に合致。コメントに「Gemini downsamples to internally」と書かれていた(つまり過去に Gemini 統合された遺物)— prefix 切替で再活用
+- リトライポリシー:
+  - 401 / 403: 24 時間 mute(キー無効 / 認証失敗)
+  - 429 / 5xx: 60 秒 mute(rate limit / transient)
+  - 不明エラー: 30 秒 mute
+  - 最大試行 = キー数 × 2(2 周まで)、それでも全死亡で `全 API キーが quota 超過 / エラー` を throw
+  - JSON パース失敗: 同じキー + 同じアップロードで 1 回再試行 → 二度目も失敗なら **空 highlights のフォールバック結果**(UI が壊れるよりマシ)
+- 監査結果(タスク 2 着手時の参考):
+  - `analyzeVideoAudio` の引数は `(audioFilePath, videoTitle, durationSec, signal, onProgress)` で signal を combined(timeout + user cancel)化
+  - cancellation は `cancelAnalysis()` でモジュールレベルの ac.abort() → 進行中の fetch も中断
+  - cleanup: 成功/失敗どちらでも uploaded file を best-effort DELETE、temp 音声ファイルも IPC handler の finally で削除
+- 影響: `src/main/utils.ts`(新規)/ `src/main/gemini.ts`(新規)/ `src/main/secureStorage.ts`(Gemini 拡張)/ `src/main/audioExtraction.ts`(prefix 引数追加)/ `src/main/index.ts`(IPC ハンドラ群)/ `src/main/aiSummary.ts`(`videoKeyToFilenameStem` を utils.ts から import)/ `src/preload/index.ts`(gemini namespace expose)/ `src/common/types.ts`(GeminiAnalysisResult 等の型 + IpcApi.gemini)/ `src/renderer/src/components/ApiManagementView.tsx`(GeminiKeysSection)/ `src/renderer/src/components/ClipSelectView.tsx`(test button + 進捗 modal)/ `src/renderer/src/components/ClipSelectView.module.css`(geminiTestButton + 進捗 modal CSS)/ `src/renderer/src/components/GeminiAnalysisDialog.tsx`(新規)/ `src/renderer/src/components/GeminiAnalysisDialog.module.css`(新規)
+- コミット: (未コミット)
+
+---
+
+## 2026-05-03 - aiSummary キャッシュパス連結バグ修正
+
+- 誰が: Claude Code(Opus 4.7)
+- 症状: ClipSelectView で「自動で切り抜き候補を抽出」を押すと `ENOENT: no such file or directory, open 'C:\Users\...\comment-analysis\C:\Users\...\Downloads\jikkyou-cut\5.mp4-summaries.json'` で失敗。2 つの絶対パスが連結されたパスが投げ込まれていた
+- 真因: `aiSummary.ts` のキャッシュファイル名構築で、renderer から渡される `videoKey`(= `editorStore.filePath` の絶対パス)を **basename 化せずに** ファイル名にそのまま interpolate していた。Windows の `path.join(cacheDir, "C:\\full\\path-summaries.json")` は右側の絶対パスをそのまま付与するので、`<cacheDir>\C:\<full>\path-summaries.json` という不正パスが生成されて fs が ENOENT を返していた
+- 修正(2 箇所、いずれも [aiSummary.ts](src/main/aiSummary.ts) 内):
+  - 共通ヘルパ `videoKeyToFilenameStem(videoKey)` 追加 — `path.basename` で flatten した後 Windows 禁止文字 `\ / : * ? " < > |` を `_` に置換
+  - `cacheFilePath`(行 70-71、summaries 用): `${videoKey}` → `${videoKeyToFilenameStem(videoKey)}`
+  - `refineCacheFilePath`(行 386-387、extractions 用): 同上
+- 監査結果(該当箇所が他にないか):
+  - `aiSummary.ts` 内で `videoKey` をファイル名に interpolate していたのは上記 2 箇所のみ
+  - `refineCacheKey`(行 417 付近)は `videoFileBasename` 引数を受け取るが sha256 hex 化されるのでファイルシステム上の不正文字問題は発生しない(関数名は misleading だが機能的には問題なし、本タスクでは触らず)
+  - 他モジュール(`project.ts` / `export.ts` / `gladia.ts` / `audioExtraction.ts`)は `path.dirname` / `path.basename` を経由しており同様のバグはなし
+- なぜ気付かれなかったか:
+  - M1.0 の AI タイトル生成パスは「videoKey として renderer の `filePath`(絶対パス)」をそのまま受け取って同じ構築をしていたが、ユーザがその flow を本格運用する前に M1.5* / Phase 2a / M1.5b の連続改修が入った
+  - 自動抽出ボタンを **本格的に押した最初の機会で発覚** したと推定
+- 影響: `src/main/aiSummary.ts` のみ
+- コミット: (未コミット)
+
+---
+
+## 2026-05-03 - frequentKeywords フィルタを viewBoost 軸に変更
+
+- 誰が: Claude Code(Opus 4.7)
+- 何を: AI プロンプトの「頻出キーワード」セクションのフィルタを **頻度ベース → 視聴ブーストベース** に切替
+  - **撤廃**: `BOILERPLATE_FREQ_THRESHOLD = 0.5`(`freq < 0.5` で除外)
+  - **新設**: `VIEW_BOOST_THRESHOLD = 0.7`(`viewBoost < 0.7` を「伸びを妨げる boilerplate」として除外)
+  - フィルタ後は **viewBoost DESC でソート**して上位 5 個を取得(spec の期待出力に合わせ)
+  - プロンプト内の見出しを「頻出キーワード(boilerplate 除外後):」→「頻出キーワード(伸びる傾向のあるもの):」に
+- 旧 spec(`freq >= 0.5`)が機能しなかった経緯:
+  - 直前タスクの実機データ確認で、global 集計(1552 videos × 75 creators × 5 groups)では top 1 の `切り抜き` でも freq 29.6% で 0.5 閾値に届かないと判明
+  - データ規模が大きく多様性があるほど単一語の頻度は薄まる → 閾値 0.5 のままだと boilerplate がそのままプロンプトに混入
+- viewBoost 軸への切り替え理由:
+  - 「伸びる動画にはこういう単語が多い」が AI に渡したい本来のシグナル
+  - `viewBoost = (キーワードを含む動画の平均 view_count) / (全動画の平均 view_count)`
+  - boilerplate(`切り抜き` `にじさんじ`)は viewBoost < 1.0(よくある単語=平均的、特に伸びてない)、hashtag 系(`#shorts` `#切り抜き`)は viewBoost > 1.0(SEO 効果で実際に伸びる)という対比が綺麗に出る
+- `VIEW_BOOST_THRESHOLD = 0.7` の根拠:
+  - 現データで以下が綺麗に切れる:
+    - **採用**: `#切り抜き` 1.70 / `#shorts` 1.49 / `#にじさんじ` 1.15 / `ぶいすぽ` 0.93 / `にじさんじ切り抜き` 0.86
+    - **除外**: `切り抜き` 0.65 / `にじさんじ` 0.59 / `葛葉` 0.62 / `ホロライブ切り抜き` 0.47
+  - `ホロライブ` 0.73 はぎりぎり通過(top 5 内には入らず実質除外)
+- キャッシュ無効化の扱い:
+  - `refineCacheKey` は `globalPatterns.lastUpdated` を folding しているので、パターン再生成すれば自動で新キャッシュに
+  - 本タスクはコード側のフィルタロジック変更なので、global.json を再生成しなくても挙動は変わる
+  - 既存キャッシュ(boilerplate 入りプロンプト由来)はユーザが「再抽出」を押した時に新ロジックで上書き
+- 残課題: コンテンツ語(神回 / 発狂 / APEX 等)は global 集計では取り出せない問題が依然として残る。tf-idf や配信者別併用で抽出する別タスク化(TODO 行き)
+- 影響: `src/main/aiSummary.ts`(定数 + `buildPatternBlock` のフィルタ + ソート + 見出し)
+- コミット: (未コミット)
+
+---
+
+## 2026-05-03 - AI 抽出を全動画統合パターンに切替(M1.5b + ClipSelectView UI 整理)
+
+- 誰が: Claude Code(Opus 4.7)
+- 設計変更: AI 自動切り抜き候補抽出のパターン feed を **配信者別 → 全動画統合(global.json)1 つだけ**に切替
+  - **追加**: `analyzer.ts` に `analyzeGlobal(db, ts)` 追加、`runPatternAnalysis()` が `userData/patterns/global.json` を生成
+  - **追加**: `aiSummary.ts` に `loadGlobalPatterns()` 追加、`buildRefinePrompt` に「# 切り抜き動画一般の伸びパターン」セクション挿入
+  - **削除**: `buildRefinePrompt` の `creator?` 引数は legacy として残置(default undefined)、すべての caller は globalPatterns 経由
+  - **削除**: `autoExtractClipCandidates` から `creatorOverride` / main 内 `estimateCreator` フォールバック処理
+  - **削除**: `AutoExtractStartArgs.creatorOverride` フィールド(`videoTitle` / `channelName` は将来用に残置)
+  - **削除**: ClipSelectView の配信者バッジ UI、`detectedCreator` state、`estimateCreator` 自動呼び出し、`CreatorPickerDialog` 描画
+  - **CSS 整理**: `autoExtractWrap` / `creatorRow*` 関連クラス削除、`autoExtractGroup` を flat に戻す
+- 残置したコード(将来の Phase 2 残りタスクで再活用予定):
+  - `src/main/dataCollection/estimateCreator.ts`(配信者推定 + listSeedCreatorsForPicker)
+  - `src/renderer/src/components/CreatorPickerDialog.tsx` + `.module.css`
+  - IPC `dataCollection.estimateCreator` / `dataCollection.listSeedCreators`
+  - `buildRefinePrompt` の `_creator?` 引数(現状すべて undefined で呼ばれる)
+- なぜ配信者別をやめたか:
+  - 朝の Phase 2a の動作確認で、配信者ごとのパターンが現データ規模(各 100 件前後)では統計的に弱いと判断
+  - 「切り抜き動画一般の伸びパターン」を AI に渡す方が、配信者属性に依存せず汎用的に機能
+  - データが 10K+ 件貯まった段階で配信者別の有意性を再評価する余地はあり(Phase 2b 範囲)
+- frequentKeywords フィルタ(`freq >= 0.5` 除外)の根拠:
+  - 朝の Phase 2a 観察で boilerplate キーワード(`にじさんじ` `切り抜き` `#shorts` 等)が top 10 を支配する現象を確認
+  - SEO 目的の hashtag / boilerplate を AI プロンプトから除く意図
+  - **ただし実データ(1552 videos 集計)では top 1 が `切り抜き` 29.6% で、0.5 閾値だと 1 語も filter されない**(報告参照)。閾値の再評価が次の課題
+- キャッシュキー変更: `refineCacheKey` の formula を `sha256(videoFileBasename | candidates_sig | tN | globalPatterns.lastUpdated).slice(0,12)` に
+  - M1.5a の creator-folding 形式とは互換切れ
+  - 古いキャッシュ entry は新キーで上書きされていくので削除不要
+  - パターン再分析(`lastUpdated` 更新)で自動的に cache miss → 新プロンプトで再抽出
+- 影響: `src/main/dataCollection/analyzer.ts`(analyzeGlobal 追加)/ `src/common/types.ts`(PatternAnalysisResult 拡張・creatorOverride 削除)/ `src/main/aiSummary.ts`(loadGlobalPatterns / buildPatternBlock / refineCacheKey の sha256 化)/ `src/renderer/src/components/ClipSelectView.tsx`(badge UI 削除)/ `src/renderer/src/components/ClipSelectView.module.css`(dead CSS 削除)/ `src/renderer/src/components/DataCollectionSettings.tsx`(dialog 文言更新)
+- コミット: (未コミット)
+
+---
+
+## 2026-05-03 - Phase 2a パターン分析 analyzer 実装(creator/group 別 JSON 生成)
+
+- 誰が: Claude Code(Opus 4.7)
+- 何を: 蓄積データから配信者別 / グループ別の伸びパターンを JSON で書き出す analyzer を新設。M1.5b の AI プロンプトに食わせるパターン情報の供給源
+  - **新規ファイル**: `src/main/dataCollection/analyzer.ts`(`runPatternAnalysis()` 同期関数)
+  - **新規 IPC**: `dataCollection.runPatternAnalysis()` → `PatternAnalysisResult { generatedCreators, skippedCreators, generatedGroups }`
+  - **UI**: `DataCollectionSettings` の取得操作ボタン群に「パターン分析を実行」(BarChart3 アイコン)を追加。完了後 `window.alert` で件数サマリ表示
+  - **出力**: `userData/patterns/<creatorName>.json` + `userData/patterns/group_<group>.json`(Windows 禁止文字を `_` に置換)
+- 簡易版スコープ(確定):
+  - 実装: `titlePatterns`(frequentKeywords / lengthDist / emojiUsage)、`durationPatterns`(p10/p50/p90)、`peakLocationPatterns`(rank=1 ピーク位置の earlyHook/midSpike/endingClimax 比率)
+  - 後回し(M3+): viewVelocity / thumbnailPatterns / chapterPatterns / topVideos
+  - 根拠: thumbnailPatterns は画像処理(顔検出 / 色 / OCR)が重く依存追加が必要、まず 3 種で M1.5b のプロンプト統合価値を検証してから判断
+- 閾値判断:
+  - **`MIN_SAMPLES_FOR_CREATOR_PATTERN = 20`** — 統計的に意味のあるパターンの最低限。これ未満だと「神回:100% / 発狂:80%」のような誤誘導パターンが出る
+  - 現データで個別 JSON 生成は **葛葉(153) / 叶(131) / 不破湊(68)** の 3 名、72 名スキップ。グループ別は 5 グループ全部生成
+  - グループ別は閾値ガード無し(全員集計でサンプル十分)
+- 形態素解析を入れず単純トークン分割にした理由:
+  - MeCab / kuromoji 等は重い native dependency を追加する
+  - AI(Haiku)は雑音入りトークンリストでも文脈理解できる前提で「事実をそのまま渡す」設計に倒した
+  - 実出力では `にじさんじ` `切り抜き` `#shorts` `#葛葉` 等の hashtag / boilerplate が上位を占める結果。M1.5b でプロンプト側でフィルタリングする
+- ピーク位置バケット境界:
+  - earlyHook: pos < 0.2、midSpike: [0.2, 0.7)、endingClimax: pos >= 0.7
+  - 母数 = rank=1 peak が存在する動画のみ(spec の単純化案を採用)
+  - 葛葉実データ: earlyHook 76% / midSpike 24% / endingClimax 0% — ショート系切り抜きが多く、peak が動画前半に集中する傾向を反映
+- データアクセス:
+  - read-only クエリのみ(better-sqlite3 同期 API、event loop 一時ブロックは ms オーダーなので yield 不要)
+  - 既存 `openDb()` 経路を踏襲、estimateCreator.ts と同じ階層
+- 影響: `src/main/dataCollection/analyzer.ts`(新規)/ `src/main/index.ts` / `src/preload/index.ts` / `src/common/types.ts` / `src/renderer/src/components/DataCollectionSettings.tsx`
+- コミット: (未コミット)
+
+---
+
+## 2026-05-03 - batch サイクルを動的間隔に変更(2h 固定 → 新規率ベース 3/10/20/30 分)
+
+- 誰が: Claude Code(Opus 4.7)
+- 何を: data-collection の batch スケジューラを「2h 固定間隔」から「直前 batch の新規率に応じた動的 sleep」に置き換え
+  - 新仕様の **SLEEP_TIERS**:
+
+    | 新規率(`newCount / candidateCount`)| sleep |
+    |---|---|
+    | ≥ 20% | 3 min |
+    | 10–20% | 10 min |
+    | 5–10% | 20 min |
+    | < 5%(0% 含む)| 30 min |
+
+  - cancelled / candidateCount=0 / 例外時 は `FALLBACK_SLEEP_MS = 30 min`(最下層 tier と同じ)
+  - **`COLLECTION_INTERVAL_MS = 2 * 60 * 60 * 1000` を撤廃**
+  - **`BatchResult` 型を新設**: `{ cancelled, candidateCount, newCount, savedCount, failures }`。`_collectBatch` / `runOneBatch` の戻り値型に
+  - 4 つの `cancelRequested` 早期 return パスはすべて `buildResult(true)` を返し、partial counter を保持
+  - `scheduleNext` を「runOneBatch の結果から `pickNextDelay` で次回 delay を計算 → 自分自身を再 arm」する形に置換。既存の `setTimeout` recursive re-arming + `clearTimeout` キャンセル機構をそのまま活用(spec の自前 loop 案は採用せず)
+  - `runOneBatch` は `_collectBatch` 内エラーを既存通り `logError(`batch error: ...`)` で吸収して fallback BatchResult を返す。`scheduleNext` 側の `.catch` は最終防衛(programming error 時に schedule を死なせない保険)
+  - `runOneBatch` 完走時に **batch summary** ログ:`batch summary — new rate X% (n/c), saved=S, failures=F, sleeping Mmin`
+  - **quota 80% 警告**: `maybeWarnOnQuota()` を batch 完走時に呼び、`getTotalQuotaUsedToday() / (keyCount × 10000)` が `QUOTA_WARN_THRESHOLD = 0.80` を超えたら logInfo で `⚠ quota at X% (used/limit) — consider adding new API keys`。UI 通知は出さない(別タスク TODO 化)
+  - **UI**: `formatNextBatch` の閾値を `sec <= 60` で「間もなく」に変更(動的化後は最短 3 分間隔なので秒単位精度の表示は意味が薄い)。それ以外の formatter ロジックは温存 — 「次まで 3 分」「次まで 30 分」が秒数から自動で出る
+- 旧仕様の課題: 2026-05-02 〜 05-03 の運用観測で本日 quota 消費が 39K / 500K = 7.8% と判明、92% 残量。50 キー体制を活かせていない一方、無駄打ち(新規 0 件 batch 連発)も避けたい。新規率ベースなら YouTube 側の upload pace を吸収しつつ、波があるときは 3 分回しに加速する
+- 採用しなかった案:
+  - **spec 案 2(自前 while loop に書き換え)**: 既存の `setTimeout` recursive + `clearTimeout` キャンセルが既に等価に動く構造だったため、最小変更で動的 delay を流し込む方式に変更。pause/cancel の動線をいじらずに済む
+  - **quota 残量による sleep 延長**: 「枯れたら新キー追加」運用前提とユーザが明示。実装しない
+  - **UI 通知ポップアップ**: ログだけで十分(操作者は log viewer で気付ける)、別タスク化
+- 開放されている設計判断:
+  - **SLEEP_TIERS の閾値**: 初期値、運用 1 週間後にデータドリブンで再評価予定(TODO 行き)
+  - **quota 警告の頻度**: batch 完走ごとに毎回ログを出すので、80% 超過後はログが連発する。閾値クロスの 1 度だけ警告する形に絞るかは様子見
+  - **`saved === 0 && failures >= 5` の `NETWORK_RETRY_COOLDOWN_MS`(5 min)追加 sleep**: dynamic cycle delay の前段として残してある。ネットワーク自体が壊れている時の tight retry を防ぐ。重複に見えるが意味は別(in-band cooldown vs out-of-band tier)
+- 影響: `src/main/dataCollection/index.ts` / `src/renderer/src/components/DataCollectionSettings.tsx`(`formatNextBatch` 1 関数のみ)
+- コミット: (未コミット)
+
+### 追記 2026-05-03 - SLEEP_TIERS を攻めの設定に短縮
+
+- 初期投入の `3/10/20/30 min × 20%/10%/5%/0%` で運用開始したところ、新規率 < 5% tier(30 分待機)が頻発しユーザ体感で「待ちすぎ」
+- 閾値はそのままに sleep 値だけ短縮: **`1/3/5/10 min`**
+- `FALLBACK_SLEEP_MS`(cancelled / candidateCount=0 / 例外時)も最遅 tier に追従して `30min → 10min`。「異常時だけ昔の仕様」を残さず一貫性を保つ
+- quota 試算(最悪ケース): 24h × 60min ÷ 1min/batch × 700 units/batch ≈ **336K/day**、50 キーの 500K 枠の 67% — まだ余裕あり
+- 運用 1 週間後にまた再評価する余地あり(TODO 行きの SLEEP_TIERS 閾値再評価項目をそのまま継続)
+
+---
+
+## 2026-05-02 深夜 - logger.ts を appendFileSync に切替えて write chain freeze を解消
+
+- 誰が: Claude Code(Opus 4.7)
+- 観測症状(2026-05-02 のバックテスト):
+  - `userData/data-collection/collection.log` の最終書込みが 13:06:52Z で固着
+  - 一方で DB(better-sqlite3, sync)には毎分 16-26 video の挿入が継続
+  - `batch start` 9 件に対し `batch done` 0 件、`batch error` も 0 件 — orchestrator は動いてるのに log が出ない
+- 当初仮説と外れた経緯:
+  - 仮説 A:「promise chain が一度 reject されたら catch 不在で chain が swallow される」だったが、コードを読んだら `writeQueue.then(append).catch(handleErr)` で **既に `.catch()` が末尾に付いていた** — 個別の reject からは構造的に回復できる作り
+  - 単発の reject ではこの症状にならない
+- 修正版仮説(採用):
+  - `fs.appendFile` が **永久 pending(settle しない)** ケースが起きると、chain head が pending のまま固まり、後続の全 `writeLine` がそこで詰まる
+  - Windows でこれが起きうる原因:アンチウイルス / OneDrive / Windows Search indexer の排他ロック、`logReader.ts` 等の同時 read、ファイルハンドルリーク
+  - DB は別チャネル(better-sqlite3, sync)なので継続、log だけ止まる症状と一致
+  - `batch done` も `batch error` も logger 経由なので両方とも書き出されない → 0 件症状の一次原因はこれと推定
+- 採用した修正:
+  - `writeLine` を `fs.appendFileSync` に切替、`writeQueue` chain を全廃
+  - `try/catch` で同期エラーを `console.error` に出すのみ、再 throw せず(log 失敗が pipeline を落とさない)
+  - import を `promises as fs` → `appendFileSync, mkdirSync` に変更、関連 dead code なし
+- なぜ「chain + timeout race」(spec 案 A 改) や「queue + interval flush」(spec 案 B) でなく sync 化を選んだか:
+  - chain そのものが脆弱性の温床(pending が滞留する構造)。timeout race は orphan promise を貯める対症療法
+  - queue 方式は内部 buffer + interval state を増やす — 「壊れにくい単純な構造優先」の指示に逆行
+  - sync 化は chain メカニズムを物理的に廃止 → 「queue 頭が pending で固まる」事象が発生不可能に
+  - 行のテアリングも構造的に起きない(per-call open+write+close が atomic)
+- トレードオフ:
+  - event loop ブロック ~50-200µs/call、1 batch ~数百行 → 累積 10-100ms
+  - 同じ event loop で `better-sqlite3`(sync)が回っているので新規ペナルティではない
+  - yt-dlp / API call(数秒〜数分)に比べて誤差レベル
+- 残課題:
+  - **batch done ログが本修正で出るようになるか、明朝のバックテスト(2026-05-03 朝)で確認**
+  - もし出ない場合は logger 以外(orchestrator の早期 return / 例外パス / cancelRequested の意図しない発火)を別タスクで調査
+- 影響: `src/main/dataCollection/logger.ts`(write 関数のみ)
+- コミット: (未コミット)
+
+---
+
+## 2026-05-02 - AI 抽出に配信者推定を追加(M1.5a)
+
+- 誰が: Claude Code(Opus 4.7)
+- 何を: AI 自動抽出の refine プロンプトに配信者情報を埋め込めるよう、推定 + 手動オーバーライド + ピッカー UI を追加。M1.5 を **M1.5a(配信者推定だけ)** と **M1.5b(パターンファイル読込)** に分割し、本タスクは前者だけ実装
+  - **新規 pure 関数** `src/main/dataCollection/estimateCreator.ts`:
+    - `estimateCreator(db, { videoTitle, channelName? })` → `{ creatorName, creatorGroup, source: 'channel-match' | 'title-match' | 'unknown' }`
+    - 優先順位: (1) channelName 完全一致 → (2) videoTitle に creators.name 部分一致(最長一致 + 3 文字以上、`MIN_TITLE_MATCH_LEN=3` で「叶」等の 1-2 文字名は title-match 不可)→ (3) unknown
+    - `listSeedCreatorsForPicker(db)` も同居(is_target=1, group→name 順)
+  - **AI プロンプト拡張**: `buildRefinePrompt(candidates, targetCount, creator?)` の冒頭に `# 動画情報\n配信者: <name> (<group>)\n\n` を差し込む。creator なしなら何も足さない(M1.0 動作維持)
+  - **キャッシュ key 拡張**: `refineCacheKey` に creator を folding。同じ pool でも creator 違いで別キャッシュ。creator 未指定時は prefix 空で M1.0 のキャッシュにヒット
+  - **`autoExtractClipCandidates` 拡張**: 引数に `creatorOverride?: { name; group } | null` + `videoTitle?` + `channelName?`。三状態 — explicit value / null = 指定なし強制 / undefined = main 内で estimateCreator フォールバック(legacy caller 互換)
+  - **新規 IPC**: `dataCollection.estimateCreator(args)` + `dataCollection.listSeedCreators()`
+  - **UI**: `CreatorPickerDialog`(検索 + グループ別セクション + 「指定なし」)。ヘッダの ✨ ボタン下に `配信者: 葛葉 (にじさんじ) [変更]` の小バッジ。「変更」で picker 開く
+  - **推定タイミング**: ClipSelectView の `useEffect` が `fileName` 変化で `estimateCreator` IPC を呼ぶ。fileName(basename)を videoTitle 代わりに使う(yt-dlp の default template にタイトルが含まれる前提の pragmatic shortcut。実際の videoTitle を流すには urlDownload の return → editorStore の plumbing が必要、それは out-of-scope)
+  - **永続化**: 配信者選択は ClipSelectView の local state のみ。ファイル切替で消える(spec 通り)
+- スコープ分割の理由: M1.5b(`loadPatterns`)は「Phase 2 の analyzer がパターン JSON を吐く前提」だが、Phase 2 はまだ未着手かつ蓄積データが安定してない。明朝のバックテスト(2026-05-03 朝)結果を見てから JSON スキーマを **実データドリブンで** 決める方針。先行で type だけ決めると後で書き直しになる
+- 仕様書差分の処理:
+  - **シグネチャ**: spec の `creatorOverride` 三状態 (undefined/null/value) は実装が遵守。renderer は実用上 null か value しか送らないが、main 側のフォールバック estimation はテスト/legacy caller 用に残してある
+  - **fileName を videoTitle 代わりに使った**: editorStore に video の本物 title が無いため。urlDownload は `{ filePath, title }` を返すが store に保存していない。M1.5b 着手時に「title を store に乗せる」を別タスクで切り出すか判断
+  - **AI への指示文や選定基準は変更せず**: spec 9 の「やらないこと」に従って配信者名を渡すだけ。今後 M1.5b でパターン情報を渡す段で指示文も拡張する
+- 影響: `src/common/types.ts` / `src/main/dataCollection/estimateCreator.ts`(新規)/ `src/main/index.ts` / `src/main/aiSummary.ts` / `src/preload/index.ts` / `src/renderer/src/components/ClipSelectView.tsx` / `src/renderer/src/components/ClipSelectView.module.css` / `src/renderer/src/components/CreatorPickerDialog.tsx`(新規)/ `src/renderer/src/components/CreatorPickerDialog.module.css`(新規)
+- コミット: (未コミット)
+
+---
+
+## 2026-05-02 - AI 自動切り抜き候補抽出 M1.0 ギャップ埋め(ClipSegment 拡張 + 視覚区別)
+
+- 誰が: Claude Code(Opus 4.7)
+- 何を: 仕様書 `AI_AUTO_EXTRACTION_DESIGN.md` の M1.0 を実装しようとしたら**コア機能はほぼ全部実装済み**だった。残ギャップだけを埋めた:
+  - `ClipSegment` に `aiSource?: 'auto-extract' | 'manual'` / `aiReason?: string` / `aiConfidence?: number` を optional 追加(types.ts)
+  - `autoExtractClipCandidates` の最終 segments 組み立てで `aiSource: 'auto-extract'` + `aiReason: r.reason` を埋める(aiSummary.ts)
+  - 手動追加経路(`handleAddFromDrag`)は `aiSource: 'manual'` を明示。AI 抽出経路(`handleAutoExtract`)は spread + 上書きで passthrough
+  - `ClipSegmentsList` のカード左に Sparkles バッジ(`aiSource === 'auto-extract'` のときのみ)。`title` 属性で `AI 抽出: <reason>` をホバー表示
+  - `aiConfidence` は型のみ追加、現時点では Stage 2 が返さないので埋まらない。M1.5+ で `RefinedCandidate` 拡張時に伝播
+- 仕様書との差分メモ(本タスクで**修正しない**と明示判断したもの):
+  - **ファイル名**: 仕様書は `src/main/autoExtract.ts` 新規だが、実装は `src/main/aiSummary.ts` の Stage 2/4 に統合配置。共有する `callAnthropicRaw` / `cleanTitle` / `runParallel` を 1 ファイルに置く判断。リネーム churn 回避
+  - **IPC 名**: 仕様書は `autoExtract.start/cancel`、実装は `aiSummary.autoExtract / aiSummary.cancel`。`aiSummary.*` 名前空間で AI 系統を束ねる設計時の整理。動作影響なし
+  - **入力形式**: 仕様書は renderer で `topPeaks` を渡す、実装は `buckets + windowSec` を渡して main 側で `detectPeakCandidates` を毎回呼ぶ。peak detection は sub-ms なので等価
+  - **キャッシュ TTL**: 仕様書 24h、実装は永続(TTL なし)。同じ動画 + 同じピーク入力なら出力も同じ性質の処理なので時間で陳腐化させる意味がないと判断。クリア手段が無いのは別タスク TODO 化
+  - **editorStore.autoExtractMeta**: 未配置(ClipSelectView の local state で管理)。困っていないので移植せず
+- 理由: CLAUDE.md の「先回り抽象化禁止 / MVP スコープ」に従い、動いてるコードのリネーム churn(ログ・既存 PR・ドキュメントとの不整合リスク)を避けた。ユーザに状況報告して合意の上で「ギャップだけ埋める」方針確定
+- 影響: `src/common/types.ts` / `src/main/aiSummary.ts` / `src/renderer/src/components/ClipSelectView.tsx` / `src/renderer/src/components/ClipSegmentsList.tsx` / `src/renderer/src/components/ClipSegmentsList.module.css`
+- コミット: (未コミット)
+
+---
+
 ## 2026-05-03 12:00 - データ収集の最終検証 + 運用 Runbook 整備
 
 - 誰が: Claude Code
