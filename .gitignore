@@ -6,3 +6,11 @@ dist/
 .DS_Store
 *.log
 .vite/
+
+# Per-user runtime state
+.claude/
+
+# yt-dlp cookie exports — session credentials, never commit
+twitch-cookies/
+youtube-cookies.txt/
+*_cookies.txt

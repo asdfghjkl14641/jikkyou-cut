@@ -1,0 +1,6 @@
+# Bundled binaries — force binary handling so EOL conversion / autocrlf
+# never silently corrupts them on Windows clones. yt-dlp.exe is the
+# concrete current case (~18 MB Windows PE); add new binary blobs
+# below as they get bundled.
+resources/yt-dlp/yt-dlp.exe binary
+*.exe binary
