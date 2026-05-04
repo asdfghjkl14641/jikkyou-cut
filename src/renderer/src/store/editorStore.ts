@@ -1,5 +1,6 @@
 import { create } from 'zustand';
 import type {
+  CommentAnalysisLoadStatus,
   ExportProgress,
   ExportResult,
   TranscriptCue,
@@ -23,11 +24,12 @@ type ExportStatus = 'idle' | 'running' | 'success' | 'error' | 'cancelled';
 
 const HISTORY_LIMIT = 100;
 
-type EditorPhase = 'load' | 'clip-select' | 'edit' | 'api-management';
-// Phases that the user can return TO from api-management. We exclude
-// 'api-management' itself — the back button collapses cycles by clearing
+type EditorPhase = 'load' | 'clip-select' | 'edit' | 'api-management' | 'monitored-creators';
+// Phases that the user can return TO from a swap-in screen
+// (api-management / monitored-creators). We exclude those swap-in
+// phases themselves so the back button collapses cycles by clearing
 // previousPhase on entry.
-type RestorablePhase = Exclude<EditorPhase, 'api-management'>;
+type RestorablePhase = Exclude<EditorPhase, 'api-management' | 'monitored-creators'>;
 
 // Maximum number of clip segments the user can stack — set well above
 // the realistic 10-or-so per highlight compilation so a determined user
@@ -55,6 +57,24 @@ type EditorState = {
   // files dropped into DropZone — comment analysis is disabled in that
   // case because it has nothing to scrape.
   sourceUrl: string | null;
+  // Stage 2 — audio-first DL produces this before the video file is
+  // ready. Used by aiSummary auto-extract to skip ffmpeg's audio
+  // extraction step. Null for local drops + after the video DL
+  // catches up (the renderer keeps it around for cache continuity
+  // but the video file is preferred for playback).
+  audioFilePath: string | null;
+  // Stable identifier shared by audio + video DLs of the same URL.
+  // Cache keys (refine cache, gemini cache) prefer this over file
+  // paths so audio→video transition keeps cache hits.
+  sessionId: string | null;
+  // Background video DL progress (during the audio-first window).
+  // 'idle' = no DL active (local drop or post-completion). 'done' is
+  // a permanent state for the session.
+  videoDownloadStatus: {
+    status: 'idle' | 'downloading' | 'done' | 'error';
+    progress: number;
+    error: string | null;
+  };
   durationSec: number | null;
   // Captured from `<video>.videoWidth/Height` on `loadedmetadata`. Needed
   // by export so the burned-in subtitle script can use the actual video
@@ -108,6 +128,13 @@ type EditorState = {
   // no recorded source (e.g. cold-launched into api-management which
   // we don't currently allow).
   closeApiManagement: () => void;
+  // 段階 X1 — same swap-in pattern as api-management. The previous
+  // editing phase (load/clip-select/edit) is preserved, and the back
+  // button restores it. clip-select/edit specifically: the user's
+  // current video file + segments survive untouched while they
+  // register/unregister streamers.
+  openMonitoredCreators: () => void;
+  closeMonitoredCreators: () => void;
 
   // Clip-segment lifecycle. Mutations on `clipSegments` automatically
   // resize `eyecatches` to N-1, preserving slot text where possible.
@@ -125,6 +152,23 @@ type EditorState = {
   setDuration: (sec: number) => void;
   setVideoDimensions: (w: number, h: number) => void;
   setCurrentSec: (sec: number) => void;
+
+  // Stage 2 — entry point for the audio-first URL DL flow. Transitions
+  // to clip-select WITHOUT a video filePath (renderer shows the DL
+  // overlay until setVideoFilePath fills it in).
+  enterClipSelectFromUrl: (args: {
+    audioFilePath: string;
+    sessionId: string;
+    sourceUrl: string;
+    durationSec: number;
+    fileName: string;
+  }) => void;
+  // Background video DL completion. Adds filePath to the existing
+  // clip-select session WITHOUT resetting clipSegments / cues / etc —
+  // the user may have already started picking clips off the audio.
+  setVideoFilePath: (videoFilePath: string) => void;
+  setVideoDownloadProgress: (progress: number) => void;
+  setVideoDownloadFailure: (error: string) => void;
 
   // transcription lifecycle
   startTranscription: () => void;
@@ -195,6 +239,21 @@ type EditorState = {
   // intentionally not persisted to disk (prototype scope).
   analysisWindowSec: number;
   setAnalysisWindowSec: (sec: number) => void;
+
+  // Stage 6a — comment-analysis status promoted from ClipSelectView's
+  // local state to the store. This lets App.tsx fire the IPC at URL-
+  // input time (parallel with audio + video DL) instead of waiting
+  // for ClipSelectView to mount + trigger a useEffect.
+  commentAnalysisStatus: CommentAnalysisLoadStatus;
+  setCommentAnalysisStatus: (s: CommentAnalysisLoadStatus) => void;
+
+  // Stage 6a — global pattern snapshot, preloaded at URL-input time.
+  // Stored as `unknown` because its shape is only meaningful main-side;
+  // the renderer treats it as opaque cargo. autoExtract still loads
+  // internally on main, so this preload is purely for "ready when you
+  // click the button" cosmetic instant-feel.
+  globalPatterns: unknown | null;
+  setGlobalPatterns: (p: unknown | null) => void;
 };
 
 const DEFAULT_ANALYSIS_WINDOW_SEC = 120;
@@ -265,6 +324,9 @@ export const useEditorStore = create<EditorState>((set, get) => ({
   filePath: null,
   fileName: null,
   sourceUrl: null,
+  audioFilePath: null,
+  sessionId: null,
+  videoDownloadStatus: { status: 'idle', progress: 0, error: null },
   durationSec: null,
   videoWidth: null,
   videoHeight: null,
@@ -302,15 +364,40 @@ export const useEditorStore = create<EditorState>((set, get) => ({
 
   analysisWindowSec: DEFAULT_ANALYSIS_WINDOW_SEC,
 
+  commentAnalysisStatus: { kind: 'idle' },
+  globalPatterns: null,
+
   setPhase: (phase) => set({ phase }),
 
   openApiManagement: () => {
     const cur = get().phase;
     if (cur === 'api-management') return;
+    // If we're already on another swap-in phase (monitored-creators),
+    // route via that screen's back button rather than chaining swaps.
+    // previousPhase only ever holds editable phases, never swap-in
+    // ones — see RestorablePhase.
+    if (cur === 'monitored-creators') return;
     set({ phase: 'api-management', previousPhase: cur });
   },
 
   closeApiManagement: () => {
+    const prev = get().previousPhase;
+    set({ phase: prev ?? 'load', previousPhase: null });
+  },
+
+  openMonitoredCreators: () => {
+    const cur = get().phase;
+    if (cur === 'monitored-creators') return;
+    // Don't overwrite previousPhase if we're transitioning from
+    // api-management — that's also a swap-in phase and previousPhase
+    // already holds the "real" original phase to return to. We skip
+    // the open call entirely in that case so navigation stays
+    // predictable.
+    if (cur === 'api-management') return;
+    set({ phase: 'monitored-creators', previousPhase: cur });
+  },
+
+  closeMonitoredCreators: () => {
     const prev = get().previousPhase;
     set({ phase: prev ?? 'load', previousPhase: null });
   },
@@ -380,7 +467,9 @@ export const useEditorStore = create<EditorState>((set, get) => ({
     });
   },
 
-  setFile: (absPath) =>
+  setFile: (absPath) => {
+    const stack = (new Error().stack ?? '').split('\n').slice(1, 4).join(' | ');
+    console.log('[comment-debug:store] setFile called: absPath=', absPath, 'caller=', stack);
     set({
       phase: 'clip-select',
       filePath: absPath,
@@ -390,6 +479,11 @@ export const useEditorStore = create<EditorState>((set, get) => ({
       // local-file drops correctly leave it null and prior session
       // URLs don't leak into subsequent local-file sessions.
       sourceUrl: null,
+      // Stage 2 audio-first state stays cleared for local drops.
+      // enterClipSelectFromUrl is the dedicated entry for URL flows.
+      audioFilePath: null,
+      sessionId: null,
+      videoDownloadStatus: { status: 'idle', progress: 0, error: null },
       durationSec: null,
       videoWidth: null,
       videoHeight: null,
@@ -412,17 +506,104 @@ export const useEditorStore = create<EditorState>((set, get) => ({
       clipSegments: [],
       eyecatches: [],
       analysisWindowSec: DEFAULT_ANALYSIS_WINDOW_SEC,
-    }),
+      // Local drop has no URL → comment analysis won't fire. Reset to
+      // 'idle' so a stale 'ready' from a previous URL session doesn't
+      // leak into the mock-display path. globalPatterns is global to
+      // the app so it stays cached across file swaps.
+      commentAnalysisStatus: { kind: 'idle' },
+    });
+  },
 
   setSourceUrl: (url) => set({ sourceUrl: url }),
 
-  clearFile: () =>
+  // URL-DL audio-first entry. Mirrors setFile's reset list (cues /
+  // selection / history / status) but populates audio-only fields and
+  // leaves filePath null — VideoPlayer is replaced by a DL overlay
+  // until setVideoFilePath fires.
+  enterClipSelectFromUrl: ({ audioFilePath, sessionId, sourceUrl, durationSec, fileName }) => {
+    console.log(
+      '[comment-debug:store] enterClipSelectFromUrl: sessionId=', sessionId,
+      'audioFilePath=', audioFilePath,
+      'durationSec=', durationSec,
+      'fileName=', fileName,
+    );
+    set({
+      phase: 'clip-select',
+      filePath: null,
+      fileName,
+      sourceUrl,
+      audioFilePath,
+      sessionId,
+      videoDownloadStatus: { status: 'downloading', progress: 0, error: null },
+      durationSec,
+      videoWidth: null,
+      videoHeight: null,
+      currentSec: 0,
+      transcription: null,
+      cues: [],
+      selectedIds: new Set<string>(),
+      focusedIndex: null,
+      headIndex: null,
+      past: [],
+      future: [],
+      transcriptionStatus: 'idle',
+      transcriptionProgress: null,
+      transcriptionError: null,
+      exportStatus: 'idle',
+      exportProgress: null,
+      exportResult: null,
+      exportError: null,
+      viewMode: 'linear',
+      clipSegments: [],
+      eyecatches: [],
+      analysisWindowSec: DEFAULT_ANALYSIS_WINDOW_SEC,
+      // Stage 6a — App.tsx will flip this to 'loading' immediately
+      // after this action returns. Pre-set 'idle' so any stale
+      // 'ready'/'error' from a previous session doesn't bleed into
+      // ClipSelectView's first render.
+      commentAnalysisStatus: { kind: 'idle' },
+    });
+  },
+
+  setVideoFilePath: (videoFilePath) =>
+    set({
+      filePath: videoFilePath,
+      // Update displayed filename to the actual video file (yt-dlp's
+      // %(title)s.%(ext)s template). Audio session keeps its name in
+      // the audioFilePath but the user-facing label tracks the video.
+      fileName: basename(videoFilePath),
+      videoDownloadStatus: { status: 'done', progress: 1, error: null },
+    }),
+
+  setVideoDownloadProgress: (progress) =>
+    set((s) => ({
+      videoDownloadStatus: {
+        // Progress events arriving after completion are no-ops — never
+        // regress 'done' back to 'downloading'.
+        status: s.videoDownloadStatus.status === 'done' ? 'done' : 'downloading',
+        progress,
+        error: null,
+      },
+    })),
+
+  setVideoDownloadFailure: (error) =>
+    set({
+      videoDownloadStatus: { status: 'error', progress: 0, error },
+    }),
+
+  clearFile: () => {
+    const stack = (new Error().stack ?? '').split('\n').slice(1, 4).join(' | ');
+    console.log('[comment-debug:store] clearFile called: caller=', stack);
     set({
       phase: 'load',
       filePath: null,
       fileName: null,
       sourceUrl: null,
+      audioFilePath: null,
+      sessionId: null,
+      videoDownloadStatus: { status: 'idle', progress: 0, error: null },
       durationSec: null,
+      commentAnalysisStatus: { kind: 'idle' },
       videoWidth: null,
       videoHeight: null,
       currentSec: 0,
@@ -444,10 +625,36 @@ export const useEditorStore = create<EditorState>((set, get) => ({
       clipSegments: [],
       eyecatches: [],
       analysisWindowSec: DEFAULT_ANALYSIS_WINDOW_SEC,
-    }),
+    });
+  },
 
 
-  setDuration: (sec) => set({ durationSec: sec }),
+  setDuration: (sec) => {
+    // Two-tier guard:
+    //   (1) reject 0 / NaN — early-buffering values from <video> /
+    //       embed `getDuration()` would otherwise clobber a valid
+    //       duration and collapse ClipSelectView's comment-analysis
+    //       gate (`durationSec <= 0`), silently cancelling chat replay.
+    //   (2) skip when an existing valid duration is within 5s of the
+    //       new value. Audio probe gives sub-second precision (5740.18s);
+    //       the embed player polling later returns the integer-rounded
+    //       version (5741s). Both are correct, but accepting the second
+    //       triggers a useEffect re-run that tears down the in-flight
+    //       chat fetch — leading to the 2026-05-03 WinError-32 cascade.
+    const stack = (new Error().stack ?? '').split('\n').slice(1, 6).join(' | ');
+    const current = get().durationSec;
+    const finite = Number.isFinite(sec) && sec > 0;
+    const drifted = finite && current != null && current > 0 && Math.abs(current - sec) < 5;
+    console.log(
+      `[comment-debug:store] setDuration called: sec=${sec}, current=${current}, accept=${
+        finite && !drifted
+      } (finite=${finite}, drifted=${drifted})`,
+    );
+    console.log('[comment-debug:store] setDuration caller:', stack);
+    if (!finite) return;
+    if (drifted) return;
+    set({ durationSec: sec });
+  },
 
   setVideoDimensions: (w, h) => {
     if (Number.isFinite(w) && Number.isFinite(h) && w > 0 && h > 0) {
@@ -835,4 +1042,20 @@ export const useEditorStore = create<EditorState>((set, get) => ({
     const clamped = Math.max(30, Math.min(300, Math.round(sec)));
     set({ analysisWindowSec: clamped });
   },
+
+  setCommentAnalysisStatus: (s) => {
+    const cur = get().commentAnalysisStatus;
+    const stack = (new Error().stack ?? '').split('\n').slice(1, 4).join(' | ');
+    const detail =
+      s.kind === 'ready'
+        ? `messageCount=${s.analysis.allMessages.length}`
+        : s.kind === 'error'
+          ? `error=${s.message}`
+          : '';
+    console.log(
+      `[comment-debug:store] setCommentAnalysisStatus: ${cur.kind} -> ${s.kind} ${detail} | sessionId=${get().sessionId} | caller=${stack}`,
+    );
+    set({ commentAnalysisStatus: s });
+  },
+  setGlobalPatterns: (p) => set({ globalPatterns: p }),
 }));

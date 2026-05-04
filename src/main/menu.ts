@@ -1,7 +1,14 @@
 import { Menu, type BrowserWindow, type MenuItemConstructorOptions } from 'electron';
 import { diagnoseDataCollection } from './dataCollection/diagnose';
 
-export function buildMenu(getMainWindow: () => BrowserWindow | null) {
+export function buildMenu(opts: {
+  getMainWindow: () => BrowserWindow | null;
+  // 段階 X3.5 — explicit quit handler routed through actuallyQuit so
+  // the close-to-tray hook in main/index.ts knows this is a user-
+  // initiated quit and doesn't re-hide the window.
+  onQuit: () => void;
+}) {
+  const { getMainWindow } = opts;
   const send = (channel: string) => () => {
     getMainWindow()?.webContents.send(channel);
   };
@@ -21,7 +28,15 @@ export function buildMenu(getMainWindow: () => BrowserWindow | null) {
           click: send('menu:openSettings'),
         },
         { type: 'separator' },
-        { role: 'quit', label: '終了' },
+        // Replaced `role: 'quit'` with an explicit click so we can
+        // route through actuallyQuit(). The role variant calls
+        // app.quit() directly, which is intercepted by the close
+        // handler and bounces the window to the tray instead.
+        {
+          label: '終了',
+          accelerator: 'CmdOrCtrl+Q',
+          click: opts.onQuit,
+        },
       ],
     },
     {
@@ -41,6 +56,14 @@ export function buildMenu(getMainWindow: () => BrowserWindow | null) {
       label: 'API 管理',
       accelerator: 'CmdOrCtrl+Shift+A',
       click: send('menu:openApiManagement'),
+    },
+    {
+      // 段階 X1 — auto-record monitored creators screen. Top-level so
+      // it sits as a peer to API 管理; this is the primary entry point
+      // to the feature from the main window.
+      label: '登録チャンネル',
+      accelerator: 'CmdOrCtrl+Shift+M',
+      click: send('menu:openMonitoredCreators'),
     },
     {
       // Temporary diagnostic submenu — for inspecting the

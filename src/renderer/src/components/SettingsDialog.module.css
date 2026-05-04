@@ -58,6 +58,39 @@
   overflow: auto;
 }
 
+/* 段階 X1: tab strip below the header. The dialog is otherwise too
+   narrow for sidebar tabs (560px max), so we go horizontal. */
+.tabStrip {
+  display: flex;
+  gap: var(--space-1);
+  padding: 0 var(--space-5);
+  border-bottom: 1px solid var(--border-subtle);
+  background: rgba(255, 255, 255, 0.02);
+}
+
+.tabButton {
+  appearance: none;
+  background: transparent;
+  border: none;
+  border-bottom: 2px solid transparent;
+  color: var(--text-secondary);
+  cursor: pointer;
+  font-family: inherit;
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-medium);
+  padding: var(--space-3) var(--space-4);
+  transition: color var(--transition-fast), border-color var(--transition-fast);
+}
+
+.tabButton:hover:not(:disabled) {
+  color: var(--text-primary);
+}
+
+.tabButtonActive {
+  color: var(--text-primary);
+  border-bottom-color: var(--accent-primary);
+}
+
 .section {
   margin-bottom: var(--space-4);
 }

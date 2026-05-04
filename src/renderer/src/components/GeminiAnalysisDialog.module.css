@@ -1,0 +1,227 @@
+.overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.6);
+  z-index: 100;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.dialog {
+  width: 640px;
+  max-width: 90vw;
+  max-height: 80vh;
+  display: flex;
+  flex-direction: column;
+  background: var(--surface, #1f1f23);
+  border: 1px solid var(--border, #38383d);
+  border-radius: 8px;
+  box-shadow: 0 16px 48px rgba(0, 0, 0, 0.6);
+  overflow: hidden;
+}
+
+.header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 14px;
+  border-bottom: 1px solid var(--border, #38383d);
+  background: rgba(125, 108, 255, 0.08);
+}
+
+.title {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  font-weight: 600;
+  color: #c8b4ff;
+}
+
+.subtitle {
+  color: var(--text-muted, #9a9aa3);
+  font-weight: 400;
+  font-size: 12px;
+}
+
+.closeButton {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  background: transparent;
+  border: none;
+  color: var(--text-muted, #9a9aa3);
+  border-radius: 4px;
+  cursor: pointer;
+}
+
+.closeButton:hover {
+  background: rgba(255, 255, 255, 0.08);
+  color: var(--text-primary, #e6e6ea);
+}
+
+.content {
+  flex: 1;
+  overflow-y: auto;
+  padding: 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+}
+
+.section {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.sectionTitle {
+  margin: 0;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-muted, #9a9aa3);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.empty {
+  font-size: 12px;
+  color: var(--text-muted, #9a9aa3);
+  font-style: italic;
+}
+
+.timeline {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.timelineRow {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  padding: 4px 6px;
+  border-radius: 3px;
+  font-size: 13px;
+}
+
+.timelineRow:hover {
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.timeRange {
+  font-family: monospace;
+  font-size: 12px;
+  color: var(--text-muted, #9a9aa3);
+  flex-shrink: 0;
+  min-width: 100px;
+}
+
+.timelineDesc {
+  color: var(--text-primary, #e6e6ea);
+}
+
+.highlights {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  counter-reset: highlight;
+}
+
+.highlightRow {
+  padding: 8px 10px;
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid var(--border-subtle, #2c2c30);
+  border-radius: 4px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.highlightHeader {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  font-size: 12px;
+}
+
+.highlightIndex {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  background: rgba(125, 108, 255, 0.18);
+  color: #c8b4ff;
+  border-radius: 50%;
+  font-weight: 600;
+  font-size: 11px;
+}
+
+.highlightCategory {
+  color: var(--text-secondary, #b9b9c2);
+  font-size: 11px;
+}
+
+.highlightConfidence {
+  margin-left: auto;
+  font-family: monospace;
+  font-size: 11px;
+  color: var(--text-muted, #9a9aa3);
+}
+
+.highlightReason {
+  font-size: 13px;
+  color: var(--text-primary, #e6e6ea);
+  line-height: 1.4;
+}
+
+.transcript {
+  margin: 0;
+  padding: 8px;
+  background: rgba(0, 0, 0, 0.3);
+  border-radius: 3px;
+  font-family: monospace;
+  font-size: 11px;
+  color: var(--text-secondary, #b9b9c2);
+  white-space: pre-wrap;
+  max-height: 160px;
+  overflow-y: auto;
+}
+
+.footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 14px;
+  border-top: 1px solid var(--border, #38383d);
+  background: rgba(0, 0, 0, 0.15);
+}
+
+.copyButton,
+.closeButtonText {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px;
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid var(--border, #38383d);
+  border-radius: 4px;
+  color: var(--text-primary, #e6e6ea);
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.copyButton:hover,
+.closeButtonText:hover {
+  background: rgba(255, 255, 255, 0.08);
+}

@@ -243,6 +243,14 @@ export default function ClipSegmentsList({
                     <GripVertical size={14} className={styles.gripIcon} />
                     <span className={styles.indexBadge}>{i + 1}</span>
                     <span className={styles.categoryDot} style={{ background: CATEGORY_COLORS[cat] }} title={CATEGORY_NAMES[cat]} />
+                    {seg.aiSource === 'auto-extract' && (
+                      <span
+                        className={styles.aiBadge}
+                        title={seg.aiReason ? `AI 抽出: ${seg.aiReason}` : 'AI 抽出'}
+                      >
+                        <Sparkles size={11} />
+                      </span>
+                    )}
                   </div>
                   <div className={styles.cardMain}>
                     <div className={styles.cardTimeRow}>

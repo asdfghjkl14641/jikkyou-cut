@@ -31,8 +31,6 @@ const ROW_HEIGHT = 32;
 const BUFFER_ROWS = 10;
 // "Current" highlight band, in seconds either side of currentSec.
 const CURRENT_BAND_SEC = 5;
-// Tolerance for distinguishing programmatic scrollTop from user wheel.
-const PROGRAMMATIC_SCROLL_TOLERANCE_PX = 4;
 
 const formatHMS = (totalSec: number): string => {
   if (!Number.isFinite(totalSec) || totalSec < 0) return '0:00';
@@ -110,9 +108,27 @@ export default function LiveCommentFeed({ messages, currentSec, onCommentClick }
   const [containerHeight, setContainerHeight] = useState(400);
   const [autoScroll, setAutoScroll] = useState(true);
 
-  // Tracks the scrollTop we just programmatically wrote, so handleScroll
-  // can distinguish "we did this" from "user moved the wheel".
-  const lastProgrammaticScrollTopRef = useRef<number | null>(null);
+  // Suppression window for "we did this" vs "user moved the wheel".
+  //
+  // The previous tracker stored a single `lastProgrammaticScrollTop`
+  // and matched scroll events against it within ±4 px. That broke when
+  // multiple programmatic scrolls fired in quick succession (currentSec
+  // ticks during playback): the scroll event from the first scrollTo
+  // would arrive AFTER the second scrollTo had overwritten the ref,
+  // so the first event's scrollTop missed the new target by way more
+  // than 4 px and got mis-classified as a user scroll → autoScroll
+  // immediately flipped off, looking to the user like "the default is
+  // OFF" even though useState(true) is correct.
+  //
+  // Time-window suppression instead: bump the ref forward by N ms
+  // before each programmatic scroll, and treat any scroll event before
+  // that deadline as "ours". Browsers fire the scroll event within a
+  // frame or two, so 150 ms is plenty even for the slowest layout pass
+  // we've observed. Wall-clock instead of a counter avoids needing the
+  // per-event-arriving-once invariant that the old code implicitly
+  // relied on.
+  const programmaticScrollUntilRef = useRef<number>(0);
+  const PROGRAMMATIC_SCROLL_WINDOW_MS = 150;
 
   // Resize observer to keep `containerHeight` in sync — affects how
   // many rows we render and where the "centre" target lands.
@@ -146,19 +162,18 @@ export default function LiveCommentFeed({ messages, currentSec, onCommentClick }
       currentIndex * ROW_HEIGHT - el.clientHeight / 2 + ROW_HEIGHT / 2,
     );
     if (Math.abs(target - el.scrollTop) < 1) return;
-    lastProgrammaticScrollTopRef.current = target;
+    programmaticScrollUntilRef.current = Date.now() + PROGRAMMATIC_SCROLL_WINDOW_MS;
     el.scrollTo({ top: target, behavior: 'auto' });
   }, [autoScroll, currentIndex, messages.length]);
 
   const handleScroll = useCallback((e: UIEvent<HTMLDivElement>) => {
     const top = (e.target as HTMLDivElement).scrollTop;
     setScrollTop(top);
-    // Filter out the scroll event triggered by our own scrollTo call.
-    const lastProg = lastProgrammaticScrollTopRef.current;
-    if (lastProg != null && Math.abs(top - lastProg) <= PROGRAMMATIC_SCROLL_TOLERANCE_PX) {
-      lastProgrammaticScrollTopRef.current = null;
-      return;
-    }
+    // Suppress while we're inside the programmatic-scroll window. A
+    // single programmatic scroll can fire multiple scroll events
+    // (browser coalescing varies); we don't try to count them, just
+    // ignore the whole window.
+    if (Date.now() < programmaticScrollUntilRef.current) return;
     // User-initiated scroll → pause auto-follow until they re-engage.
     if (autoScroll) setAutoScroll(false);
   }, [autoScroll]);

@@ -136,6 +136,18 @@ export default function CommentAnalysisGraph({
     );
   }, [analysis.buckets, analysis.bucketSizeSec, analysis.hasViewerStats, windowSec]);
 
+  // Low-density placeholder threshold. With < N messages spread across
+  // a multi-hour VOD, the rolling-score normalisation produces a
+  // mostly-flat baseline that's invisible on the graph (height ≈ 0
+  // everywhere) — the user reads it as "graph not rendering". We show
+  // an overlay instead so they know the data is genuinely sparse, not
+  // a UI bug. 10 was picked empirically: a 4h stream with ≥10 chat
+  // messages already produces enough peaks to make the waveform
+  // readable.
+  const LOW_DENSITY_THRESHOLD = 10;
+  const messageCount = analysis.chatMessageCount ?? analysis.allMessages.length;
+  const isLowDensity = messageCount < LOW_DENSITY_THRESHOLD;
+
   const currentPercent = useMemo(() => {
     if (durationSec <= 0) return 0;
     return Math.min(100, Math.max(0, (currentSec / durationSec) * 100));
@@ -490,6 +502,35 @@ export default function CommentAnalysisGraph({
         onMouseLeave={handleMouseLeave}
         onContextMenu={handleContextMenu}
       >
+        {/* Low-density overlay. Sits over the SVG waveform but below
+            the segment overlays in z-order so the user can still drag
+            to add segments manually. We don't bail out of rendering
+            the SVG entirely because seek-on-click + segment bars are
+            still useful when chat is sparse. */}
+        {isLowDensity && (
+          <div
+            style={{
+              position: 'absolute',
+              inset: 0,
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              flexDirection: 'column',
+              gap: 4,
+              pointerEvents: 'none',
+              color: 'var(--text-muted)',
+              fontSize: 'var(--font-size-sm)',
+              textAlign: 'center',
+              padding: '0 12px',
+              zIndex: 1,
+            }}
+          >
+            <div>コメント密度が不足しています({messageCount} 件)</div>
+            <div style={{ fontSize: 'var(--font-size-xs)' }}>
+              Twitch クッキー設定 or 動画 DL 完了後にローカル動画で編集してください
+            </div>
+          </div>
+        )}
         <svg className={styles.svgWaveform} viewBox="0 0 100 100" preserveAspectRatio="none">
           <defs>
             <linearGradient id="waveformFillGradient" x1="0" y1="0" x2="0" y2="1">

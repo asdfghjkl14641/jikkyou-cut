@@ -21,6 +21,16 @@ type Props = {
   onDuration?: (sec: number) => void;
   // Called frequently while playing (rAF), once on seek/pause/end.
   onCurrentTime?: (sec: number) => void;
+  // Stage 4 — when transitioning from EmbeddedVideoPlayer to local
+  // playback, the parent passes the embed's current time here so this
+  // player resumes at the same position. Applied once on the first
+  // `loadedmetadata` (subsequent values are ignored — re-mounting the
+  // VideoPlayer is the supported way to restart at a new position).
+  initialSec?: number;
+  // True ⇒ auto-play after the initial seek lands. Used when the embed
+  // was playing at the moment of the swap, so the user keeps watching
+  // through the transition.
+  shouldAutoPlay?: boolean;
 };
 
 export type VideoPlayerHandle = {
@@ -38,7 +48,7 @@ const NOT_SUPPORTED_DEFER_MS = 500;
 const SKIP_COOLDOWN_MS = 50;
 
 const VideoPlayer = forwardRef<VideoPlayerHandle, Props>(function VideoPlayer(
-  { filePath, onDuration, onCurrentTime },
+  { filePath, onDuration, onCurrentTime, initialSec, shouldAutoPlay },
   ref,
 ) {
   const videoRef = useRef<HTMLVideoElement>(null);
@@ -46,6 +56,15 @@ const VideoPlayer = forwardRef<VideoPlayerHandle, Props>(function VideoPlayer(
   const rafRef = useRef<number | null>(null);
   const onCurrentTimeRef = useRef(onCurrentTime);
   onCurrentTimeRef.current = onCurrentTime;
+  // Stage 4 — gate flag so initialSec / shouldAutoPlay only apply on
+  // the first loadedmetadata after mount. Subsequent metadata events
+  // (e.g. user opens a new file in the same session) reset because the
+  // VideoPlayer remounts and the ref starts over.
+  const initialSeekAppliedRef = useRef(false);
+  const initialSecRef = useRef(initialSec);
+  initialSecRef.current = initialSec;
+  const shouldAutoPlayRef = useRef(shouldAutoPlay);
+  shouldAutoPlayRef.current = shouldAutoPlay;
 
   const cues = useEditorStore((s) => s.cues);
   const durationSec = useEditorStore((s) => s.durationSec);
@@ -247,6 +266,28 @@ const VideoPlayer = forwardRef<VideoPlayerHandle, Props>(function VideoPlayer(
     const d = v.duration;
     if (d != null && Number.isFinite(d) && d > 0) {
       onDuration?.(d);
+    }
+
+    // Stage 4 — initial seek + autoplay on the embed→local handoff.
+    // Apply once per mount; the parent re-mounts VideoPlayer for any
+    // subsequent file swap, which resets the ref.
+    if (!initialSeekAppliedRef.current) {
+      initialSeekAppliedRef.current = true;
+      const seek = initialSecRef.current;
+      if (Number.isFinite(seek) && seek != null && seek > 0) {
+        try {
+          v.currentTime = seek;
+        } catch {
+          // ignore — readyState may still be insufficient on edge codecs
+        }
+      }
+      if (shouldAutoPlayRef.current) {
+        v.play().catch(() => {
+          // ignore — autoplay may be blocked by browser policy in
+          // dev mode (Electron usually allows but the catch keeps
+          // the chain quiet either way)
+        });
+      }
     }
     // Capture intrinsic dimensions for export-time subtitle PlayResX/Y.
     // Skipped via the store guard if either is 0 (e.g. before metadata).

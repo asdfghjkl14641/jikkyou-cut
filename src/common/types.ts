@@ -1,4 +1,7 @@
-import type { AppConfig } from './config';
+import type { AppConfig, MonitoredCreator } from './config';
+// Re-export so renderer code that imports from common/types only
+// still gets the recording types in one place.
+// (declared lower in this file)
 import { ReactionCategory } from './commentAnalysis/keywords';
 export type { ReactionCategory } from './commentAnalysis/keywords';
 
@@ -246,6 +249,18 @@ export type CommentAnalysisStartArgs = {
   durationSec: number;
 };
 
+// Stage 6a — store-resident lifecycle for the comment-analysis pipeline.
+// Pre-stage 6a this lived as React local state inside ClipSelectView,
+// which meant the analysis kicked off only after that view mounted
+// (post audio-DL). Hoisting it lets App.tsx fire the IPC the moment
+// the URL DL flow has its sessionId / sourceUrl / durationSec, in
+// parallel with the video DL.
+export type CommentAnalysisLoadStatus =
+  | { kind: 'idle' }
+  | { kind: 'loading'; phase: 'chat' | 'viewers' | 'scoring' }
+  | { kind: 'ready'; analysis: CommentAnalysis }
+  | { kind: 'error'; message: string };
+
 // Stage 1 output: raw per-bucket aggregates (no scoring applied yet). The
 // main process produces these once per analysis run; the renderer reuses
 // them to recompute `ScoreSample[]` whenever the user moves the W
@@ -312,6 +327,33 @@ export type UrlDownloadArgs = {
   outputDir: string;
 };
 
+// Stage 2 — split URL download into two independent paths so the
+// renderer can unblock UI as soon as audio is available, while the
+// (much larger) video download continues in the background.
+export type AudioOnlyDownloadArgs = {
+  url: string;
+  outputDir: string;
+};
+
+export type AudioOnlyDownloadResult = {
+  audioFilePath: string;
+  sessionId: string;            // see deriveSessionId() in urlDownload.ts
+  durationSec: number;
+  videoTitle: string;
+};
+
+export type VideoOnlyDownloadArgs = {
+  url: string;
+  quality: string;
+  outputDir: string;
+  sessionId: string;            // matches the audio-side sessionId
+};
+
+export type VideoOnlyDownloadResult = {
+  videoFilePath: string;
+  sessionId: string;
+};
+
 // ---- AI summary (Anthropic Claude Haiku) ---------------------------------
 
 export type AiSummarySegment = {
@@ -355,13 +397,101 @@ export type AutoExtractStartArgs = {
   // pool is smaller (you don't get a 5th segment from a video with
   // only 3 distinct peaks).
   targetCount: number;
+  // Reserved for future use. M1.5b retired the per-creator prompt
+  // path in favour of a single global.json pattern feed, so these
+  // fields are no longer consumed — but kept on the wire so renderer
+  // callers don't need a coordinated change when they come back.
+  videoTitle?: string;
+  channelName?: string;
+  // Stage 2 — when the renderer has a pre-extracted audio file
+  // available (from the audio-first DL path), the orchestrator skips
+  // its own audio extraction step and feeds this file straight into
+  // Gemini. videoFilePath is only used as a fallback when audioFilePath
+  // is absent (legacy / local-drop flow).
+  audioFilePath?: string;
+  videoFilePath?: string;
 };
 
-// Phase 1 → 2 → 4 progress. `percent` is per-phase, not overall — the
-// renderer renders it as a 3-step progress bar.
+// Output of the renderer→main estimation IPC. Same shape as the main-
+// internal CreatorEstimation; redefined here to keep main internals out
+// of the cross-process wire type.
+export type CreatorEstimation = {
+  creatorName: string | null;
+  creatorGroup: string | null;
+  source: 'channel-match' | 'title-match' | 'unknown';
+};
+
+// ---- Gemini audio analysis (Task 1) --------------------------------------
+
+export type GeminiHighlightCandidate = {
+  startSec: number;
+  endSec: number;
+  reason: string;
+  contentType: string;       // 'laugh' | 'surprise' | 'reaction' | 'narrative' | 'other'
+  confidence: number;        // 0..1
+};
+
+export type GeminiTimelineSegment = {
+  startSec: number;
+  endSec: number;
+  description: string;
+};
+
+export type GeminiAnalysisResult = {
+  totalDurationSec: number;
+  timelineSummary: GeminiTimelineSegment[];
+  highlights: GeminiHighlightCandidate[];
+  transcriptHints?: string;
+};
+
+// 4 phases. The 'extracting' phase is emitted by the IPC handler before
+// it hands off to gemini.runAnalysis (which only sees uploading →
+// understanding → parsing).
+export type GeminiAnalysisPhase = 'extracting' | 'uploading' | 'understanding' | 'parsing';
+
+export type GeminiAnalysisStartArgs = {
+  videoFilePath: string;
+  videoTitle: string;
+  durationSec: number;
+};
+
+// Per-key usage snapshot for the API management UI. `keyHash` is the
+// sha256 prefix of the actual key — keys themselves never cross the
+// IPC boundary in this struct. `todayCount` counts successful
+// generateContent calls since UTC midnight; `lastError` is the most
+// recent 429/401 timestamp within the last 24 hours (null when
+// healthy).
+export type GeminiKeyUsage = {
+  keyHash: string;
+  todayCount: number;
+  todayLimit: number;
+  lastError: string | null;
+};
+
+// Phase 2a — output summary for the "パターン分析を実行" button. The
+// detailed per-creator / per-group / global JSON shapes live in main
+// and are written to disk only; only this counts-summary crosses IPC.
+export type PatternAnalysisResult = {
+  // 2026-05-03 M1.5b — global.json is the AI-prompt feed; the per-
+  // creator / per-group JSONs are kept as residual code for future
+  // Phase 2 extensions but no longer fed into the prompt directly.
+  globalGenerated: boolean;
+  globalAnalyzed: number;
+  generatedCreators: string[];
+  skippedCreators: number;
+  generatedGroups: string[];
+};
+
+// Phase progress. Task 2 expanded the set from the original
+// detect/refine/titles trio to include the orchestration steps that
+// now run before AI refine: cache lookup, audio extraction, Gemini
+// structural understanding. `percent` is per-phase. `skipped` marks
+// the Gemini step when the key is missing / analysis fails — the
+// modal renders that phase struck through instead of progressing.
 export type AutoExtractProgress = {
-  phase: 'detect' | 'refine' | 'titles';
+  phase: 'cache-check' | 'audio-extract' | 'gemini' | 'detect' | 'refine' | 'titles';
   percent: number;
+  skipped?: boolean;
 };
 
 export type AutoExtractResult = {
@@ -386,6 +516,17 @@ export type ClipSegment = {
   // waveform can be coloured even after the user drags its bounds away
   // from the original peak.
   dominantCategory: ReactionCategory | null;
+  // Provenance for the segment. Optional so old persisted projects load
+  // unchanged — undefined is treated as 'manual' at the rendering layer.
+  // 'auto-extract' marks segments produced by autoExtractClipCandidates
+  // and unlocks the Sparkles badge / reason tooltip in ClipSegmentsList.
+  aiSource?: 'auto-extract' | 'manual';
+  // Why the AI picked this segment (Stage 2 refine output). Surfaced as
+  // a hover tooltip on auto-extract cards.
+  aiReason?: string;
+  // 0..1 confidence from the AI. Reserved for a future UI hook (M1.5+);
+  // currently captured-when-available, never displayed.
+  aiConfidence?: number;
 };
 
 // Auto-generated divider between consecutive clip segments. `eyecatches[i]`
@@ -402,10 +543,113 @@ export type Eyecatch = {
   skip: boolean;
 };
 
+// Result of `validateCookiesFile`. Renderer composes user-facing
+// warnings from this — never the file contents (security).
+export type CookiesFileValidation = {
+  exists: boolean;
+  sizeBytes: number;
+  extension: string;
+};
+
+// 段階 X2 — live-stream snapshot mirrored to the renderer. Same shape
+// for both platforms; `platform` discriminates the optional fields.
+// `creatorKey` is the platform-stable id (twitchUserId / youtubeChannelId).
+export type LiveStreamInfo = {
+  platform: 'twitch' | 'youtube';
+  creatorKey: string;
+  displayName: string;
+  title: string;
+  startedAt: string;
+  detectedAt: number;
+  videoId?: string;
+  streamId?: string;
+  thumbnailUrl?: string;
+  url: string;
+};
+
+export type StreamMonitorStatus = {
+  enabled: boolean;
+  isRunning: boolean;
+  lastPollAt: number | null;
+  nextPollAt: number | null;
+  liveStreams: LiveStreamInfo[];
+};
+
+// 段階 X3+X4 — auto-record metadata mirrored to the renderer.
+//
+// Status lifecycle:
+//   recording      : the live capture (yt-dlp / streamlink) is running
+//   live-ended     : streamMonitor:ended fired, live capture closed cleanly,
+//                    waiting for the platform to publish a VOD
+//   vod-fetching   : VOD URL resolved, yt-dlp is downloading the archive
+//   completed      : VOD captured (or VOD fallback disabled and live finished)
+//   failed         : recording / VOD fetch failed; the partial files (if any)
+//                    are kept so the user can inspect them
+export type RecordingStatus =
+  | 'recording'
+  | 'live-ended'
+  | 'vod-fetching'
+  | 'completed'
+  | 'failed';
+
+export type RecordingMetadata = {
+  // Stable across the recording lifecycle. Composed of (creatorKey,
+  // startedAt) so two recordings of the same creator are
+  // distinguishable.
+  recordingId: string;
+  platform: 'twitch' | 'youtube';
+  creatorKey: string;
+  displayName: string;
+  title: string;
+  startedAt: string; // ISO 8601
+  endedAt: string | null;
+  // Whichever URL streamMonitor handed us at start time. For Twitch
+  // this is the channel page (live); for YouTube the watch URL.
+  sourceUrl: string;
+  // Files written under <recordingDir>/<platform>/<sanitised-creator>/.
+  // Stored as filenames only — the absolute path is reconstructed from
+  // recordingDir + the (platform, creator) folder layout.
+  files: {
+    live: string | null;
+    vod: string | null;
+  };
+  fileSizeBytes: {
+    live: number | null;
+    vod: number | null;
+  };
+  // 2026-05-04 — When yt-dlp exits early but the upstream stream is
+  // STILL live, the recorder respawns yt-dlp and writes to a new
+  // segment file. `liveSegments` lists every segment captured (in
+  // chronological order), `liveSegmentSizes` is the parallel byte
+  // count, `restartCount` is the count of restarts (= segments-1).
+  // For recordings that only ever had one segment these fields are
+  // omitted to keep the JSON tidy and back-compat with pre-fix
+  // metadata. `files.live` always points to the latest / active
+  // segment so existing renderer code keeps working.
+  liveSegments?: string[];
+  liveSegmentSizes?: number[];
+  restartCount?: number;
+  status: RecordingStatus;
+  // Last error message when status === 'failed'. Untouched otherwise.
+  errorMessage?: string;
+  // The folder the files live in (absolute path). Convenience for the
+  // renderer so it doesn't reconstruct paths client-side.
+  folder: string;
+};
+
+export type RecordingProgressEvent = {
+  recordingId: string;
+  status: RecordingStatus;
+  fileSizeBytes: { live: number | null; vod: number | null };
+  errorMessage?: string;
+};
+
 export type IpcApi = {
   // file dialogs
   openFileDialog: () => Promise<string | null>;
   openDirectoryDialog: () => Promise<string | null>;
+  openCookiesFileDialog: () => Promise<string | null>;
+  validateCookiesFile: (path: string) => Promise<CookiesFileValidation>;
   getPathForFile: (file: File) => string;
 
   // menu events
@@ -413,6 +657,7 @@ export type IpcApi = {
   onMenuOpenSettings: (cb: () => void) => () => void;
   onMenuOpenOperations: (cb: () => void) => () => void;
   onMenuOpenApiManagement: (cb: () => void) => () => void;
+  onMenuOpenMonitoredCreators: (cb: () => void) => () => void;
 
   // settings (non-secret)
   getSettings: () => Promise<AppConfig>;
@@ -432,6 +677,154 @@ export type IpcApi = {
   setAnthropicApiKey: (key: string) => Promise<void>;
   clearAnthropicApiKey: () => Promise<void>;
   validateAnthropicApiKey: (key: string) => Promise<{ ok: boolean; error?: string }>;
+
+  // 段階 X1 — Twitch Helix credentials. Client ID lives in AppConfig
+  // (plaintext, public info), Client Secret is DPAPI-encrypted in main
+  // and never returned to the renderer. The actual user-search /
+  // stream-status endpoints route through `creatorSearch` and (later
+  // 段階 X2) the polling worker.
+  twitch: {
+    getClientCredentials: () => Promise<{ clientId: string | null; hasSecret: boolean }>;
+    setClientCredentials: (args: { clientId: string; clientSecret: string }) => Promise<{ ok: boolean; error?: string }>;
+    clearClientCredentials: () => Promise<void>;
+    // Verifies the stored credentials by hitting the OAuth endpoint.
+    // Distinct from setClientCredentials so the user can re-test
+    // existing credentials without retyping the secret.
+    testCredentials: () => Promise<{ ok: boolean; error?: string }>;
+  };
+
+  // 段階 X1 (revised) — name-based creator lookup for the registration
+  // UI. Three steps: ask Gemini → resolve concrete profiles in
+  // parallel → present cards. Each step is a separate IPC so the
+  // renderer can show progress between them.
+  creatorSearch: {
+    askGemini: (query: string) => Promise<{
+      twitch: { login: string; confidence: 'high' | 'medium' | 'low' } | null;
+      youtube: {
+        handle: string;
+        channelName: string;
+        confidence: 'high' | 'medium' | 'low';
+      } | null;
+    }>;
+    fetchTwitchProfile: (login: string) => Promise<{
+      userId: string;
+      login: string;
+      displayName: string;
+      profileImageUrl: string;
+      createdAt: string;
+      followerCount: number | null;
+    } | null>;
+    fetchYouTubeProfile: (args: {
+      handle?: string | null;
+      channelId?: string | null;
+    }) => Promise<{
+      channelId: string;
+      channelName: string;
+      handle: string | null;
+      profileImageUrl: string | null;
+      createdAt: string;
+      subscriberCount: number | null;
+    } | null>;
+    // 2026-05-04 — Hybrid search: Gemini primary + API fallback. One
+    // call returns multi-candidate arrays per platform plus the data
+    // source so the UI can show provenance ("✓ Gemini 推測" vs
+    // "⚠ API 検索結果"). Replaces the renderer's prior askGemini →
+    // fetchTwitch / fetchYouTube dance.
+    //
+    // `minFollowersOverride`: optional in-flight override for the
+    // AppConfig.searchMinFollowers threshold. Used by the "lower
+    // threshold for this search only" relaxation buttons; passing 0
+    // disables the filter for the call without mutating the persisted
+    // setting.
+    searchAll: (args: { query: string; minFollowersOverride?: number | null }) => Promise<HybridSearchResult>;
+  };
+
+  // 段階 X3+X4 — auto-record CRUD + progress events. Recording itself
+  // is fully main-side (yt-dlp / streamlink subprocesses); this
+  // surface exists for the renderer's recordings list UI + the
+  // "open in editor" handoff.
+  streamRecorder: {
+    list: () => Promise<RecordingMetadata[]>;
+    stop: (args: { creatorKey: string }) => Promise<void>;
+    delete: (args: { recordingId: string }) => Promise<void>;
+    getRecordingDir: () => Promise<string>;
+    revealInFolder: (args: { recordingId: string }) => Promise<void>;
+    onProgress: (cb: (meta: RecordingMetadata) => void) => () => void;
+  };
+
+  // 段階 X2 — live-stream polling controls. The polling worker lives
+  // in main; this surface exposes start/stop + the current live set
+  // + event subscriptions for UI feedback. Heavy lifting (Helix
+  // streams.list batch, YouTube RSS + videos.list?liveStreamingDetails)
+  // is internal; the renderer just gets normalised LiveStreamInfo.
+  streamMonitor: {
+    getStatus: () => Promise<StreamMonitorStatus>;
+    setEnabled: (enabled: boolean) => Promise<StreamMonitorStatus>;
+    pollNow: () => Promise<StreamMonitorStatus>;
+    onStatus: (cb: (status: StreamMonitorStatus) => void) => () => void;
+    onStreamStarted: (cb: (info: LiveStreamInfo) => void) => () => void;
+    onStreamEnded: (cb: (args: { creatorKey: string }) => void) => () => void;
+  };
+
+  // 段階 X1 (revised) — platform-agnostic monitored-creators CRUD.
+  // The renderer round-trips the full list after each mutation, both
+  // for simplicity and because the array stays small (realistic
+  // ceiling: 50 entries).
+  monitoredCreators: {
+    list: () => Promise<MonitoredCreator[]>;
+    add: (creator:
+      | {
+          platform: 'twitch';
+          twitchUserId: string;
+          twitchLogin: string;
+          displayName: string;
+          profileImageUrl: string | null;
+          followerCount?: number | null;
+          accountCreatedAt?: string;
+        }
+      | {
+          platform: 'youtube';
+          youtubeChannelId: string;
+          youtubeHandle: string | null;
+          displayName: string;
+          profileImageUrl: string | null;
+          subscriberCount?: number | null;
+          accountCreatedAt?: string;
+        }
+    ) => Promise<MonitoredCreator[]>;
+    remove: (args: { platform: 'twitch' | 'youtube'; key: string }) => Promise<MonitoredCreator[]>;
+    setEnabled: (args: { platform: 'twitch' | 'youtube'; key: string; enabled: boolean }) => Promise<MonitoredCreator[]>;
+    // 2026-05-04 fix — re-resolve a Twitch creator's user_id from
+    // their stored login. Used when the helix/streams polling stops
+    // returning a known-live creator: the cause is usually a stale
+    // user_id (renamed account, or wrong-handle registration from
+    // the X1 Gemini search). The renderer surfaces this as a "↻
+    // 再取得" button per registered Twitch row.
+    refetchTwitch: (args: { twitchUserId: string }) => Promise<{
+      ok: boolean;
+      error?: string;
+      updated?: MonitoredCreator;
+    }>;
+  };
+
+  // Gemini multi-key (Task 1: audio analysis). On-disk shape mirrors
+  // YouTube — a single DPAPI-encrypted JSON array of keys, rotated
+  // round-robin in the gemini.ts client.
+  gemini: {
+    hasApiKey: () => Promise<boolean>;
+    getKeyCount: () => Promise<number>;
+    getKeys: () => Promise<string[]>;
+    setKeys: (keys: string[]) => Promise<void>;
+    clear: () => Promise<void>;
+    validateApiKey: (key: string) => Promise<{ ok: boolean; error?: string }>;
+    analyzeVideo: (args: GeminiAnalysisStartArgs) => Promise<GeminiAnalysisResult>;
+    cancelAnalysis: () => Promise<void>;
+    onProgress: (cb: (phase: GeminiAnalysisPhase) => void) => () => void;
+    // Per-key usage for the quota panel in API management. Returned
+    // in the same order as the saved keys so the UI can map index 0
+    // to "キー 1", index 1 to "キー 2", etc.
+    getKeyUsages: () => Promise<GeminiKeyUsage[]>;
+  };
 
   // transcription
   startTranscription: (args: TranscriptionStartArgs) => Promise<TranscriptionResult>;
@@ -473,9 +866,20 @@ export type IpcApi = {
   setWindowTitle: (title: string) => void;
 
   urlDownload: {
+    // Legacy single-shot DL (video + audio together). Kept for local-
+    // file flows / fallbacks until stage 5 finalises the redesign.
     start: (args: UrlDownloadArgs) => Promise<{ filePath: string; title: string }>;
     cancel: () => Promise<void>;
     onProgress: (cb: (p: UrlDownloadProgress) => void) => () => void;
+    // Stage 2 audio-first path. Audio completes in tens of seconds
+    // for a 10h stream, unblocking AI extract while the video DL
+    // continues in the background.
+    startAudioOnly: (args: AudioOnlyDownloadArgs) => Promise<AudioOnlyDownloadResult>;
+    cancelAudio: () => Promise<void>;
+    onAudioProgress: (cb: (p: UrlDownloadProgress) => void) => () => void;
+    startVideoOnly: (args: VideoOnlyDownloadArgs) => Promise<VideoOnlyDownloadResult>;
+    cancelVideo: () => Promise<void>;
+    onVideoProgress: (cb: (p: UrlDownloadProgress) => void) => () => void;
   };
 
   commentAnalysis: {
@@ -494,6 +898,12 @@ export type IpcApi = {
     // store に流し込むだけ。
     autoExtract: (args: AutoExtractStartArgs) => Promise<AutoExtractResult>;
     onAutoExtractProgress: (cb: (p: AutoExtractProgress) => void) => () => void;
+    // Stage 6a — preload the global pattern snapshot at URL-input time
+    // so AI extract sees it cached. Returned as `unknown` to keep
+    // GlobalPatterns out of common types (its shape is only meaningful
+    // to the main-side analyzer / refine prompt). Renderer stores the
+    // value verbatim in editorStore — it never inspects the fields.
+    loadGlobalPatterns: () => Promise<unknown>;
   };
 
   // Background data-collection pipeline (Phase 1 — accumulation only).
@@ -538,6 +948,20 @@ export type IpcApi = {
     cancelCurrent: () => Promise<void>;
     isEnabled: () => Promise<boolean>;
     setEnabled: (enabled: boolean) => Promise<void>;
+    // Heuristic creator detection from video metadata. M1.5a — feeds
+    // the AI auto-extract refine prompt and the picker UI's initial
+    // selection. Returns { source: 'unknown' } when nothing matches.
+    estimateCreator: (args: {
+      videoTitle: string;
+      channelName?: string;
+    }) => Promise<CreatorEstimation>;
+    // Seed creators for the picker dialog. Sorted by group then name.
+    // Auto-discovered uploaders are NOT included.
+    listSeedCreators: () => Promise<Array<{ name: string; group: string | null }>>;
+    // Phase 2a — synchronous (sub-second) sweep over accumulated videos
+    // that emits per-creator + per-group pattern JSON files into
+    // userData/patterns/. Returns a summary for the Settings UI.
+    runPatternAnalysis: () => Promise<PatternAnalysisResult>;
   };
   youtubeApiKeys: {
     hasKeys: () => Promise<boolean>;
@@ -571,4 +995,109 @@ export type IpcApi = {
     // keys that haven't been used today.
     getQuotaPerKey: () => Promise<Array<{ keyIndex: number; unitsUsed: number }>>;
   };
+
+  // 2026-05-04 — Recent-videos list for the load-phase home screen.
+  // Returns auto-recorded streams + URL-downloaded VODs newer than
+  // `maxAgeHours`, sorted newest-first. Empty list when neither
+  // source has anything inside the window.
+  recentVideos: {
+    list: (maxAgeHours: number) => Promise<RecentVideo[]>;
+  };
+
+  // 2026-05-04 — API key hybrid backup + manual export/import. The
+  // backup lives at ~/Documents/jikkyou-cut-backup/api-keys.json so a
+  // future DPAPI master-key rotation can't permanently destroy keys.
+  apiKeysBackup: {
+    getStatus: () => Promise<ApiKeysBackupStatus>;
+    openFolder: () => Promise<void>;
+    revealFile: () => Promise<void>;
+    exportToFile: () => Promise<ApiKeysExportResult>;
+    importPreview: () => Promise<ApiKeysImportPreview>;
+    importApply: (args: { filePath: string; mode: 'merge' | 'replace' }) => Promise<ApiKeysImportApplyResult>;
+  };
 };
+
+// 2026-05-04 — Recent-videos feed for the load-phase home screen.
+// Unifies auto-recorded streams + URL-downloaded VODs into one
+// chronological list keyed by createdAt (newest first).
+export interface RecentVideo {
+  source: 'recording' | 'url-download';
+  filePath: string;
+  fileName: string;
+  fileSizeBytes: number;
+  createdAt: string; // ISO 8601
+  // Recording-only metadata
+  platform?: 'twitch' | 'youtube';
+  channelDisplayName?: string;
+  title?: string;
+  recordingId?: string;
+  recordingStatus?: RecordingStatus;
+  // URL-download-only
+  sourceUrl?: string;
+  // Metadata & Thumbnails (Phase 2 extension)
+  thumbnailPath?: string | null;   // Local file path (file://)
+  thumbnailUrl?: string | null;    // Remote URL (from yt-dlp info.json)
+}
+
+// 2026-05-04 — Hybrid creator-search response. Per-platform candidate
+// arrays + data-source enum. Cards in the array appear in
+// recommended-display order (highest follower / subscriber count first
+// for fallback, single Gemini hit when source='gemini').
+export type CreatorCandidateSource = 'gemini' | 'api-fallback' | 'none';
+export interface HybridSearchResult {
+  twitch: Array<{
+    userId: string;
+    login: string;
+    displayName: string;
+    profileImageUrl: string;
+    createdAt: string;
+    followerCount: number | null;
+  }>;
+  youtube: Array<{
+    channelId: string;
+    channelName: string;
+    handle: string | null;
+    profileImageUrl: string | null;
+    createdAt: string;
+    subscriberCount: number | null;
+  }>;
+  source: { twitch: CreatorCandidateSource; youtube: CreatorCandidateSource };
+  filteredOut: { twitch: number; youtube: number };
+  thresholdApplied: number;
+}
+
+export interface ApiKeysBackupStatus {
+  filePath: string;
+  exists: boolean;
+  lastBackupAt: string | null;
+  counts: {
+    gemini: number;
+    youtube: number;
+    gladia: boolean;
+    anthropic: boolean;
+    twitchClientId: boolean;
+    twitchClientSecret: boolean;
+  };
+}
+
+export type ApiKeysExportResult =
+  | { ok: true; filePath: string; counts: ApiKeysBackupStatus['counts'] }
+  | { ok: false; canceled?: boolean; error?: string };
+
+export interface ApiKeysImportPlan {
+  gemini: { incoming: number; current: number };
+  youtube: { incoming: number; current: number };
+  gladia: { incoming: boolean; current: boolean };
+  anthropic: { incoming: boolean; current: boolean };
+  twitchClientId: { incoming: string | null; current: string | null };
+  twitchClientSecret: { incoming: boolean; current: boolean };
+  invalid: Array<{ slot: string; reason: string }>;
+}
+
+export type ApiKeysImportPreview =
+  | { ok: true; filePath: string; plan: ApiKeysImportPlan }
+  | { ok: false; canceled?: boolean; error?: string };
+
+export type ApiKeysImportApplyResult =
+  | { ok: true; applied: Array<{ slot: string; count: number }> }
+  | { ok: false; error: string };

@@ -166,6 +166,19 @@
   flex-shrink: 0;
 }
 
+.aiBadge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: rgba(168, 132, 255, 0.18);
+  color: #c8b4ff;
+  flex-shrink: 0;
+  cursor: help;
+}
+
 .cardMain {
   flex: 1;
   min-width: 0;

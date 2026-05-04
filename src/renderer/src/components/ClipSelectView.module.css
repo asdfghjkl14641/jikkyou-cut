@@ -106,6 +106,126 @@
   width: 100%;
   height: 100%;
   max-width: 1000px; /* Limit ultra-wide stretch */
+  position: relative;
+}
+
+/* Stage 2 — placeholder shown in the player slot while the background
+   video DL is still in flight. AI extract is unblocked at this point;
+   the overlay communicates that to the user. */
+.videoDlOverlay {
+  width: 100%;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 14px;
+  background: var(--bg-surface);
+  border: 1px dashed var(--border-strong);
+  border-radius: var(--radius-md);
+  padding: 24px;
+  color: var(--text-secondary);
+}
+
+.videoDlIcon {
+  font-size: 36px;
+}
+
+.videoDlTitle {
+  font-size: 15px;
+  font-weight: var(--font-weight-medium);
+  color: var(--text-primary);
+}
+
+.videoDlBar {
+  width: 60%;
+  max-width: 360px;
+  height: 6px;
+  background: rgba(255, 255, 255, 0.06);
+  border-radius: 3px;
+  overflow: hidden;
+}
+
+.videoDlBarFill {
+  height: 100%;
+  background: var(--accent-primary, #7d6cff);
+  transition: width 200ms linear;
+}
+
+.videoDlPercent {
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+  color: var(--text-secondary);
+}
+
+.videoDlError {
+  font-size: 12px;
+  color: #ff8585;
+  max-width: 480px;
+  text-align: center;
+  word-break: break-word;
+}
+
+.videoDlHint {
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+/* Stage 3 — overlay badges layered on top of the EmbeddedVideoPlayer.
+   The DL badge is a small corner indicator (the player is the primary
+   focus, the DL is a status); the hint sits at the bottom-left. */
+.embedDlBadge {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  z-index: 5;
+  background: rgba(0, 0, 0, 0.6);
+  color: #fff;
+  font-size: 11px;
+  padding: 4px 8px;
+  border-radius: 999px;
+  pointer-events: none;
+  font-variant-numeric: tabular-nums;
+}
+
+.embedHint {
+  position: absolute;
+  bottom: 8px;
+  left: 8px;
+  z-index: 5;
+  background: rgba(0, 0, 0, 0.55);
+  color: var(--text-secondary, #b9b9c2);
+  font-size: 11px;
+  padding: 4px 8px;
+  border-radius: 4px;
+  pointer-events: none;
+}
+
+/* Stage 4 — transient toast for the embed→local handoff. Bottom-right
+   slide-in, fades out at 3 s. Pointer-events disabled so it doesn't
+   block underlying clicks. */
+@keyframes toastSlideIn {
+  from { opacity: 0; transform: translateY(8px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+@keyframes toastFadeOut {
+  from { opacity: 1; }
+  to { opacity: 0; }
+}
+.toast {
+  position: fixed;
+  bottom: 24px;
+  right: 24px;
+  z-index: 200;
+  background: rgba(20, 22, 28, 0.95);
+  border: 1px solid var(--border-strong, #38383d);
+  color: var(--text-primary, #e6e6ea);
+  font-size: 13px;
+  padding: 10px 16px;
+  border-radius: 6px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
+  pointer-events: none;
+  animation: toastSlideIn 200ms ease-out, toastFadeOut 400ms ease-in 2.6s forwards;
 }
 
 .graphWrapper {
@@ -162,6 +282,14 @@
   margin-right: var(--space-2);
 }
 
+/* Skipped phase indicator (e.g. Gemini step when no key / failure).
+   Greyed + struck-through to distinguish from regular "done". */
+.autoExtractStepSkipped {
+  color: var(--text-muted, #6a6a72);
+  text-decoration: line-through;
+  opacity: 0.6;
+}
+
 .autoExtractCount {
   background: rgba(99, 102, 241, 0.08);
   color: var(--text-primary);
@@ -173,6 +301,15 @@
   font-variant-numeric: tabular-nums;
   cursor: pointer;
   outline: none;
+}
+
+/* Native <option> popups inherit `color: var(--text-primary)` (~white)
+   but render against the OS default background (white on Windows),
+   leaving the labels invisible until you hover. Pin black-on-white
+   here so the dropdown is readable regardless of OS theme. */
+.autoExtractCount option {
+  color: #000;
+  background: #fff;
 }
 
 .autoExtractCount:disabled {

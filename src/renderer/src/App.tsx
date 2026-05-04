@@ -4,6 +4,7 @@ import { useSettings } from './hooks/useSettings';
 import { useEditKeyboard } from './hooks/useEditKeyboard';
 import { useProjectAutoSave } from './hooks/useProjectAutoSave';
 import DropZone from './components/DropZone';
+import RecentVideosSection from './components/RecentVideosSection';
 import VideoPlayer, {
   type VideoPlayerHandle,
 } from './components/VideoPlayer';
@@ -11,6 +12,7 @@ import ApiKeySetupBanner from './components/ApiKeySetupBanner';
 import RestoreBanner from './components/RestoreBanner';
 import SettingsDialog from './components/SettingsDialog';
 import ApiManagementView from './components/ApiManagementView';
+import MonitoredCreatorsView from './components/MonitoredCreatorsView';
 import { OperationsDialog } from './components/OperationsDialog';
 import TranscribeButton from './components/TranscribeButton';
 import EditableTranscriptList from './components/EditableTranscriptList';
@@ -24,7 +26,7 @@ import SubtitleSettingsDialog from './components/SubtitleSettingsDialog';
 import UrlDownloadProgressDialog from './components/UrlDownloadProgressDialog';
 import TermsOfServiceModal from './components/TermsOfServiceModal';
 import ClipSelectView from './components/ClipSelectView';
-import type { UrlDownloadArgs, UrlDownloadProgress } from '../../common/types';
+import type { UrlDownloadProgress } from '../../common/types';
 import styles from './App.module.css';
 
 // Prototype-stage default for the DropZone URL input: while we're
@@ -37,6 +39,24 @@ export default function App() {
   const filePath = useEditorStore((s) => s.filePath);
   const fileName = useEditorStore((s) => s.fileName);
   const phase = useEditorStore((s) => s.phase);
+  // Stage 6a — when the user backs out of an active URL session
+  // (clearFile sets sessionId to null), abort any in-flight chat
+  // replay yt-dlp process so we stop wasting bandwidth.
+  const sessionId = useEditorStore((s) => s.sessionId);
+  const prevSessionIdRef = useRef<string | null>(sessionId);
+  useEffect(() => {
+    console.log(
+      '[comment-debug:app] sessionId watcher fire: prev=',
+      prevSessionIdRef.current,
+      'next=',
+      sessionId,
+    );
+    if (prevSessionIdRef.current && !sessionId) {
+      console.log('[comment-debug:app] >>> sessionId went null, calling commentAnalysis.cancel()');
+      void window.api.commentAnalysis.cancel().catch(() => {});
+    }
+    prevSessionIdRef.current = sessionId;
+  }, [sessionId]);
   const setPhase = useEditorStore((s) => s.setPhase);
   const setFile = useEditorStore((s) => s.setFile);
   const clearFile = useEditorStore((s) => s.clearFile);
@@ -177,6 +197,26 @@ export default function App() {
     ),
     [],
   );
+
+  useEffect(
+    // 段階 X1 — Menu / Ctrl+Shift+M → swap to monitored-creators phase.
+    // Same swap-in pattern as api-management; the editing video state
+    // (filePath / clipSegments / cues) survives untouched.
+    () => window.api.onMenuOpenMonitoredCreators?.(() =>
+      useEditorStore.getState().openMonitoredCreators(),
+    ),
+    [],
+  );
+
+  // 段階 X2 — track live-stream count globally so the floating
+  // indicator below can show across all phases (edit / clip-select /
+  // load). Updated by status events and on initial mount.
+  const [liveCount, setLiveCount] = useState(0);
+  useEffect(() => {
+    void window.api.streamMonitor?.getStatus().then((s) => setLiveCount(s.liveStreams.length));
+    const off = window.api.streamMonitor?.onStatus((s) => setLiveCount(s.liveStreams.length));
+    return off;
+  }, []);
   
   useEffect(() => {
     window.api.setWindowTitle(fileName || '');
@@ -199,52 +239,190 @@ export default function App() {
   // (default 'best'). Only called after TOS has been accepted.
   const startDownloadFlow = useCallback(
     async (url: string) => {
+      console.log('[comment-debug:app] startDownloadFlow entry: url=', url);
       if (!view) return;
 
       // Resolve output directory: persisted preference, or prompt once.
       let outputDir = view.config.defaultDownloadDir;
       if (!outputDir) {
         const picked = await window.api.openDirectoryDialog();
-        if (!picked) return; // user cancelled the picker — abort silently
+        if (!picked) return;
         outputDir = picked;
         await save({ defaultDownloadDir: picked });
       }
 
       const quality = view.config.defaultDownloadQuality || 'best';
-      const args: UrlDownloadArgs = { url, quality, outputDir };
 
+      // Stage 2 — audio-first / video-background split.
+      // Phase A: await the audio-only DL (fast, ~tens of seconds even
+      // for long streams). When this resolves, the user can already
+      // run AI extract on the resulting audio file.
       setDownloadProgressOpen(true);
       setDownloadProgress(null);
-
-      const cleanup = window.api.urlDownload.onProgress((p) => {
+      const audioCleanup = window.api.urlDownload.onAudioProgress((p) => {
         setDownloadProgress(p);
       });
 
+      let audio;
       try {
-        const result = await window.api.urlDownload.start(args);
-        setDownloadProgressOpen(false);
-        setFile(result.filePath);
-        // Stash the original URL so ClipSelectView can run comment
-        // analysis on it. setFile() clears sourceUrl on fresh load —
-        // the call order matters here.
-        useEditorStore.getState().setSourceUrl(url);
-        // Persist for next-launch prefill. Fire-and-forget — failure to
-        // save shouldn't disturb the post-DL flow.
-        void save({ lastDownloadUrl: url });
+        audio = await window.api.urlDownload.startAudioOnly({ url, outputDir });
       } catch (err) {
         setDownloadProgressOpen(false);
+        audioCleanup();
         const msg = err instanceof Error ? err.message : String(err);
-        // The two transcription/export sentinels are unrelated to URL DL,
-        // but keep the original guard in case execa's cancel signal
-        // happens to surface them through a different error path.
         if (msg !== 'TRANSCRIPTION_CANCELLED' && msg !== 'EXPORT_CANCELLED') {
-          alert(`ダウンロードに失敗しました: ${msg}`);
+          alert(`音声ダウンロードに失敗しました: ${msg}`);
         }
-      } finally {
-        cleanup();
+        return;
       }
+      audioCleanup();
+      setDownloadProgressOpen(false);
+      console.log(
+        '[comment-debug:app] audio result: sessionId=',
+        audio.sessionId,
+        'audioFilePath=',
+        audio.audioFilePath,
+        'durationSec=',
+        audio.durationSec,
+      );
+
+      // Open ClipSelectView immediately — AI extract is unblocked from
+      // here. videoFilePath stays null until the background DL below
+      // resolves; the view shows a DL overlay in the player area.
+      console.log(
+        '[comment-debug:app] enterClipSelectFromUrl called with sessionId=',
+        audio.sessionId,
+      );
+      useEditorStore.getState().enterClipSelectFromUrl({
+        audioFilePath: audio.audioFilePath,
+        sessionId: audio.sessionId,
+        sourceUrl: url,
+        durationSec: audio.durationSec,
+        fileName: audio.videoTitle,
+      });
+      console.log(
+        '[comment-debug:app] post-enterClipSelectFromUrl, store sessionId=',
+        useEditorStore.getState().sessionId,
+      );
+      void save({ lastDownloadUrl: url });
+
+      // Stage 6a — fire comment analysis + global patterns in parallel
+      // with the video DL. Pre-stage 6a these triggered only after
+      // ClipSelectView mounted + ran a useEffect; bringing them up here
+      // means by the time the user sees the view, chat is usually
+      // already loading and patterns are cached.
+      const expectedSession = audio.sessionId;
+      console.log('[comment-debug:app] commentAnalysis IPC fire: expectedSession=', expectedSession);
+      useEditorStore.getState().setCommentAnalysisStatus({ kind: 'loading', phase: 'chat' });
+      const commentProgressCleanup = window.api.commentAnalysis.onProgress((p) => {
+        const state = useEditorStore.getState();
+        console.log(
+          '[comment-debug:app] progress event:',
+          'phase=', p.phase,
+          'storeSessionId=', state.sessionId,
+          'expected=', expectedSession,
+          'storeStatus=', state.commentAnalysisStatus.kind,
+        );
+        // Drop progress events from a stale session (user moved on).
+        if (state.sessionId !== expectedSession) {
+          console.log('[comment-debug:app] >>> progress dropped: session mismatch');
+          return;
+        }
+        // Don't regress 'ready' / 'error' back to 'loading' if a late
+        // progress event arrives.
+        if (state.commentAnalysisStatus.kind !== 'loading') {
+          console.log('[comment-debug:app] >>> progress dropped: status not loading');
+          return;
+        }
+        state.setCommentAnalysisStatus({ kind: 'loading', phase: p.phase });
+      });
+      void window.api.commentAnalysis
+        .start({
+          videoFilePath: audio.audioFilePath,
+          sourceUrl: url,
+          durationSec: audio.durationSec,
+        })
+        .then((analysis) => {
+          commentProgressCleanup();
+          const state = useEditorStore.getState();
+          console.log(
+            '[comment-debug:app] commentAnalysis result received:',
+            'messages.length=', analysis.allMessages.length,
+            'storeSessionId=', state.sessionId,
+            'expected=', expectedSession,
+            'match=', state.sessionId === expectedSession,
+          );
+          if (state.sessionId !== expectedSession) {
+            console.log('[comment-debug:app] >>> result DROPPED due to session mismatch');
+            return;
+          }
+          console.log('[comment-debug:app] >>> setting status to ready');
+          state.setCommentAnalysisStatus({ kind: 'ready', analysis });
+          console.log(
+            '[comment-debug:app] post-set: storeStatus=',
+            useEditorStore.getState().commentAnalysisStatus.kind,
+          );
+        })
+        .catch((err) => {
+          commentProgressCleanup();
+          const state = useEditorStore.getState();
+          const msg = err instanceof Error ? err.message : String(err);
+          console.log(
+            '[comment-debug:app] commentAnalysis IPC rejected:',
+            'err=', msg,
+            'storeSessionId=', state.sessionId,
+            'expected=', expectedSession,
+          );
+          if (state.sessionId !== expectedSession) return;
+          state.setCommentAnalysisStatus({ kind: 'error', message: msg });
+        });
+
+      // Global patterns preload — file-read in main, ms-scale. Failure
+      // is silent: autoExtract still loads internally on the main side
+      // when the time comes, so the worst case is just no preload.
+      void window.api.aiSummary
+        .loadGlobalPatterns()
+        .then((patterns) => {
+          const state = useEditorStore.getState();
+          if (state.sessionId !== expectedSession) return;
+          state.setGlobalPatterns(patterns);
+        })
+        .catch(() => {
+          // intentional: best-effort cache, autoExtract has its own fallback
+        });
+
+      // Phase B: kick off the video DL in the background. The user can
+      // start picking clips off the audio-only ClipSelectView while
+      // this runs. Progress + completion flow into the editor store
+      // (ClipSelectView reads videoDownloadStatus to render the
+      // overlay; setVideoFilePath replaces it with the <video>).
+      const videoCleanup = window.api.urlDownload.onVideoProgress((p) => {
+        const ratio = Number.isFinite(p.percent) ? p.percent / 100 : 0;
+        useEditorStore.getState().setVideoDownloadProgress(Math.max(0, Math.min(1, ratio)));
+      });
+      void window.api.urlDownload
+        .startVideoOnly({ url, quality, outputDir, sessionId: audio.sessionId })
+        .then((result) => {
+          videoCleanup();
+          // Only adopt the video file if the user is still on the same
+          // session — bailing the editor out (clearFile) wipes
+          // audioFilePath / sessionId. The check protects against a
+          // stale promise resolving after the user moved on.
+          const state = useEditorStore.getState();
+          if (state.sessionId === result.sessionId) {
+            state.setVideoFilePath(result.videoFilePath);
+          }
+        })
+        .catch((err) => {
+          videoCleanup();
+          const msg = err instanceof Error ? err.message : String(err);
+          const state = useEditorStore.getState();
+          if (state.sessionId === audio.sessionId) {
+            state.setVideoDownloadFailure(msg);
+          }
+        });
     },
-    [view, save, setFile],
+    [view, save],
   );
 
   // Entry point from DropZone. If TOS hasn't been accepted yet, stash the
@@ -309,8 +487,62 @@ export default function App() {
     );
   }
 
+  // 段階 X1 — full-screen monitored-creators page. Same swap-in idiom
+  // as api-management: editing state survives untouched, back button
+  // restores previousPhase.
+  if (phase === 'monitored-creators') {
+    return (
+      <main className={styles.app}>
+        <MonitoredCreatorsView />
+      </main>
+    );
+  }
+
   return (
     <main className={styles.app}>
+      {/* 段階 X2 — global live-stream indicator. Pinned top-right so
+          it doesn't interfere with the per-phase header. The
+          monitored-creators / api-management phases are early-returned
+          above, so by reaching here the indicator only renders on the
+          editing phases (load / clip-select / edit). */}
+      {liveCount > 0 && (
+        <button
+          type="button"
+          onClick={() => useEditorStore.getState().openMonitoredCreators()}
+          title={`${liveCount} 人が配信中です。クリックで登録チャンネル画面を開く`}
+          style={{
+            position: 'fixed',
+            top: 8,
+            right: 12,
+            zIndex: 50,
+            display: 'inline-flex',
+            alignItems: 'center',
+            gap: 6,
+            padding: '6px 12px',
+            border: '1px solid rgba(239, 68, 68, 0.4)',
+            borderRadius: 999,
+            background: 'rgba(239, 68, 68, 0.15)',
+            color: '#ff7373',
+            fontFamily: 'inherit',
+            fontSize: 'var(--font-size-xs)',
+            fontWeight: 'var(--font-weight-medium)',
+            cursor: 'pointer',
+            backdropFilter: 'blur(8px)',
+          }}
+          aria-label={`${liveCount} 人配信中`}
+        >
+          <span
+            style={{
+              width: 8,
+              height: 8,
+              borderRadius: '50%',
+              background: '#ef4444',
+              boxShadow: '0 0 6px #ef4444',
+            }}
+          />
+          {liveCount} 人配信中
+        </button>
+      )}
       {phase === 'edit' && (
         <header className={styles.header}>
           <div className={styles.headerLeft}>
@@ -385,6 +617,10 @@ export default function App() {
               onUrlDownloadRequested={handleUrlDownloadRequested}
               defaultUrl={view?.config.lastDownloadUrl ?? PROTOTYPE_DEFAULT_URL}
             />
+            {/* 2026-05-04 — Inline feed of auto-recorded streams +
+                URL-downloaded VODs from the last 24h. Self-hides when
+                empty, so a fresh install sees just the DropZone. */}
+            <RecentVideosSection />
           </div>
         )}
 
