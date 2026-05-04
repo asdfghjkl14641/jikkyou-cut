@@ -132,7 +132,12 @@ export async function downloadVod(opts: {
   const exe = getYtDlpPath();
   const heightFilter = opts.quality === 'best' ? '' : `[height<=${opts.quality.replace('p', '')}]`;
   const format = `bestvideo${heightFilter}+bestaudio/best${heightFilter}/best`;
-  const outputTemplate = path.join(opts.meta.folder, `${opts.meta.recordingId}.vod.%(ext)s`);
+  // 2026-05-04 — VOD filename uses `_vod` suffix (underscore), not
+  // `.vod.<ext>`. Same Windows-media-player misread issue that hit
+  // the live capture: a double-extension `.vod.mp4` gets parsed as
+  // if `.vod` were the real extension. Underscore avoids it while
+  // keeping the live-vs-VOD visual distinction.
+  const outputTemplate = path.join(opts.meta.folder, `${opts.meta.recordingId}_vod.%(ext)s`);
 
   const args: string[] = [
     opts.url,

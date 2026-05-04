@@ -116,40 +116,90 @@ export async function listRecentVideos(maxAgeHours: number): Promise<RecentVideo
   return result;
 }
 
+// Minimum file size before we bother trying ffmpeg. Growing live captures
+// under ~5 MB rarely have a usable moov atom yet — ffmpeg either fails
+// outright or produces a 0-byte thumb, both of which we want to avoid
+// retrying every 60s.
+const MIN_FILE_BYTES_FOR_THUMB = 5 * 1024 * 1024;
+
+// In-memory failure cache: thumbPath → ts of the last failed attempt.
+// 5 minute backoff before re-trying. Without this, the renderer's 60s
+// poll would re-run ffmpeg on the same growing file every minute,
+// burning CPU + filling logs with the same warnings.
+const FAILED_THUMB_TTL_MS = 5 * 60 * 1000;
+const failedThumbCache = new Map<string, number>();
+
+async function safeStat(p: string): Promise<{ size: number } | null> {
+  try {
+    return await fs.stat(p);
+  } catch {
+    return null;
+  }
+}
+
 /**
- * Extracts a frame from the video at 60s mark to use as a thumbnail.
- * Cached to disk next to the video file.
+ * Extract a single frame as the recording's thumbnail. Cached to disk
+ * next to the video. Robust against:
+ *   - growing live captures (we skip if file is too small / abort if
+ *     ffmpeg produces a 0-byte output)
+ *   - repeated calls on a known-failed file (5 min in-memory backoff)
+ *   - source files shorter than 60s (we re-try at 0s)
  */
 async function getOrGenerateThumbnail(videoPath: string, thumbPath: string): Promise<string | null> {
-  if (existsSync(thumbPath)) return thumbPath;
+  // Existing-and-non-empty thumb wins immediately.
+  const existing = await safeStat(thumbPath);
+  if (existing && existing.size > 0) return thumbPath;
+  // 0-byte residue from a prior failed attempt — delete so the
+  // generation loop below isn't fooled by existsSync.
+  if (existing && existing.size === 0) {
+    await fs.unlink(thumbPath).catch(() => undefined);
+  }
 
-  try {
-    // If the file is still being recorded, ffmpeg might fail or produce a partial result.
-    // We try anyway; worst case it fails and we show the fallback icon.
-    await execa('ffmpeg', [
-      '-hide_banner', '-nostdin', '-y',
-      '-i', videoPath,
-      '-ss', '60',
-      '-frames:v', '1',
-      '-q:v', '4', // slightly lower quality for smaller thumbs
-      thumbPath,
-    ]);
-    return thumbPath;
-  } catch (err) {
-    // Some videos are shorter than 60s, try at 0s.
+  // Recent-failure backoff.
+  const lastFail = failedThumbCache.get(thumbPath);
+  if (lastFail && Date.now() - lastFail < FAILED_THUMB_TTL_MS) {
+    return null;
+  }
+
+  // Source-file size gate. Live captures don't have a usable moov atom
+  // until they've grown past a few seconds of fragments.
+  const srcStat = await safeStat(videoPath);
+  if (!srcStat || srcStat.size < MIN_FILE_BYTES_FOR_THUMB) {
+    failedThumbCache.set(thumbPath, Date.now());
+    return null;
+  }
+
+  // Try at 60s first (skip past intro / standby screen), then fall back
+  // to the very first frame for short clips. `-update 1` is required by
+  // FFmpeg 8+ for single-image output when the path doesn't contain a
+  // `%d` pattern; without it FFmpeg logs a parse warning that's
+  // confusing in the dev console.
+  for (const seekArgs of [['-ss', '60'], [] as string[]]) {
     try {
       await execa('ffmpeg', [
         '-hide_banner', '-nostdin', '-y',
+        ...seekArgs,
         '-i', videoPath,
         '-frames:v', '1',
+        '-update', '1',
         '-q:v', '4',
         thumbPath,
-      ]);
-      return thumbPath;
+      ], { timeout: 30_000 });
+      const out = await safeStat(thumbPath);
+      if (out && out.size > 0) {
+        failedThumbCache.delete(thumbPath);
+        return thumbPath;
+      }
+      // ffmpeg "succeeded" but wrote a 0-byte file. Clean up + try the
+      // next seek position.
+      await fs.unlink(thumbPath).catch(() => undefined);
     } catch {
-      return null;
+      // fall through to next seek position
     }
   }
+
+  failedThumbCache.set(thumbPath, Date.now());
+  return null;
 }
 
 async function getUrlDownloadMetadata(filePath: string): Promise<{
@@ -175,12 +225,17 @@ async function getUrlDownloadMetadata(filePath: string): Promise<{
 
 async function downloadAndCacheThumbnail(url: string, videoPath: string): Promise<string | null> {
   const thumbPath = videoPath.replace(/\.[^.]+$/, '.thumb.jpg');
-  if (existsSync(thumbPath)) return thumbPath;
+  // Existing non-empty cache wins. 0-byte residue from a previous
+  // botched download would otherwise be served as a broken image.
+  const existing = await safeStat(thumbPath);
+  if (existing && existing.size > 0) return thumbPath;
+  if (existing) await fs.unlink(thumbPath).catch(() => undefined);
 
   try {
     const res = await fetch(url);
     if (!res.ok) return null;
     const buf = await res.arrayBuffer();
+    if (buf.byteLength === 0) return null;
     await fs.writeFile(thumbPath, Buffer.from(buf));
     return thumbPath;
   } catch (err) {

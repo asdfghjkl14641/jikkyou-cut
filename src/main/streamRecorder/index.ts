@@ -33,6 +33,7 @@ import {
   freeBytes,
   listAllMetadata,
   makeRecordingId,
+  migrateLegacyExtensions,
   recordingFolder,
   recoverInterruptedRecordings,
   refreshFileSizes,
@@ -41,6 +42,7 @@ import {
 } from './storage';
 import { downloadVod, resolveVodUrl } from './vodFetch';
 import { RecordingSession } from './recordSession';
+import { verifyAndRemuxIfNeeded } from './remux';
 import * as powerSave from '../powerSave';
 import type { LiveStreamInfo, RecordingMetadata } from '../../common/types';
 
@@ -76,6 +78,22 @@ class StreamRecorder {
   async boot(): Promise<void> {
     const cfg = await loadConfig();
     const baseDir = cfg.recordingDir ?? defaultRecordingDir();
+    // 2026-05-04 — Pre-2026-05-04 captures used `.live.mp4` /
+    // `.live.NNN.mp4` / `.vod.mp4`. Migrate them to the new
+    // `<id>.mp4` / `<id>.NNN.mp4` / `<id>_vod.mp4` shape so Windows
+    // Media Player can play the on-disk archive (the old form
+    // returned error 0x80070323). Idempotent — already-migrated
+    // folders are no-ops.
+    try {
+      const migrated = await migrateLegacyExtensions(baseDir);
+      if (migrated > 0) {
+        console.log(
+          `[stream-recorder] boot migration: renamed ${migrated} legacy file(s) to new extension scheme`,
+        );
+      }
+    } catch (err) {
+      console.warn('[stream-recorder] boot migration failed:', err);
+    }
     try {
       const recovered = await recoverInterruptedRecordings(baseDir);
       if (recovered > 0) {
@@ -268,6 +286,14 @@ class StreamRecorder {
     // their tags are still acquired.
     powerSave.release(powerSaveReason(session.meta.creatorKey, session.meta.recordingId));
 
+    // 2026-05-04 — Post-record remux pass. yt-dlp + --merge-output-format
+    // mp4 covers the common case but VP9 / AV1 / .ts wrappers can slip
+    // through, and the renderer's <video> element refuses non-MP4 /
+    // non-WebM silently. We ffprobe each captured segment and stream-
+    // copy remux to .mp4 when codecs allow. This is a no-op for files
+    // that already match (Twitch HLS will skip this every time).
+    await this.remuxSegments(session.meta);
+
     // live-ended → fall into vod-fetching unless disabled.
     const meta = refreshFileSizes(session.meta);
     if (meta.status !== 'failed') {
@@ -293,6 +319,68 @@ class StreamRecorder {
     // longer to finalize). The UI shows status='vod-fetching'
     // throughout.
     void this.runVodFetch({ ...meta, status: 'vod-fetching' });
+  }
+
+  // 2026-05-04 — Walk every live segment file (single-segment recordings
+  // = just `files.live`; restart-rotated = `liveSegments[]`) and remux
+  // through ffmpeg `-c copy` to MP4 when codecs allow but container
+  // doesn't match. Mutates meta.files.live + meta.liveSegments in
+  // place to point at the new filenames.
+  private async remuxSegments(meta: RecordingMetadata): Promise<void> {
+    const segmentNames = meta.liveSegments && meta.liveSegments.length > 0
+      ? [...meta.liveSegments]
+      : meta.files.live ? [meta.files.live] : [];
+    if (segmentNames.length === 0) return;
+
+    const incompatible: Array<{ filename: string; videoCodec: string; audioCodec: string }> = [];
+    let anyChanged = false;
+    for (let i = 0; i < segmentNames.length; i += 1) {
+      const fname = segmentNames[i]!;
+      const absPath = path.join(meta.folder, fname);
+      const result = await verifyAndRemuxIfNeeded(absPath);
+      if (result.kind === 'noop') {
+        // Hot path; logged at debug volume only.
+        continue;
+      }
+      if (result.kind === 'remuxed') {
+        const newName = path.basename(result.newPath);
+        segmentNames[i] = newName;
+        anyChanged = true;
+        console.log(`[stream-recorder] remux ok: ${fname} → ${newName}`);
+        continue;
+      }
+      if (result.kind === 'incompatible') {
+        incompatible.push({ filename: fname, videoCodec: result.videoCodec, audioCodec: result.audioCodec });
+        console.warn(
+          `[stream-recorder] remux incompatible: ${fname} (${result.videoCodec}/${result.audioCodec}); leaving as-is`,
+        );
+        continue;
+      }
+      console.warn(`[stream-recorder] remux failed: ${fname} — ${result.error}`);
+    }
+
+    if (anyChanged) {
+      // Update meta to reflect post-remux filenames. Single-segment
+      // recordings see files.live updated; multi-segment also gets
+      // liveSegments synced.
+      if (meta.liveSegments && meta.liveSegments.length > 0) {
+        meta.liveSegments = segmentNames;
+        meta.files.live = segmentNames[segmentNames.length - 1] ?? meta.files.live;
+      } else if (segmentNames[0]) {
+        meta.files.live = segmentNames[0];
+      }
+    }
+    if (incompatible.length > 0) {
+      // Surface a soft warning on the metadata so the recording row
+      // can show "編集画面で再生できないかもしれません" without
+      // marking the whole capture as failed (the file still plays in
+      // VLC etc., it's specifically the renderer's <video> that's
+      // limited).
+      const warn = `非互換コーデック: ${incompatible
+        .map((x) => `${x.videoCodec}/${x.audioCodec}`)
+        .join(', ')} (HTML5 video で再生不可)`;
+      meta.errorMessage = (meta.errorMessage ? meta.errorMessage + ' / ' : '') + warn;
+    }
   }
 
   private async runVodFetch(meta: RecordingMetadata): Promise<void> {

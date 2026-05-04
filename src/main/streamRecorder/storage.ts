@@ -183,6 +183,135 @@ export function refreshFileSizes(meta: RecordingMetadata): RecordingMetadata {
   return next;
 }
 
+// 2026-05-04 — Filename migration: rename pre-2026-05-04 captures
+// from `<id>.live.mp4` / `<id>.live.NNN.mp4` / `<id>.vod.mp4` to the
+// new `<id>.mp4` / `<id>.NNN.mp4` / `<id>_vod.mp4` scheme. Windows
+// Media Player + several other apps misread the double-extension form
+// (`.live.mp4`) and refuse to play with error 0x80070323. The new
+// single-extension scheme works everywhere; metadata JSON keeps the
+// `files.live` vs `files.vod` distinction. Idempotent — files
+// already in the new shape are skipped.
+//
+// Runs once per boot from `recoverInterruptedRecordings`. Returns
+// the count of files renamed (separate from the recovered-status
+// count). Both file rename + metadata JSON update happen here so a
+// half-migrated state can never appear on disk.
+const LIVE_RENAME = /\.live(\.\d{3})?\.(mp4|mkv|webm)$/;
+const VOD_RENAME = /\.vod\.(mp4|mkv|webm)$/;
+
+function migrateLegacyFilename(name: string): string {
+  let next = name.replace(LIVE_RENAME, '$1.$2');
+  next = next.replace(VOD_RENAME, '_vod.$1');
+  return next;
+}
+
+async function migrateOneCreatorFolder(folder: string): Promise<number> {
+  let renamed = 0;
+  let entries: string[];
+  try {
+    entries = readdirSync(folder, { withFileTypes: true })
+      .filter((e) => e.isFile())
+      .map((e) => e.name);
+  } catch {
+    return 0;
+  }
+
+  // Pass 1 — rename media files. Skip when the target already exists
+  // (defensive — earlier partial migration could have left both forms;
+  // the new-shape file is canonical, the legacy is presumed superseded
+  // and left alone for the user to delete manually).
+  for (const fname of entries) {
+    const next = migrateLegacyFilename(fname);
+    if (next === fname) continue;
+    const oldPath = path.join(folder, fname);
+    const newPath = path.join(folder, next);
+    if (existsSync(newPath)) {
+      console.warn(`[recovery] skip rename (target exists): ${fname} → ${next}`);
+      continue;
+    }
+    try {
+      await fs.rename(oldPath, newPath);
+      console.log(`[recovery] migrated: ${fname} → ${next}`);
+      renamed += 1;
+    } catch (err) {
+      console.warn(`[recovery] rename failed for ${fname}:`, err);
+    }
+  }
+
+  // Pass 2 — sync metadata JSON in this folder. We re-read the dir
+  // because rename may have changed entries (unlikely for .json but
+  // cheap).
+  let jsons: string[];
+  try {
+    jsons = readdirSync(folder).filter((n) => n.endsWith('.json'));
+  } catch {
+    return renamed;
+  }
+  for (const jsonName of jsons) {
+    const jsonPath = path.join(folder, jsonName);
+    let raw: string;
+    try {
+      raw = await fs.readFile(jsonPath, 'utf8');
+    } catch {
+      continue;
+    }
+    let parsed: Record<string, unknown>;
+    try {
+      parsed = JSON.parse(raw) as Record<string, unknown>;
+    } catch {
+      continue;
+    }
+    let modified = false;
+    const files = parsed['files'] as { live?: string | null; vod?: string | null } | undefined;
+    if (files) {
+      if (typeof files.live === 'string') {
+        const next = migrateLegacyFilename(files.live);
+        if (next !== files.live) {
+          files.live = next;
+          modified = true;
+        }
+      }
+      if (typeof files.vod === 'string') {
+        const next = migrateLegacyFilename(files.vod);
+        if (next !== files.vod) {
+          files.vod = next;
+          modified = true;
+        }
+      }
+    }
+    const segs = parsed['liveSegments'];
+    if (Array.isArray(segs)) {
+      const newSegs = segs.map((s) => (typeof s === 'string' ? migrateLegacyFilename(s) : s));
+      if (newSegs.some((v, i) => v !== segs[i])) {
+        parsed['liveSegments'] = newSegs;
+        modified = true;
+      }
+    }
+    if (modified) {
+      try {
+        await fs.writeFile(jsonPath, JSON.stringify(parsed, null, 2), 'utf8');
+        console.log(`[recovery] metadata sync: ${jsonName}`);
+      } catch (err) {
+        console.warn(`[recovery] metadata write failed for ${jsonName}:`, err);
+      }
+    }
+  }
+  return renamed;
+}
+
+export async function migrateLegacyExtensions(baseDir: string): Promise<number> {
+  if (!existsSync(baseDir)) return 0;
+  let total = 0;
+  for (const platform of safeListDirs(baseDir)) {
+    if (platform !== 'twitch' && platform !== 'youtube') continue;
+    const platformPath = path.join(baseDir, platform);
+    for (const creatorDir of safeListDirs(platformPath)) {
+      total += await migrateOneCreatorFolder(path.join(platformPath, creatorDir));
+    }
+  }
+  return total;
+}
+
 // Crash-recovery sweep. Runs at app boot: any metadata stuck in
 // 'recording' or 'vod-fetching' state means the previous process died
 // mid-record. We mark those as 'failed' so the UI doesn't claim

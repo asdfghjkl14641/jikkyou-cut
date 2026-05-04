@@ -134,8 +134,12 @@ export class RecordingSession {
     // Live filename suffix differs by kind: streamlink writes mkv
     // verbatim from the HLS stream (no remux), yt-dlp writes whatever
     // it picked (most often mp4 for Twitch live, m3u8-pieces-merged
-    // for YouTube). We use a platform-agnostic .live.mkv for streamlink
-    // and let yt-dlp pick its own extension.
+    // for YouTube). 2026-05-04: dropped the `.live` infix from the
+    // filename — Windows Media Player (and quite a few other apps)
+    // misread the `.live.mp4` ending as if `.live` were the real
+    // extension and refuses to play with error 0x80070323. The
+    // metadata JSON's files.live vs files.vod distinction is what
+    // distinguishes live capture from VOD re-fetch now.
     this.liveFilePath = this.buildLiveFilePath(this.restartCount);
     // Final filename for metadata. yt-dlp's actual output extension
     // is filled in via the `after_move:filepath` print, so we update
@@ -156,18 +160,18 @@ export class RecordingSession {
     return this.proc?.pid;
   }
 
-  // Filename pattern: original = "<recordingId>.live.<ext>", restarts
-  // = "<recordingId>.live.NNN.<ext>" with NNN zero-padded. yt-dlp's
-  // %(ext)s placeholder resolves at run time to the source's actual
-  // extension. The numbering survives the .live.001.mp4 / .live.002.mp4
-  // pattern in the spec.
+  // Filename pattern: original = "<recordingId>.<ext>", restarts =
+  // "<recordingId>.NNN.<ext>" with NNN zero-padded. yt-dlp's %(ext)s
+  // placeholder resolves at run time to the source's actual
+  // extension. 2026-05-04: dropped the `.live` infix — see comment
+  // in the constructor for the Windows-media-player rationale.
   private buildLiveFilePath(segmentIndex: number): string {
     const recordingId = this.meta.recordingId;
     const segSuffix = segmentIndex === 0 ? '' : `.${segmentIndex.toString().padStart(3, '0')}`;
     if (this.kind === 'streamlink') {
-      return path.join(this.meta.folder, `${recordingId}.live${segSuffix}.mkv`);
+      return path.join(this.meta.folder, `${recordingId}${segSuffix}.mkv`);
     }
-    return path.join(this.meta.folder, `${recordingId}.live${segSuffix}.%(ext)s`);
+    return path.join(this.meta.folder, `${recordingId}${segSuffix}.%(ext)s`);
   }
 
   private spawn(): ChildProcess {
@@ -192,12 +196,21 @@ export class RecordingSession {
 
   private spawnYtDlp(): ChildProcess {
     const exe = getYtDlpPath();
-    // Format selector — relaxed (matches 段階 6d's selector philosophy).
-    // For live we additionally drop avc1 preference because Twitch's
-    // HLS often only ships h264 anyway, and YouTube Live's manifest
-    // shape is less choosy.
+    // 2026-05-04 — Format selector tuned for editor compatibility.
+    // The HTML5 <video> element in the renderer plays H.264/AAC/MP4
+    // and VP9/Opus/WebM natively; H.265 / AV1 will silently fail.
+    //   Twitch  — HLS source is universally H.264/AAC, so prefer
+    //             avc1+m4a explicitly. The fallback is `best` so
+    //             a future Twitch format roll-out doesn't break us.
+    //   YouTube — Live often runs VP9 at 1080p60+; forcing H.264
+    //             would drop us to 720p / 30 fps. Keep the relaxed
+    //             selector and rely on the post-record remux step
+    //             (streamRecorder/remux.ts) to repackage to MP4 if
+    //             yt-dlp lands on a non-MP4 container.
     const heightFilter = this.quality === 'best' ? '' : `[height<=${this.quality.replace('p', '')}]`;
-    const format = `bestvideo${heightFilter}+bestaudio/best${heightFilter}/best`;
+    const format = this.info.platform === 'twitch'
+      ? `bestvideo${heightFilter}[vcodec^=avc1]+bestaudio[acodec^=mp4a]/bestvideo${heightFilter}[ext=mp4]+bestaudio[ext=m4a]/best${heightFilter}/best`
+      : `bestvideo${heightFilter}+bestaudio/best${heightFilter}/best`;
     // 2026-05-04 emergency fix — `--live-from-start` is documented as
     // **YouTube only**. Passing it to a Twitch URL causes yt-dlp to
     // spin forever waiting for past-fragment data that Twitch's HLS
@@ -211,6 +224,14 @@ export class RecordingSession {
       '--js-runtimes', 'node',
       '-f', format,
       '-o', this.liveFilePath,
+      // 2026-05-04 — Force the merged container to MP4. yt-dlp's
+      // default would pick whichever container the source uses
+      // (.mkv for VP9, .ts for some HLS); the renderer's
+      // <video> element only natively plays MP4 / WebM. The post-
+      // record remux step is the safety net when the source is
+      // VP9 / AV1 (`-c copy` to MP4 fails for those — we'd need
+      // a re-encode, which we don't do live).
+      '--merge-output-format', 'mp4',
       ...liveFromStartArgs,
       '--no-part',
       '--concurrent-fragments', '4',

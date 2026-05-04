@@ -92,9 +92,18 @@ function VideoCard({ video, onOpen }: { video: RecentVideo; onOpen: (v: RecentVi
   );
 }
 
+// Match VideoPlayer's toMediaUrl format exactly: `media://localhost/<encoded-abspath>`.
+// The earlier `media://${path}` form lost the drive letter (Chromium parsed
+// `C:` as the host) and the protocol handler 404'd every thumbnail — which
+// is why the H-H placeholder kept appearing despite ffmpeg generating jpgs
+// successfully on disk.
+function toMediaUrl(absPath: string): string {
+  return `media://localhost/${encodeURIComponent(absPath)}`;
+}
+
 function VideoThumbnail({ video }: { video: RecentVideo }) {
   const thumbUrl = video.thumbnailPath
-    ? `media://${video.thumbnailPath.replace(/\\/g, '/')}`
+    ? toMediaUrl(video.thumbnailPath)
     : video.thumbnailUrl;
 
   return (
