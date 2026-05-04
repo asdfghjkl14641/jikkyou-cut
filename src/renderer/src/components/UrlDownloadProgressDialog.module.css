@@ -49,10 +49,33 @@
 }
 
 .body {
-  padding: var(--space-6);
+  padding: var(--space-5) var(--space-5);
   display: flex;
   flex-direction: column;
-  gap: var(--space-5);
+  gap: var(--space-3);
+}
+
+/* 2026-05-04 — 4-bar layout: each row is one parallel task. */
+.row {
+  display: grid;
+  grid-template-columns: 56px 1fr 60px;
+  align-items: center;
+  gap: var(--space-3);
+}
+
+.rowLabel {
+  font-size: var(--font-size-xs);
+  color: var(--text-secondary);
+  font-weight: var(--font-weight-medium);
+}
+
+.rowDone {
+  color: var(--accent-success);
+}
+
+.rowWaiting {
+  color: var(--text-muted);
+  opacity: 0.55;
 }
 
 .progressContainer {
@@ -63,7 +86,7 @@
 
 .progressBar {
   flex: 1;
-  height: 8px;
+  height: 6px;
   background: var(--bg-base);
   border-radius: var(--radius-full);
   overflow: hidden;
@@ -76,22 +99,35 @@
   transition: width 0.3s ease-out;
 }
 
-.percentText {
-  font-size: var(--font-size-sm);
-  font-weight: var(--font-weight-bold);
-  color: var(--text-primary);
-  min-width: 50px;
-  text-align: right;
-  font-family: var(--font-mono);
+.progressFillDone {
+  background: linear-gradient(90deg, var(--accent-success), #4ade80);
 }
 
-.meta {
+.progressFillIdle {
+  background: var(--border-subtle);
+}
+
+.percentText {
+  font-size: var(--font-size-xs);
+  font-weight: var(--font-weight-bold);
+  color: var(--text-primary);
+  text-align: right;
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+}
+
+.percentTextMuted {
+  color: var(--text-muted);
+}
+
+.audioMeta {
   display: grid;
   grid-template-columns: 1fr 1fr;
-  gap: var(--space-4);
-  padding: var(--space-3);
+  gap: var(--space-3);
+  padding: var(--space-2) var(--space-3);
   background: var(--bg-base);
-  border-radius: var(--radius-md);
+  border-radius: var(--radius-sm);
+  margin-top: 2px;
 }
 
 .metaItem {
@@ -108,7 +144,7 @@
 }
 
 .metaValue {
-  font-size: var(--font-size-sm);
+  font-size: var(--font-size-xs);
   color: var(--text-primary);
   font-weight: var(--font-weight-medium);
   font-family: var(--font-mono);

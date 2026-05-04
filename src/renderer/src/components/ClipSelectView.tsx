@@ -644,7 +644,7 @@ export default function ClipSelectView() {
               />
               <div className={styles.statusLabel}>
                 {commentAnalysisStatus.kind === 'loading' && (
-                  <span className={styles.hintText}>{PHASE_LABEL[commentAnalysisStatus.phase]} (モック表示)</span>
+                  <CommentAnalysisProgressStrip phase={commentAnalysisStatus.phase} />
                 )}
                 {commentAnalysisStatus.kind === 'error' && (
                   <span className={styles.hintText}>分析失敗: {commentAnalysisStatus.message} (モック表示)</span>
@@ -766,5 +766,50 @@ export default function ClipSelectView() {
       {/* Stage 4 — transient toast for embed→local swap announcement. */}
       {toast && <div className={styles.toast}>{toast}</div>}
     </div>
+  );
+}
+
+// 2026-05-04 — Compact progress strip shown while comment analysis is
+// in flight. Maps the discrete `chat → viewers → scoring` phase axis
+// to a 3-step percentage so the user sees forward motion (otherwise
+// the previous "モック表示" text gave no indication that work was
+// actually happening). The strip auto-hides once the status flips
+// to 'ready' — the parent's PHASE_LABEL fallback handles 'error'.
+function CommentAnalysisProgressStrip({ phase }: { phase: CommentAnalysisProgress['phase'] }) {
+  const percent = phase === 'chat' ? 33 : phase === 'viewers' ? 66 : 100;
+  return (
+    <span
+      className={styles.hintText}
+      style={{ display: 'inline-flex', alignItems: 'center', gap: 8, fontSize: 'var(--font-size-xs)' }}
+    >
+      <span style={{ fontVariantNumeric: 'tabular-nums', minWidth: 38 }}>
+        {PHASE_LABEL[phase]}
+      </span>
+      <span
+        style={{
+          flex: 1,
+          maxWidth: 200,
+          minWidth: 80,
+          height: 4,
+          background: 'var(--border-subtle)',
+          borderRadius: 999,
+          overflow: 'hidden',
+        }}
+      >
+        <span
+          style={{
+            display: 'block',
+            width: `${percent}%`,
+            height: '100%',
+            background: 'linear-gradient(90deg, var(--accent-primary), #818CF8)',
+            transition: 'width 0.3s ease-out',
+          }}
+        />
+      </span>
+      <span style={{ fontVariantNumeric: 'tabular-nums', color: 'var(--text-muted)' }}>
+        {percent}%
+      </span>
+      <span style={{ color: 'var(--text-muted)', fontSize: '11px' }}>(モック表示)</span>
+    </span>
   );
 }

@@ -23,7 +23,7 @@ import TranscriptionContextForm from './components/TranscriptionContextForm';
 import type { TranscriptionContext } from '../../common/config';
 import { X, Settings, Scissors, Subtitles, ChevronLeft } from 'lucide-react';
 import SubtitleSettingsDialog from './components/SubtitleSettingsDialog';
-import UrlDownloadProgressDialog from './components/UrlDownloadProgressDialog';
+import UrlDownloadProgressDialog, { buildDialogProgress } from './components/UrlDownloadProgressDialog';
 import TermsOfServiceModal from './components/TermsOfServiceModal';
 import ClipSelectView from './components/ClipSelectView';
 import type { UrlDownloadProgress } from '../../common/types';
@@ -34,6 +34,25 @@ import styles from './App.module.css';
 // every launch. Used only as a fallback when `lastDownloadUrl` is null —
 // any previously-downloaded URL takes precedence.
 const PROTOTYPE_DEFAULT_URL = 'https://www.youtube.com/watch?v=O5gI5cIM4Yc&t=3s';
+
+// 2026-05-04 — Mirror of main/urlDownload.deriveSessionId for the
+// recognised platforms (YouTube watch + youtu.be short + Twitch
+// /videos/<id>). Used by the parallel-DL flow to set state.sessionId
+// synchronously so comment-analysis progress events fired BEFORE
+// audio resolves don't hit the stale-session drop. Returns null for
+// unrecognised URLs — caller falls back to waiting for audio in that
+// case (rare; covers SoundCloud / Vimeo / etc.). The hash fallback
+// path in main is intentionally NOT mirrored here — those URLs are
+// rare and the existing await-audio path still works for them.
+function deriveSessionIdSync(url: string): string | null {
+  const ytWatch = url.match(/[?&]v=([a-zA-Z0-9_-]{11})/);
+  if (ytWatch) return `youtube_${ytWatch[1]}`;
+  const ytShort = url.match(/youtu\.be\/([a-zA-Z0-9_-]{11})/);
+  if (ytShort) return `youtube_${ytShort[1]}`;
+  const twitch = url.match(/twitch\.tv\/.*\/?videos?\/(\d+)/) ?? url.match(/\/videos\/(\d+)/);
+  if (twitch) return `twitch_${twitch[1]}`;
+  return null;
+}
 
 export default function App() {
   const filePath = useEditorStore((s) => s.filePath);
@@ -82,6 +101,12 @@ export default function App() {
   const [tosOpen, setTosOpen] = useState(false);
   const [downloadProgressOpen, setDownloadProgressOpen] = useState(false);
   const [downloadProgress, setDownloadProgress] = useState<UrlDownloadProgress | null>(null);
+  // 2026-05-04 — Sibling progress slots so the 4-bar dialog can show
+  // video/comment/scoring even while audio is still downloading. Each
+  // is updated by the matching IPC stream during startDownloadFlow.
+  const [videoDlProgress, setVideoDlProgress] = useState<{ active: boolean; done: boolean; percent: number }>({ active: false, done: false, percent: 0 });
+  const [commentProgress, setCommentProgress] = useState<{ active: boolean; done: boolean; phase: 'chat' | 'viewers' | 'scoring' | null }>({ active: false, done: false, phase: null });
+  const [scoringDone, setScoringDone] = useState(false);
   // URL waiting on TOS acceptance. Captured the moment the user submits in
   // DropZone; consumed once the TOS modal is accepted (or cleared on
   // cancel). Without this, the URL the user typed gets lost between TOS
@@ -253,15 +278,96 @@ export default function App() {
 
       const quality = view.config.defaultDownloadQuality || 'best';
 
-      // Stage 2 — audio-first / video-background split.
-      // Phase A: await the audio-only DL (fast, ~tens of seconds even
-      // for long streams). When this resolves, the user can already
-      // run AI extract on the resulting audio file.
+      // 2026-05-04 — TRUE parallel kickoff for ALL background work.
+      // Same-tick fires:
+      //   - metadata pre-fetch (yt-dlp --skip-download, ~1-3 sec)
+      //   - audio DL
+      //   - video DL
+      // Once metadata resolves, comment analysis fires (it needs
+      // durationSec). On Twitch VODs where audio = full HLS length
+      // (~17 min for an 11h stream), this is the difference between
+      // comment fetch waiting 17 min vs starting after 2 sec.
       setDownloadProgressOpen(true);
       setDownloadProgress(null);
+      setVideoDlProgress({ active: true, done: false, percent: 0 });
+      setCommentProgress({ active: false, done: false, phase: null });
+      setScoringDone(false);
       const audioCleanup = window.api.urlDownload.onAudioProgress((p) => {
         setDownloadProgress(p);
       });
+
+      const videoCleanup = window.api.urlDownload.onVideoProgress((p) => {
+        const ratio = Number.isFinite(p.percent) ? p.percent / 100 : 0;
+        useEditorStore.getState().setVideoDownloadProgress(Math.max(0, Math.min(1, ratio)));
+        // Mirror to dialog state so the 4-bar UI updates while
+        // audio is still downloading.
+        setVideoDlProgress((prev) => ({
+          active: !prev.done,
+          done: prev.done,
+          percent: Number.isFinite(p.percent) ? p.percent : prev.percent,
+        }));
+      });
+      const videoPromise = window.api.urlDownload.startVideoOnly({
+        url,
+        quality,
+        outputDir,
+        // sessionId omitted — main derives from URL.
+      });
+
+      // Fire metadata pre-fetch + comment analysis synchronously. The
+      // sessionId we use to gate "stale session" drops is derived
+      // from the URL right now (same regex main uses) — that lets
+      // comment events arriving BEFORE audio.resolve survive the
+      // store check. For URLs we can't classify (unknown), fall back
+      // to the legacy "wait for audio.sessionId" path below.
+      const earlySessionId = deriveSessionIdSync(url);
+      let commentProgressCleanup: (() => void) | null = null;
+      let commentPromise: Promise<unknown> | null = null;
+      if (earlySessionId) {
+        commentProgressCleanup = window.api.commentAnalysis.onProgress((p) => {
+          const state = useEditorStore.getState();
+          if (state.sessionId !== earlySessionId) return;
+          if (state.commentAnalysisStatus.kind !== 'loading') return;
+          state.setCommentAnalysisStatus({ kind: 'loading', phase: p.phase });
+          // Mirror to dialog state. 'scoring' phase moves to its own row.
+          setCommentProgress({ active: true, done: false, phase: p.phase });
+          if (p.phase === 'scoring' && p.percent >= 100) {
+            setScoringDone(true);
+          }
+        });
+        commentPromise = window.api.urlDownload
+          .fetchMetadata({ url })
+          .then((meta) => {
+            if (meta.durationSec == null) {
+              throw new Error('duration unavailable from metadata pre-fetch');
+            }
+            console.log(
+              `[comment-debug:app] firing comment analysis early: durationSec=${meta.durationSec} (audio not yet resolved)`,
+            );
+            useEditorStore.getState().setCommentAnalysisStatus({ kind: 'loading', phase: 'chat' });
+            setCommentProgress({ active: true, done: false, phase: 'chat' });
+            return window.api.commentAnalysis.start({
+              sourceUrl: url,
+              durationSec: meta.durationSec,
+            });
+          })
+          .then((analysis) => {
+            commentProgressCleanup?.();
+            setCommentProgress({ active: false, done: true, phase: null });
+            setScoringDone(true);
+            const state = useEditorStore.getState();
+            if (state.sessionId !== earlySessionId) return;
+            state.setCommentAnalysisStatus({ kind: 'ready', analysis });
+          })
+          .catch((err) => {
+            commentProgressCleanup?.();
+            setCommentProgress({ active: false, done: false, phase: null });
+            const state = useEditorStore.getState();
+            const msg = err instanceof Error ? err.message : String(err);
+            if (state.sessionId !== earlySessionId) return;
+            state.setCommentAnalysisStatus({ kind: 'error', message: msg });
+          });
+      }
 
       let audio;
       try {
@@ -269,6 +375,11 @@ export default function App() {
       } catch (err) {
         setDownloadProgressOpen(false);
         audioCleanup();
+        videoCleanup();
+        // Audio failure invalidates the whole flow — cancel the in-flight
+        // video DL too so we don't leak a long-running process the user
+        // can no longer reach.
+        void window.api.urlDownload.cancelVideo().catch(() => {});
         const msg = err instanceof Error ? err.message : String(err);
         if (msg !== 'TRANSCRIPTION_CANCELLED' && msg !== 'EXPORT_CANCELLED') {
           alert(`音声ダウンロードに失敗しました: ${msg}`);
@@ -306,76 +417,41 @@ export default function App() {
       );
       void save({ lastDownloadUrl: url });
 
-      // Stage 6a — fire comment analysis + global patterns in parallel
-      // with the video DL. Pre-stage 6a these triggered only after
-      // ClipSelectView mounted + ran a useEffect; bringing them up here
-      // means by the time the user sees the view, chat is usually
-      // already loading and patterns are cached.
-      const expectedSession = audio.sessionId;
-      console.log('[comment-debug:app] commentAnalysis IPC fire: expectedSession=', expectedSession);
-      useEditorStore.getState().setCommentAnalysisStatus({ kind: 'loading', phase: 'chat' });
-      const commentProgressCleanup = window.api.commentAnalysis.onProgress((p) => {
-        const state = useEditorStore.getState();
-        console.log(
-          '[comment-debug:app] progress event:',
-          'phase=', p.phase,
-          'storeSessionId=', state.sessionId,
-          'expected=', expectedSession,
-          'storeStatus=', state.commentAnalysisStatus.kind,
-        );
-        // Drop progress events from a stale session (user moved on).
-        if (state.sessionId !== expectedSession) {
-          console.log('[comment-debug:app] >>> progress dropped: session mismatch');
-          return;
-        }
-        // Don't regress 'ready' / 'error' back to 'loading' if a late
-        // progress event arrives.
-        if (state.commentAnalysisStatus.kind !== 'loading') {
-          console.log('[comment-debug:app] >>> progress dropped: status not loading');
-          return;
-        }
-        state.setCommentAnalysisStatus({ kind: 'loading', phase: p.phase });
-      });
-      void window.api.commentAnalysis
-        .start({
-          videoFilePath: audio.audioFilePath,
-          sourceUrl: url,
-          durationSec: audio.durationSec,
-        })
-        .then((analysis) => {
-          commentProgressCleanup();
+      // 2026-05-04 — Comment analysis was already fired from
+      // metadata.then() above (when the URL is a recognised platform).
+      // For unknown URLs (no early sessionId), fire it here as the
+      // legacy fallback so we still get an analysis attempt.
+      const expectedSession = earlySessionId ?? audio.sessionId;
+      if (!commentPromise) {
+        useEditorStore.getState().setCommentAnalysisStatus({ kind: 'loading', phase: 'chat' });
+        const cleanup = window.api.commentAnalysis.onProgress((p) => {
           const state = useEditorStore.getState();
-          console.log(
-            '[comment-debug:app] commentAnalysis result received:',
-            'messages.length=', analysis.allMessages.length,
-            'storeSessionId=', state.sessionId,
-            'expected=', expectedSession,
-            'match=', state.sessionId === expectedSession,
-          );
-          if (state.sessionId !== expectedSession) {
-            console.log('[comment-debug:app] >>> result DROPPED due to session mismatch');
-            return;
-          }
-          console.log('[comment-debug:app] >>> setting status to ready');
-          state.setCommentAnalysisStatus({ kind: 'ready', analysis });
-          console.log(
-            '[comment-debug:app] post-set: storeStatus=',
-            useEditorStore.getState().commentAnalysisStatus.kind,
-          );
-        })
-        .catch((err) => {
-          commentProgressCleanup();
-          const state = useEditorStore.getState();
-          const msg = err instanceof Error ? err.message : String(err);
-          console.log(
-            '[comment-debug:app] commentAnalysis IPC rejected:',
-            'err=', msg,
-            'storeSessionId=', state.sessionId,
-            'expected=', expectedSession,
-          );
           if (state.sessionId !== expectedSession) return;
-          state.setCommentAnalysisStatus({ kind: 'error', message: msg });
+          if (state.commentAnalysisStatus.kind !== 'loading') return;
+          state.setCommentAnalysisStatus({ kind: 'loading', phase: p.phase });
         });
+        void window.api.commentAnalysis
+          .start({
+            sourceUrl: url,
+            durationSec: audio.durationSec,
+          })
+          .then((analysis) => {
+            cleanup();
+            const state = useEditorStore.getState();
+            if (state.sessionId !== expectedSession) return;
+            state.setCommentAnalysisStatus({ kind: 'ready', analysis });
+          })
+          .catch((err) => {
+            cleanup();
+            const state = useEditorStore.getState();
+            const msg = err instanceof Error ? err.message : String(err);
+            if (state.sessionId !== expectedSession) return;
+            state.setCommentAnalysisStatus({ kind: 'error', message: msg });
+          });
+      }
+      // Reference commentPromise so unused-var lint doesn't fire when
+      // the legacy fallback path is taken.
+      void commentPromise;
 
       // Global patterns preload — file-read in main, ms-scale. Failure
       // is silent: autoExtract still loads internally on the main side
@@ -391,23 +467,13 @@ export default function App() {
           // intentional: best-effort cache, autoExtract has its own fallback
         });
 
-      // Phase B: kick off the video DL in the background. The user can
-      // start picking clips off the audio-only ClipSelectView while
-      // this runs. Progress + completion flow into the editor store
-      // (ClipSelectView reads videoDownloadStatus to render the
-      // overlay; setVideoFilePath replaces it with the <video>).
-      const videoCleanup = window.api.urlDownload.onVideoProgress((p) => {
-        const ratio = Number.isFinite(p.percent) ? p.percent / 100 : 0;
-        useEditorStore.getState().setVideoDownloadProgress(Math.max(0, Math.min(1, ratio)));
-      });
-      void window.api.urlDownload
-        .startVideoOnly({ url, quality, outputDir, sessionId: audio.sessionId })
+      // 2026-05-04 — Video DL is already in flight (fired before the
+      // audio await). Attach the result/error handlers now that we
+      // know the canonical sessionId from the resolved audio.
+      videoPromise
         .then((result) => {
           videoCleanup();
-          // Only adopt the video file if the user is still on the same
-          // session — bailing the editor out (clearFile) wipes
-          // audioFilePath / sessionId. The check protects against a
-          // stale promise resolving after the user moved on.
+          setVideoDlProgress({ active: false, done: true, percent: 100 });
           const state = useEditorStore.getState();
           if (state.sessionId === result.sessionId) {
             state.setVideoFilePath(result.videoFilePath);
@@ -415,6 +481,7 @@ export default function App() {
         })
         .catch((err) => {
           videoCleanup();
+          setVideoDlProgress({ active: false, done: false, percent: 0 });
           const msg = err instanceof Error ? err.message : String(err);
           const state = useEditorStore.getState();
           if (state.sessionId === audio.sessionId) {
@@ -679,7 +746,16 @@ export default function App() {
 
       <UrlDownloadProgressDialog
         isOpen={downloadProgressOpen}
-        progress={downloadProgress}
+        progress={buildDialogProgress({
+          audio: {
+            active: downloadProgressOpen,
+            done: false,
+            raw: downloadProgress,
+          },
+          video: videoDlProgress,
+          comment: commentProgress,
+          scoringDone,
+        })}
         onCancel={handleCancelDownload}
       />
     </main>

@@ -19,6 +19,28 @@ export type CookiesPlatform = 'youtube' | 'twitch' | 'unknown';
 //   4. `[]` (anonymous) — pre-cookies behaviour.
 // We never combine: yt-dlp would accept multiple cookie sources but
 // the SettingsDialog promises a strict precedence to the user.
+// 2026-05-04 — Path-heuristic guard. yt-dlp's "Get cookies.txt LOCALLY"
+// extension names exports after the source domain, so a file with
+// `youtube` in its path almost always contains only YouTube cookies.
+// Forwarding that file to a Twitch request makes Twitch's auth layer
+// reject the request with 401 (the YouTube auth-token is rejected as
+// an unknown session). Without this guard, a user who set the GENERIC
+// cookies file to e.g. `.../youtube-cookies.txt/...cookies.txt` got
+// silently broken Twitch downloads.
+//
+// We only refuse to forward when the path explicitly contains the OTHER
+// platform's name. Truly generic paths (e.g. `cookies.txt` in some
+// neutral folder) still get forwarded to every platform — that's the
+// pre-existing semantic and we don't want to break users with
+// hand-curated multi-platform cookie files.
+function isPlatformMismatchedFile(filePath: string, requestPlatform: CookiesPlatform): boolean {
+  if (requestPlatform === 'unknown') return false;
+  const lower = filePath.toLowerCase();
+  if (requestPlatform === 'twitch' && /youtube/.test(lower)) return true;
+  if (requestPlatform === 'youtube' && /twitch/.test(lower)) return true;
+  return false;
+}
+
 export function getCookiesArgs(opts: {
   cookiesBrowser: YtdlpCookiesBrowser;
   cookiesFile: string | null;
@@ -32,7 +54,16 @@ export function getCookiesArgs(opts: {
 
   if (opts.platform === 'youtube' && youtube) return ['--cookies', youtube];
   if (opts.platform === 'twitch' && twitch) return ['--cookies', twitch];
-  if (generic) return ['--cookies', generic];
+  if (generic) {
+    if (isPlatformMismatchedFile(generic, opts.platform)) {
+      console.warn(
+        `[cookies] generic cookies file path looks ${opts.platform === 'twitch' ? 'YouTube-' : 'Twitch-'}specific (${generic}); skipping for ${opts.platform} request to avoid 401`,
+      );
+      // fall through to browser / none
+    } else {
+      return ['--cookies', generic];
+    }
+  }
   if (opts.cookiesBrowser !== 'none') return ['--cookies-from-browser', opts.cookiesBrowser];
   return [];
 }
@@ -206,6 +237,31 @@ const buildFormatSelector = (quality: string): string => {
   }
   return `bestvideo${h}+bestaudio/best${h}/best`;
 };
+
+// 2026-05-04 — Audio-only format selector. Twitch VODs publish their
+// audio stream under a literal format ID `Audio_Only` (capital A,
+// underscore) — the YouTube-style `bestaudio[ext=m4a]/bestaudio` chain
+// finds *no candidates* and yt-dlp exits 1 with "Requested format is
+// not available". Branch on platform so the download survives both
+// platforms with a single audio path.
+//   - Twitch  → Audio_Only / bestaudio / best   (literal id first,
+//                                                 then generic for
+//                                                 future-proofing
+//                                                 against ID rename)
+//   - YouTube → bestaudio[ext=m4a] / bestaudio[ext=webm] / bestaudio
+//                                                 (m4a preferred for
+//                                                  direct decode, webm
+//                                                  fallback for live
+//                                                  archives lacking m4a)
+//   - Unknown → fall through to the YouTube chain (same shape works
+//                                                  for SoundCloud,
+//                                                  Vimeo, etc.)
+function buildAudioFormatSelector(platform: CookiesPlatform): string {
+  if (platform === 'twitch') {
+    return 'Audio_Only/bestaudio/best';
+  }
+  return 'bestaudio[ext=m4a]/bestaudio[ext=webm]/bestaudio';
+}
 
 // Stable, machine-parseable progress format. yt-dlp's default
 // `[download]  45.3% of 100.00MiB at 5.20MiB/s ETA 00:10` line is
@@ -523,6 +579,20 @@ function friendlyDownloadError(
   fallback: string,
 ): string {
   const isTwitch = sessionId.startsWith('twitch_');
+  // (Z) HTTP 401 Unauthorized — almost always expired cookies. yt-dlp
+  // surfaces this as `Unable to download JSON metadata: HTTP Error
+  // 401: Unauthorized`. Match before the 404 branch (more specific
+  // signal). 2026-05-04: observed when the user's twitch-cookies.txt
+  // session aged out — the platform-specific cookies file gets sent
+  // but the auth-token is rejected by Twitch.
+  if (/HTTP Error 401|Unauthorized/i.test(stderr)) {
+    return isTwitch
+      ? 'Twitch から 401 Unauthorized を受信しました。Cookies が期限切れの可能性大。' +
+          'Chrome/Edge で twitch.tv にログイン → 「Get cookies.txt LOCALLY」拡張機能で再エクスポート → ' +
+          '設定 → 動画ダウンロード → Twitch 専用 cookies のファイルを差し替えてください。'
+      : 'YouTube から 401 Unauthorized を受信しました。Cookies が期限切れか権限不足の可能性。' +
+          'ブラウザで再ログイン → cookies.txt を再エクスポートしてください。';
+  }
   if (
     /HTTP Error 404|HTTP Error 410|Video does not exist|This video is unavailable|Sorry, the streamer/i.test(
       stderr,
@@ -617,9 +687,15 @@ export async function downloadAudioOnly(args: {
   const startedAt = Date.now();
   const ytDlpVersion = await getYtDlpVersion();
   const platform = classifyUrlPlatform(args.url);
+  // 2026-05-04 — Branch the audio format selector on platform.
+  // YouTube-style `bestaudio[ext=m4a]` finds zero candidates on Twitch
+  // VODs (their audio stream is published as literal id `Audio_Only`),
+  // making the audio DL exit 1 with "Requested format is not available".
+  const audioFormat = buildAudioFormatSelector(platform);
   console.log(
     `[url-download] audio-only start: url=${args.url}, sessionId=${sessionId}, ` +
       `version=${ytDlpVersion}, concurrent=8, platform=${platform}, ` +
+      `format=${audioFormat}, ` +
       `cookiesBrowser=${args.cookiesBrowser}, cookiesFile=${args.cookiesFile ?? '<none>'}, ` +
       `cookiesFileYT=${args.cookiesFileYoutube ?? '<none>'}, cookiesFileTW=${args.cookiesFileTwitch ?? '<none>'}`,
   );
@@ -635,14 +711,10 @@ export async function downloadAudioOnly(args: {
     }),
     // See downloadVideo for the rationale on --js-runtimes node.
     '--js-runtimes', 'node',
-    // Prefer m4a for direct decode (codec id 140 typically), fall back
-    // to webm/opus (251), then to whatever bestaudio resolves to. The
-    // explicit webm step matters when YouTube's m4a variant isn't
-    // published for a given video (live archives, restricted age tiers
-    // delivered as DASH-only) — without it yt-dlp would skip straight
-    // to the unconstrained final fallback and might pick a worse
-    // bitrate.
-    '-f', 'bestaudio[ext=m4a]/bestaudio[ext=webm]/bestaudio',
+    // Selector branches on platform — see buildAudioFormatSelector for
+    // the per-platform rationale (YouTube wants codec-id-based
+    // chains; Twitch wants the literal `Audio_Only` ID).
+    '-f', audioFormat,
     '-o', outputTemplate,
     '--concurrent-fragments', '8',
     '--newline',
@@ -757,17 +829,98 @@ export async function cancelAudioDownload(): Promise<void> {
   }
 }
 
+// 2026-05-04 — Lightweight metadata pre-fetch. Used by the renderer to
+// kick off comment analysis (which needs durationSec) in parallel with
+// audio + video downloads, instead of waiting for audio to resolve.
+// Runs `yt-dlp --skip-download --print '%(duration)s\n%(title)s'`
+// against the URL — typically completes in 1-3 seconds because no
+// fragment fetch happens.
+export type UrlMetadata = {
+  durationSec: number | null;
+  title: string | null;
+};
+
+export async function fetchUrlMetadata(args: {
+  url: string;
+  cookiesBrowser: YtdlpCookiesBrowser;
+  cookiesFile: string | null;
+  cookiesFileYoutube: string | null;
+  cookiesFileTwitch: string | null;
+}): Promise<UrlMetadata> {
+  const platform = classifyUrlPlatform(args.url);
+  const ytArgs = [
+    args.url,
+    ...getCookiesArgs({
+      cookiesBrowser: args.cookiesBrowser,
+      cookiesFile: args.cookiesFile,
+      cookiesFileYoutube: args.cookiesFileYoutube,
+      cookiesFileTwitch: args.cookiesFileTwitch,
+      platform,
+    }),
+    '--js-runtimes', 'node',
+    '--skip-download',
+    '--no-warnings',
+    '--no-playlist',
+    '--print', '%(duration)s\n%(title)s',
+  ];
+  console.log(`[url-download] metadata pre-fetch: url=${args.url} platform=${platform}`);
+  return new Promise<UrlMetadata>((resolve) => {
+    const proc = spawn(getYtDlpPath(), ytArgs, { windowsHide: true });
+    let stdout = '';
+    proc.stdout?.on('data', (b: Buffer) => {
+      stdout += b.toString('utf8');
+    });
+    proc.stderr?.on('data', (b: Buffer) => {
+      const text = b.toString('utf8').slice(0, 200);
+      if (text.trim()) console.warn('[url-download] metadata stderr:', text);
+    });
+    proc.on('exit', (code) => {
+      if (code !== 0) {
+        console.warn(`[url-download] metadata pre-fetch exit code=${code}; returning nulls`);
+        resolve({ durationSec: null, title: null });
+        return;
+      }
+      const lines = stdout.trim().split(/\r?\n/);
+      const durationStr = lines[0]?.trim();
+      const title = lines[1]?.trim() || null;
+      const durationSec = durationStr && !Number.isNaN(Number(durationStr))
+        ? Number(durationStr)
+        : null;
+      console.log(
+        `[url-download] metadata pre-fetch ok: durationSec=${durationSec}, title="${title?.slice(0, 60) ?? '(null)'}"`,
+      );
+      resolve({ durationSec, title });
+    });
+    proc.on('error', (err) => {
+      console.warn('[url-download] metadata pre-fetch error:', err);
+      resolve({ durationSec: null, title: null });
+    });
+  });
+}
+
+// 2026-05-04 — `sessionId` is now optional. Pre-fix the renderer waited
+// for `startAudioOnly` to resolve (which returned the sessionId) before
+// it could fire `startVideoOnly`. That serialised the two DLs even on
+// platforms where the source HLS bandwidth could comfortably support
+// running both in parallel — Twitch VODs felt it the most because
+// their audio DL is the FULL HLS stream length (~17 min for an 11h
+// stream) instead of YouTube's small DASH audio-only track. Making
+// sessionId derivable here lets the renderer fire both downloads
+// from the same synchronous tick.
 export async function downloadVideoOnly(args: {
   url: string;
   quality: string;
   outputDir: string;
-  sessionId: string;
+  // Optional — derive from URL when omitted (renderer can fire video
+  // DL without first awaiting audio DL).
+  sessionId?: string;
   cookiesBrowser: YtdlpCookiesBrowser;
   cookiesFile: string | null;
   cookiesFileYoutube: string | null;
   cookiesFileTwitch: string | null;
   onProgress: (progress: UrlDownloadProgress) => void;
 }): Promise<{ videoFilePath: string; sessionId: string }> {
+  const sessionId = args.sessionId ?? deriveSessionId(args.url);
   await fs.mkdir(args.outputDir, { recursive: true });
   // Same format selector as the legacy `start()` path — produces an
   // mp4 with avc1 video + AAC audio so Chromium can play it natively.
@@ -781,7 +934,7 @@ export async function downloadVideoOnly(args: {
   const ytDlpVersion = await getYtDlpVersion();
   const platform = classifyUrlPlatform(args.url);
   console.log(
-    `[url-download] video-only start: url=${args.url}, sessionId=${args.sessionId}, ` +
+    `[url-download] video-only start: url=${args.url}, sessionId=${sessionId}, ` +
       `quality=${args.quality}, version=${ytDlpVersion}, concurrent=8, platform=${platform}, ` +
       `cookiesBrowser=${args.cookiesBrowser}, cookiesFile=${args.cookiesFile ?? '<none>'}, ` +
       `cookiesFileYT=${args.cookiesFileYoutube ?? '<none>'}, cookiesFileTW=${args.cookiesFileTwitch ?? '<none>'}`,
@@ -866,7 +1019,7 @@ export async function downloadVideoOnly(args: {
           new Error(
             friendlyDownloadError(
               stderrBuf,
-              args.sessionId,
+              sessionId,
               `yt-dlp (video) exited with code ${code}`,
             ),
           ),
@@ -879,9 +1032,9 @@ export async function downloadVideoOnly(args: {
       }
       const elapsedSec = (Date.now() - startedAt) / 1000;
       console.log(
-        `[url-download] video-only done: ${elapsedSec.toFixed(1)}s, sessionId=${args.sessionId}`,
+        `[url-download] video-only done: ${elapsedSec.toFixed(1)}s, sessionId=${sessionId}`,
       );
-      resolve({ videoFilePath: outputFilePath, sessionId: args.sessionId });
+      resolve({ videoFilePath: outputFilePath, sessionId });
     });
     proc.on('error', (err: Error) => {
       if (currentVideoProcess === proc) currentVideoProcess = null;

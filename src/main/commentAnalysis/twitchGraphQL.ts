@@ -49,7 +49,12 @@ const MAX_PAGES = 5000;
 // Security: we deliberately do NOT log values, only count + names.
 // The file content holds session credentials and must never reach
 // stdout / log files.
-function readTwitchCookieHeader(cookiesFile: string | null): string | null {
+type TwitchAuth = {
+  cookieHeader: string;
+  authToken: string | null;  // value of auth-token cookie when present
+};
+
+function readTwitchAuth(cookiesFile: string | null): TwitchAuth | null {
   if (!cookiesFile) return null;
   let content: string;
   try {
@@ -60,6 +65,7 @@ function readTwitchCookieHeader(cookiesFile: string | null): string | null {
   }
   const cookies: string[] = [];
   const seenNames = new Set<string>();
+  let authToken: string | null = null;
   for (const rawLine of content.split(/\r?\n/)) {
     const line = rawLine;
     if (!line.trim()) continue;
@@ -78,13 +84,23 @@ function readTwitchCookieHeader(cookiesFile: string | null): string | null {
     if (seenNames.has(name)) continue;
     seenNames.add(name);
     cookies.push(`${name}=${value}`);
+    // 2026-05-04 — Capture the OAuth auth-token. Sending it via the
+    // `Authorization: OAuth <token>` header (in ADDITION to the Cookie
+    // header) is what Twitch's integrity gateway expects from a
+    // logged-in session — without it, page 1 typically slips through
+    // but the GraphQL gateway trips an integrity check on page 2+
+    // and the chat fetch dies after ~50 messages. yt-dlp does this
+    // exact dance in its twitch.py extractor.
+    if (name === 'auth-token' && value) {
+      authToken = value;
+    }
   }
   if (cookies.length === 0) return null;
-  // Only log NAMES, never values.
+  // Only log NAMES + flags, never values.
   console.log(
-    `[twitch-graphql] loaded ${cookies.length} twitch cookies: ${[...seenNames].join(', ')}`,
+    `[twitch-graphql] loaded ${cookies.length} twitch cookies (auth-token=${authToken ? 'present' : 'MISSING'}): ${[...seenNames].join(', ')}`,
   );
-  return cookies.join('; ');
+  return { cookieHeader: cookies.join('; '), authToken };
 }
 
 // Cancellation gate. The activeAbort is set on entry to fetchTwitchVodChat
@@ -134,7 +150,7 @@ async function fetchPage(
   vodId: string,
   cursor: string | null,
   signal: AbortSignal,
-  cookieHeader: string | null,
+  auth: TwitchAuth | null,
 ): Promise<{ status: 'ok'; edges: GqlEdge[]; hasNextPage: boolean }
   | { status: 'rate-limit' }
   | { status: 'not-found' }
@@ -144,8 +160,21 @@ async function fetchPage(
   const headers: Record<string, string> = {
     'Client-ID': TWITCH_CLIENT_ID,
     'Content-Type': 'application/json',
+    // Match a real-browser User-Agent. Twitch's integrity gateway has
+    // historically flagged requests sending the Node fetch default
+    // ('node') as bot-like. We pin to a stable Chrome string rather
+    // than tracking the latest because the gateway doesn't care about
+    // the exact version, only that it looks browser-shaped.
+    'User-Agent':
+      'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
   };
-  if (cookieHeader) headers['Cookie'] = cookieHeader;
+  if (auth?.cookieHeader) headers['Cookie'] = auth.cookieHeader;
+  // 2026-05-04 — `Authorization: OAuth <auth-token>` is the load-bearing
+  // bit for logged-in chat fetches past page 1. Without it, the
+  // integrity gateway sees us as "anonymous-with-cookies" on page 2+
+  // and rejects with `failed integrity check`, after which our loop
+  // breaks and we return ~50 messages instead of the full archive.
+  if (auth?.authToken) headers['Authorization'] = `OAuth ${auth.authToken}`;
   const res = await fetch(GQL_ENDPOINT, {
     method: 'POST',
     headers,
@@ -236,10 +265,21 @@ const sleep = (ms: number, signal: AbortSignal): Promise<void> =>
  *
  * Throws only on abort or unexpected network errors.
  */
+// 2026-05-04 — Result shape includes a `complete` flag so callers can
+// decide whether to cache. `complete=true` only when pagination exited
+// cleanly (hasNextPage=false reached). Any early-bail path
+// (integrity / forbidden / error / rate-limit retries exhausted /
+// cancelled) returns `complete=false` so the chatReplay cache layer
+// doesn't poison itself with the partial result.
+export type TwitchVodChatResult = {
+  messages: ChatMessage[];
+  complete: boolean;
+};
+
 export async function fetchTwitchVodChat(
   vodId: string,
   options?: { cookiesFile?: string | null },
-): Promise<ChatMessage[]> {
+): Promise<TwitchVodChatResult> {
   if (activeAbort) {
     // Replace any in-flight run — analyzeComments dedupes its own
     // callers so we shouldn't see overlap, but be defensive.
@@ -249,18 +289,31 @@ export async function fetchTwitchVodChat(
   activeAbort = ac;
   cancelRequested = false;
 
-  // Read cookies once at start. The Cookie header is constant for the
-  // lifetime of the run; re-reading per page would just amplify a
-  // potential mid-run filesystem race for no benefit.
-  const cookieHeader = readTwitchCookieHeader(options?.cookiesFile ?? null);
-  const cookieMode = cookieHeader ? 'set' : 'none';
+  // Read cookies once at start. The Cookie header + auth-token are
+  // constant for the lifetime of the run; re-reading per page would
+  // just amplify a potential mid-run filesystem race for no benefit.
+  const auth = readTwitchAuth(options?.cookiesFile ?? null);
+  const cookieMode = auth ? 'set' : 'none';
+  const authMode = auth?.authToken ? 'oauth' : 'none';
 
   const messages: ChatMessage[] = [];
   let cursor: string | null = null;
   let pageCount = 0;
   let rateLimitRetries = 0;
+  // 2026-05-04 — Integrity-check soft retry. Even with the OAuth header
+  // a transient flag can fire on the gateway's first pass; one backoff
+  // + retry catches that case. If it still fails after the retry we
+  // bail (cookies are likely stale or really revoked).
+  let integrityRetries = 0;
+  const MAX_INTEGRITY_RETRIES = 1;
+  // True only when pagination exited via hasNextPage=false (clean end).
+  // Any early break sets this back to false so the caller can refuse
+  // to cache the partial result.
+  let completedCleanly = false;
 
-  console.log(`[comment-debug] twitch graphql start vodId=${vodId} cookies=${cookieMode}`);
+  console.log(
+    `[comment-debug] twitch graphql start vodId=${vodId} cookies=${cookieMode} auth=${authMode}`,
+  );
 
   try {
     while (pageCount < MAX_PAGES) {
@@ -269,18 +322,18 @@ export async function fetchTwitchVodChat(
         break;
       }
 
-      const result = await fetchPage(vodId, cursor, ac.signal, cookieHeader);
+      const result = await fetchPage(vodId, cursor, ac.signal, auth);
 
       if (result.status === 'rate-limit') {
         if (rateLimitRetries >= MAX_RATE_LIMIT_RETRIES) {
           console.warn(
-            `[chat-replay] twitch GraphQL: gave up after ${MAX_RATE_LIMIT_RETRIES} rate-limit retries`,
+            `[chat-replay] twitch GraphQL: gave up after ${MAX_RATE_LIMIT_RETRIES} rate-limit retries (page ${pageCount + 1})`,
           );
           break;
         }
         rateLimitRetries += 1;
         console.warn(
-          `[chat-replay] twitch GraphQL: 429, backing off ${RATE_LIMIT_BACKOFF_MS}ms (retry ${rateLimitRetries}/${MAX_RATE_LIMIT_RETRIES})`,
+          `[chat-replay] twitch GraphQL: 429 at page ${pageCount + 1}, backing off ${RATE_LIMIT_BACKOFF_MS}ms (retry ${rateLimitRetries}/${MAX_RATE_LIMIT_RETRIES})`,
         );
         await sleep(RATE_LIMIT_BACKOFF_MS, ac.signal);
         continue;
@@ -288,44 +341,67 @@ export async function fetchTwitchVodChat(
 
       if (result.status === 'not-found') {
         console.warn(
-          `[chat-replay] twitch GraphQL: VOD ${vodId} not found (deleted or chat never archived)`,
+          `[chat-replay] twitch GraphQL: VOD ${vodId} not found (deleted or chat never archived) — at page ${pageCount + 1}`,
         );
         break;
       }
 
       if (result.status === 'forbidden') {
         console.warn(
-          `[chat-replay] twitch GraphQL: VOD ${vodId} forbidden (sub-only or restricted; cookies=${cookieMode})`,
+          `[chat-replay] twitch GraphQL: VOD ${vodId} forbidden (sub-only or restricted; cookies=${cookieMode}, auth=${authMode}) — at page ${pageCount + 1}`,
         );
         break;
       }
 
       if (result.status === 'integrity') {
-        // Twitch's integrity gateway. The first page typically slips
-        // through unauthenticated (cached or trivially fingerprinted)
-        // but ~page 2+ trip a check. Cookies bypass it because the
-        // logged-in session has a longer-lived trust signal.
-        if (cookieHeader) {
+        // 2026-05-04 — Twitch's integrity gateway. Page 1 usually slips
+        // through (unauthenticated short-circuit), pages 2+ get
+        // checked. Cookies + Authorization: OAuth header pair is the
+        // bypass. Failure modes:
+        //   - cookies missing → expected, fail fast
+        //   - cookies+oauth set + still fails → cookies stale (revoked
+        //     by Twitch) OR our auth-token regex grabbed the wrong
+        //     value. Soft-retry once after a backoff, then bail.
+        if (integrityRetries < MAX_INTEGRITY_RETRIES && auth?.authToken) {
+          integrityRetries += 1;
           console.warn(
-            `[chat-replay] twitch GraphQL: failed integrity check (cookies=set). ` +
-              `Cookies may have expired; re-export from the browser and update settings.`,
+            `[chat-replay] twitch GraphQL: integrity check at page ${pageCount + 1} ` +
+              `(cookies=${cookieMode}, auth=${authMode}); retrying once after ${RATE_LIMIT_BACKOFF_MS}ms`,
           );
+          await sleep(RATE_LIMIT_BACKOFF_MS, ac.signal);
+          continue;
+        }
+        if (auth?.cookieHeader) {
+          if (auth.authToken) {
+            console.warn(
+              `[chat-replay] twitch GraphQL: integrity check at page ${pageCount + 1} ` +
+                `(cookies=set, auth=oauth) — STILL fails after retry. Cookies probably stale ` +
+                `(revoked by Twitch). Re-login on twitch.tv and re-export cookies.txt.`,
+            );
+          } else {
+            console.warn(
+              `[chat-replay] twitch GraphQL: integrity check at page ${pageCount + 1} ` +
+                `(cookies=set, auth=NONE) — auth-token cookie is missing from the file. ` +
+                `Re-export with the user logged in to twitch.tv.`,
+            );
+          }
         } else {
           console.warn(
-            `[chat-replay] twitch GraphQL: failed integrity check (cookies=none). ` +
-              `Set Twitch cookies in settings to bypass this gate.`,
+            `[chat-replay] twitch GraphQL: integrity check at page ${pageCount + 1} ` +
+              `(cookies=none). Set Twitch cookies in settings to bypass this gate.`,
           );
         }
         break;
       }
 
       if (result.status === 'error') {
-        console.warn(`[chat-replay] twitch GraphQL: ${result.message}`);
+        console.warn(`[chat-replay] twitch GraphQL: ${result.message} — at page ${pageCount + 1}`);
         break;
       }
 
       // ok
       rateLimitRetries = 0;
+      integrityRetries = 0;
       pageCount += 1;
       let added = 0;
       for (const edge of result.edges) {
@@ -341,9 +417,20 @@ export async function fetchTwitchVodChat(
       // want to spin).
       const lastCursor = result.edges[result.edges.length - 1]?.cursor ?? null;
       console.log(
-        `[comment-debug] twitch graphql page ${pageCount}, +${added} msgs, total=${messages.length}, hasNext=${result.hasNextPage}`,
+        `[comment-debug] twitch graphql page ${pageCount}, +${added} msgs, total=${messages.length}, hasNext=${result.hasNextPage}, cursor=${lastCursor ? 'set' : 'null'}`,
       );
-      if (!result.hasNextPage || !lastCursor) break;
+      if (!result.hasNextPage) {
+        console.log(`[comment-debug] twitch graphql: hasNext=false, ending at page ${pageCount}`);
+        completedCleanly = true;
+        break;
+      }
+      if (!lastCursor) {
+        console.log(`[comment-debug] twitch graphql: cursor empty despite hasNext=true, ending at page ${pageCount}`);
+        // Cursor missing on hasNext=true is a Twitch quirk; treat as
+        // clean end since we successfully got a page-zero response.
+        completedCleanly = true;
+        break;
+      }
       cursor = lastCursor;
 
       await sleep(PAGE_THROTTLE_MS, ac.signal);
@@ -373,9 +460,9 @@ export async function fetchTwitchVodChat(
   deduped.sort((a, b) => a.timeSec - b.timeSec);
 
   console.log(
-    `[comment-debug] twitch graphql done: pages=${pageCount}, raw=${messages.length}, deduped=${deduped.length}`,
+    `[comment-debug] twitch graphql done: pages=${pageCount}, raw=${messages.length}, deduped=${deduped.length}, complete=${completedCleanly}`,
   );
-  return deduped;
+  return { messages: deduped, complete: completedCleanly };
 }
 
 export function cancelTwitchVodChat(): void {

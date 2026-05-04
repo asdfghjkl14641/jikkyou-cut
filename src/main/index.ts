@@ -365,6 +365,22 @@ function registerIpcHandlers() {
   });
   ipcMain.handle('urlDownload:cancelVideo', () => urlDownload.cancelVideoDownload());
 
+  // 2026-05-04 — Lightweight metadata pre-fetch. Returns
+  // { durationSec, title } from yt-dlp --skip-download. Renderer fires
+  // this in parallel with audio/video DLs so comment analysis can kick
+  // off as soon as duration is known (instead of waiting for audio to
+  // resolve, which on Twitch VOD is the full HLS stream length).
+  ipcMain.handle('urlDownload:fetchMetadata', async (_e, args: { url: string }) => {
+    const cfg = await loadConfig();
+    return urlDownload.fetchUrlMetadata({
+      url: args.url,
+      cookiesBrowser: cfg.ytdlpCookiesBrowser,
+      cookiesFile: cfg.ytdlpCookiesFile,
+      cookiesFileYoutube: cfg.ytdlpCookiesFileYoutube,
+      cookiesFileTwitch: cfg.ytdlpCookiesFileTwitch,
+    });
+  });
+
   // Comment analysis(yt-dlp チャットリプレイ + playboard 視聴者数 + スコア)
   ipcMain.handle(
     'commentAnalysis:start',

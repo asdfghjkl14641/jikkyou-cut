@@ -200,6 +200,7 @@ const api: IpcApi = {
       return () => ipcRenderer.removeListener('urlDownload:audioProgress', listener);
     },
     startVideoOnly: (args) => ipcRenderer.invoke('urlDownload:startVideoOnly', args),
+    fetchMetadata: (args) => ipcRenderer.invoke('urlDownload:fetchMetadata', args),
     cancelVideo: () => ipcRenderer.invoke('urlDownload:cancelVideo'),
     onVideoProgress: (cb) => {
       const listener = (_e: Electron.IpcRendererEvent, p: UrlDownloadProgress) => cb(p);

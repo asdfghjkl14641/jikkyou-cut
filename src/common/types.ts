@@ -241,7 +241,14 @@ export type CommentAnalysisProgress = {
 };
 
 export type CommentAnalysisStartArgs = {
-  videoFilePath: string;
+  // 2026-05-04 — videoFilePath is no longer used by analyzeComments
+  // (chat replay + viewer stats both work from sourceUrl alone, the
+  // bucket aggregation only needs durationSec). Marked optional so the
+  // renderer can fire comment analysis BEFORE audio DL resolves —
+  // critical for Twitch VODs where audio = full HLS length. Local-
+  // file sessions can pass it as a stable identifier; URL flows can
+  // omit.
+  videoFilePath?: string;
   // Source URL that the video was downloaded from. Required: chat replay
   // and viewer stats both need the original platform URL. For local-file
   // sessions (no URL) the renderer should not call analysis at all.
@@ -346,7 +353,12 @@ export type VideoOnlyDownloadArgs = {
   url: string;
   quality: string;
   outputDir: string;
-  sessionId: string;            // matches the audio-side sessionId
+  // 2026-05-04 — Optional. When omitted, the main process derives the
+  // sessionId from the URL (same logic as deriveSessionId). Lets the
+  // renderer fire audio + video DLs in true parallel without waiting
+  // for `startAudioOnly` to resolve first (Twitch VODs sit on a
+  // multi-minute audio DL where YouTube finishes in seconds).
+  sessionId?: string;
 };
 
 export type VideoOnlyDownloadResult = {
@@ -878,6 +890,14 @@ export type IpcApi = {
     cancelAudio: () => Promise<void>;
     onAudioProgress: (cb: (p: UrlDownloadProgress) => void) => () => void;
     startVideoOnly: (args: VideoOnlyDownloadArgs) => Promise<VideoOnlyDownloadResult>;
+    // 2026-05-04 — Quick (1-3s) metadata pre-fetch via yt-dlp
+    // --skip-download. Lets the renderer fire comment analysis in
+    // parallel with audio/video DLs (instead of waiting for audio
+    // to resolve to learn durationSec).
+    fetchMetadata: (args: { url: string }) => Promise<{
+      durationSec: number | null;
+      title: string | null;
+    }>;
     cancelVideo: () => Promise<void>;
     onVideoProgress: (cb: (p: UrlDownloadProgress) => void) => () => void;
   };

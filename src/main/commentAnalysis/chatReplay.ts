@@ -279,16 +279,25 @@ export async function fetchChatReplay(
     // surface and reusing it would require reimplementing DPAPI/
     // Chrome cookie-DB extraction in this codebase.
     const twitchCookiesFile = options.cookiesFileTwitch ?? options.cookiesFile;
-    messages = await fetchTwitchVodChat(meta.id, { cookiesFile: twitchCookiesFile });
-    if (messages.length > 0) {
-      // Cache only on non-empty result. Empty might mean transient
-      // failure (rate limit, hash rotation) where we'd rather re-try
-      // on the next session than serve stale "no chat" forever.
+    const twitchResult = await fetchTwitchVodChat(meta.id, { cookiesFile: twitchCookiesFile });
+    messages = twitchResult.messages;
+    // 2026-05-04 — Cache poisoning guard. Only write the cache when
+    // pagination ran to clean end (hasNextPage=false). The
+    // integrity-check / forbidden / error early-break paths used to
+    // poison the cache with ~50-msg partial results that survived
+    // across cookies re-export + dev restart, leaving the user
+    // staring at "53 messages on an 11h stream" with no way out
+    // short of manually deleting the .json file.
+    if (messages.length > 0 && twitchResult.complete) {
       await writeCache(meta.id, messages);
-    } else {
+    } else if (messages.length === 0) {
       console.log('[comment-debug] twitch graphql returned 0 messages, NOT writing cache');
+    } else {
+      console.log(
+        `[comment-debug] twitch graphql incomplete (${messages.length} msgs, complete=false), NOT writing cache to avoid poisoning`,
+      );
     }
-    console.log(`[chat-replay] twitch ${meta.id}: ${messages.length} messages`);
+    console.log(`[chat-replay] twitch ${meta.id}: ${messages.length} messages (complete=${twitchResult.complete})`);
     return messages;
   }
 
