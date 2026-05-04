@@ -15,6 +15,319 @@
 
 ---
 
+## 2026-05-04 - Twitch comment 取得が page 1 で死ぬバグの真因確定 + 修正
+
+- 誰が: Claude Code(Opus 4.7)
+- 何を: Twitch GraphQL チャットが page 1 で integrity check fail → break → ~50 件で完了するバグ。**真因 D 確定**:`Authorization: OAuth <auth-token>` ヘッダを送ってなかったため、ページ 2 以降で integrity gateway が拒否
+- 真因の正体:
+  - Twitch GraphQL gateway は **page 1 はカジュアルに通すが page 2+ は厳格チェック**(unauthenticated short-circuit / fingerprint 評価の境界)
+  - 我々のコードは Cookie ヘッダだけ送って `Authorization: OAuth <auth-token>` を送ってない → 「anonymous-with-cookies」扱い → page 2 で integrity check fail → `if (status === 'integrity') break;` で 1 ページ目だけ取って終了
+  - cookies 期限切れではなかった(ユーザは前日に再エクスポート済み)。auth-token は cookies ファイルに含まれていた
+  - yt-dlp の twitch.py は **正しく Authorization: OAuth ヘッダを送っている**ので、yt-dlp は同じ cookies で動いていた
+- 修正:
+  - **`readTwitchAuth(cookiesFile)`**:cookies parse 中に `auth-token` cookie の値を抜き出して `{ cookieHeader, authToken }` を返す。cookies の値は引き続き **絶対にログに出さない**(規約「クッキーファイル中身は読まない・ログに出さない」維持、カウント + 名前のみ表示 + `auth-token=present/MISSING` フラグ追加)
+  - **`fetchPage` で `Authorization: OAuth <token>` を送出**:`auth.authToken` が present のときのみ。User-Agent もブラウザ風(Chrome/120 Win64)に固定 — node fetch 既定の `node` を Twitch が bot 扱いするケースを防ぐ
+  - **integrity check の soft retry**(1 回まで):auth-token が present なら 5 秒バックオフ後 1 回再試行。それでもダメなら本当の cookies 失効として bail
+  - **失効時の警告メッセージ細分化**:`auth-token=present + 失敗` → 「cookies が revoked、再ログイン+再エクスポート」/ `auth-token=MISSING` → 「再エクスポート時にログイン状態だったか確認」/ `cookies=none` → 「設定で twitch cookies を指定」
+  - **per-page ログ強化**:`page N at cookie=set/none, auth=oauth/none` 形式で各ページの状態を記録。再発時の真因切り分けが速い
+  - **cache poisoning guard**(`fetchTwitchVodChat` の戻り値に `complete: boolean` を追加):pagination が `hasNextPage=false` で抜けた時のみ `complete=true`。早期 bail(integrity / forbidden / error / rate-limit 諦め / cancelled / cursor 不一致)は `complete=false`。`chatReplay.ts` の caller が `complete=true` の時だけ cache 書く。**ユーザを「53 件キャッシュ汚染」状態から永久に救出する**(再エクスポートしても古い 53 件 cache が返る現象を構造的に防ぐ)
+- 検証:
+  - typecheck main / web / node 全 0 errors
+  - production build 成功
+  - 過去のユーザログから「`failed integrity check (cookies=set)`」直後 break が確認できる
+- 影響:
+  - `src/main/commentAnalysis/twitchGraphQL.ts`(全面強化、~85 行追加):
+    - `TwitchAuth` 型 + `readTwitchAuth(cookiesFile)` 新設(`readTwitchCookieHeader` を置換)
+    - `fetchPage(vodId, cursor, signal, auth)` シグネチャ変更
+    - `Authorization: OAuth <token>` + `User-Agent: Chrome/120 ...` 送出
+    - integrity check の soft retry(MAX_INTEGRITY_RETRIES = 1)
+    - `TwitchVodChatResult` 型 export(`{ messages, complete }`)
+    - 全エラーパスのログに `at page N` を追加
+  - `src/main/commentAnalysis/chatReplay.ts`:
+    - `fetchTwitchVodChat` 戻り値の新形式に追従
+    - `complete=true` の時のみ `writeCache` 呼ぶ(partial 結果でキャッシュ汚染しない)
+- やらないこと: スコアリング段階処理 / UI 4 段表示の変更 / yt-dlp 自体の修正 / cookies cache invalidation の hash key 化 / 並列化フローの再修正
+- 残課題:
+  - **既存の汚染キャッシュは boot recovery で削除しない**:ユーザは引き続き手動で `Remove-Item "$env:APPDATA\jikkyou-cut\comment-analysis\*-chat.json"` する必要あり(自動 invalidation は別タスク)
+  - **MAX_INTEGRITY_RETRIES = 1**:transient な gateway エラー対策。多くのケースで十分だが、Twitch 側の悪化があれば再調整
+- コミット: 未コミット
+
+---
+
+## 2026-05-04 - URL DL の comment 取得も並列化 + 4 段進捗 UI + scoring 進捗ストリップ
+
+- 誰が: Claude Code(Opus 4.7)
+- 何を: 直前 commit で audio + video の真並列化を達成。今回は **comment 取得も audio から独立**(metadata pre-fetch 経由で `durationSec` を取れば即起動)+ 4 段進捗 UI + ClipSelectView の scoring 進捗ストリップ
+- 動機: ユーザログ確認で audio + video は真並列化済。残課題:
+  1. **comment 取得が audio 完了待ち**(`audio.durationSec` 依存)→ Twitch 11h で 17 分の audio DL 完了まで comment fetch が待機
+  2. **進捗 UI 1 段のみ**(audio バーだけ)→ 並列で動いてる video / comment が見えない
+  3. **scoring の進捗が見えない**(loading 中の「モック表示」だけ)
+- 設計:
+  - **`urlDownload.fetchUrlMetadata(url)` 新設**:`yt-dlp --skip-download --no-playlist --print '%(duration)s\n%(title)s'`(1-3 秒)。`durationSec` + `title` を返す
+  - **renderer 側 `deriveSessionIdSync(url)`**:main の `deriveSessionId` regex を mirror(YouTube watch / youtu.be / Twitch /videos/<id> 対応、SHA fallback path は省略 — 該当 URL は legacy `await audio` path に流す)
+  - **新並列フロー**(`startDownloadFlow`):
+    ```ts
+    const earlySessionId = deriveSessionIdSync(url);  // 同期、即計算
+    const audioPromise = startAudioOnly(...)           // ← 同期 tick で fire
+    const videoPromise = startVideoOnly(...)           // ← 同期 tick で fire
+    if (earlySessionId) {
+      commentPromise = fetchMetadata({url})            // ← 同期 tick で fire
+        .then(meta => commentAnalysis.start({sourceUrl: url, durationSec: meta.durationSec}))
+    }
+    const audio = await audioPromise                   // ← phase swap 用に await
+    enterClipSelectFromUrl(...)
+    // earlySessionId === audio.sessionId(deterministic)、stale-session check は両方で機能
+    ```
+  - **`CommentAnalysisStartArgs.videoFilePath` を optional に**:実態として `analyzeComments` 内で未使用(chat replay + viewer stats は sourceUrl のみ、bucket aggregation は durationSec のみ)。dead field の正体を可視化
+  - **4 段進捗 UI**(`UrlDownloadProgressDialog` 全面書き換え):
+    - 各行 `[label][bar][percent]` の grid 3 列レイアウト
+    - 状態 `waiting`(dimmed / —)/ `active`(青グラデ)/ `done`(緑グラデ + ✓)
+    - audio 行のみ `speed` / `eta` mini-block 表示維持
+    - comment 行は phase で 33% / 66% / 100% 段階表示(scoring に進むと scoring 行に移動)
+    - scoring 行は comment の最終 phase で active、完了時 done
+  - **`buildDialogProgress(...)` ヘルパ**:既存の進捗 event shape を `DialogProgress` に変換。dialog は dumb(IPC awareness なし)
+  - **ClipSelectView の `CommentAnalysisProgressStrip`**:既存 `statusLabel` 内の単純テキスト「チャット取得中… (モック表示)」を 「チャット取得中… [████████░░░] 33%」 + 「(モック表示)」のラベル付きストリップに置き換え
+- 期待される効果:
+  - **Twitch 11h VOD**:comment 取得が audio 完了の 17 分後ではなく、metadata pre-fetch(2 秒)直後に発火 → 体感の「何か動いてる感」改善
+  - **進捗の見える化**:audio が走ってる間も video / comment / scoring が見えるので「全部止まってる?」感が消える
+- 影響:
+  - `src/main/urlDownload.ts`: `fetchUrlMetadata` + `UrlMetadata` 型 追加(60 行)
+  - `src/main/index.ts`: `urlDownload:fetchMetadata` IPC handler 追加
+  - `src/preload/index.ts` + `src/common/types.ts`: `urlDownload.fetchMetadata` API + `CommentAnalysisStartArgs.videoFilePath` optional 化
+  - `src/renderer/src/App.tsx`:
+    - `deriveSessionIdSync` ヘルパ追加
+    - `startDownloadFlow` で metadata + audio + video を同期 tick で fire、comment は metadata 経由で early-fire
+    - 既存の audio-await-then-comment ブロックを「unknown URL fallback」に縮小
+    - `videoDlProgress` / `commentProgress` / `scoringDone` state 追加
+    - dialog に `buildDialogProgress(...)` 渡す
+  - `src/renderer/src/components/UrlDownloadProgressDialog.tsx`: 全面書き換え(4 段 + DialogProgress 型 + buildDialogProgress 関数)
+  - `src/renderer/src/components/UrlDownloadProgressDialog.module.css`: row / rowDone / rowWaiting / progressFillDone / progressFillIdle 等の class 追加
+  - `src/renderer/src/components/ClipSelectView.tsx`: `CommentAnalysisProgressStrip` 関数追加 + statusLabel 内で利用
+- やらないこと: スコアリング段階処理(MVP は完了時のみ更新、内部処理は既存一括維持)/ 進捗バーアニメーション細部 / yt-dlp metadata 取得失敗時の retry / 既存 audio-first 設計の再修正
+- 残課題:
+  - **scoring の段階処理**(`bucketize` をストリーミング化、comment 100 件溜まる毎に部分スコア更新)は本タスク外
+  - **comment cache invalidation**:cookies 期限切れで 53 件しか取れなかった結果が cache に残ってると、cookies 再エクスポート後も古いキャッシュが返る。`<userData>/comment-analysis/<id>-chat.json` を手動削除 OR cache key に cookies fingerprint を含める改修が別タスク
+  - **yt-dlp metadata 取得失敗時のフォールバック**:現状は legacy `await audio.durationSec` path に自動 fallback、ただし `earlySessionId` が null じゃないと metadata の存在を仮定してしまう設計。metadata が null を返したらその URL は legacy path に流れるべき → 軽微改修余地
+- コミット: 未コミット
+
+---
+
+## 2026-05-04 - URL DL の真並列化(audio-first 設計を audio+video 並列起動に修正)+ 401 エラー文面改善
+
+- 誰が: Claude Code(Opus 4.7)
+- 何を: `startDownloadFlow` で audio DL を await してから video DL を fire していた sequential フローを、両方を同期 tick で並列起動する真並列に変更。yt-dlp が 401 Unauthorized で死んだ時のエラーメッセージを「cookies 期限切れ」と明示
+- 真因(ユーザログ調査): Twitch VOD で
+  - `17:52:51 audio-only start`
+  - `18:09:04 audio-only done` (17 分後)
+  - `18:09:04 video-only start` ← audio 完了後に開始
+  - `18:09:04 comment-debug IPC entry` ← 同上
+  - 段階 6a で「並列化済み」と認識されていたが、実態は **audio await 完了後** に他タスクが起動する半並列。YouTube は audio が DASH の数十秒で済むため気づきにくかったが、Twitch は audio = 完全な HLS ストリーム長(11h 配信なら audio DL も 17 分)で問題が顕在化
+- 修正内容:
+  - **`urlDownload.downloadVideoOnly` の `sessionId` を optional 化**:省略時は `deriveSessionId(args.url)` で内部 derive(URL → session id 写像は決定論的なので audio 側と必ず一致)。renderer が audio 結果を待たずに video DL を起動できる
+  - **`common/types.ts.VideoOnlyDownloadArgs.sessionId` を `?:` 化**
+  - **renderer `startDownloadFlow` のフロー再編**:
+    ```ts
+    // Old:
+    const audio = await startAudioOnly(...)
+    void startVideoOnly({...sessionId: audio.sessionId})
+    
+    // New:
+    const videoPromise = startVideoOnly({url, quality, outputDir})  // ← 同期 tick で fire
+    const audio = await startAudioOnly(...)                          // ← 並列で進行
+    videoPromise.then(...)                                            // ← resolve 時の adoption 処理
+    ```
+  - **失敗時の cleanup**:audio 失敗時は in-flight な video DL を `cancelVideo()` で能動的に停止 → 長時間プロセスの leak 防止
+  - **`friendlyDownloadError` に 401 ブランチ追加**(404 より前に match):「cookies 期限切れの可能性。Chrome/Edge で再ログイン → 拡張機能で再エクスポート → 設定 → 動画ダウンロード → cookies ファイル差し替え」と明示。Twitch / YouTube で文面分岐
+- 期待される改善:
+  - **Twitch 11h VOD**: 旧 17 + 17 = 34 分 → 新 max(17, 17) = 17 分(2x 高速化)
+  - **YouTube**: 既に audio が数十秒なので体感差は小さい(audio 完了後の comment 取得 / 視聴者数取得が早く動き出すだけ)
+- 影響:
+  - `src/main/urlDownload.ts`: `downloadVideoOnly` で `sessionId` を optional + 内部 derive、ログ / friendlyError 周辺を `args.sessionId` → `sessionId`(local) に統一、401 Unauthorized 専用ブランチ追加
+  - `src/common/types.ts`: `VideoOnlyDownloadArgs.sessionId` を optional 化
+  - `src/renderer/src/App.tsx`: `startDownloadFlow` で video DL を audio await の前に fire、後段の Phase B を `videoPromise.then(...)` に書き換え + audio 失敗 path で `cancelVideo()` 呼び出し追加
+- やらないこと: 全タスク Promise.all + 進捗 UI 4 列化(別タスク、UX 大改修)/ Twitch VOD audio が "Audio_Only" で結局 HLS 全長になる構造の根本解決(yt-dlp 仕様、変更不可)/ comment 取得を audio 完了前に fire(durationSec 依存の解消は別 task)
+- 残課題:
+  - **comment 取得は依然 audio 完了後**:`commentAnalysis.start` が `durationSec` を audio の resolved value から取るため。durationSec を URL metadata pre-fetch(`yt-dlp --skip-download --print duration`)で先行取得すれば comment も並列化可能、別タスク
+  - **進捗ダイアログは audio 1 本のみ表示**:audio 完了で閉じる、video の進捗は ClipSelectView の overlay で表示。これは現状維持(spec 範囲外)
+  - **Twitch cookies 期限切れの自動再取得**:UI で警告 + 再エクスポート誘導は別タスク。現状は friendlyError の文面強化のみ
+- コミット: 未コミット
+
+---
+
+## 2026-05-04 - cookies の platform-mismatch 401 エラー修正(汎用 cookies が他 platform に漏れる)
+
+- 誰が: Claude Code(Opus 4.7)
+- 何を: `getCookiesArgs` に path-heuristic guard を追加。汎用 cookies ファイルのパスに別 platform の名前(`youtube` / `twitch`)が入っている場合、要求 platform に渡さず browser/none にフォールバック
+- 真因(ユーザ調査済): PowerShell で **同じ format selector + cookies なし** で DL 成功、jikkyou-cut では **HTTPError 401 Unauthorized**。原因は `AppConfig.ytdlpCookiesFile`(汎用)に `C:\dev\jikkyou-cut\youtube-cookies.txt\www.youtube.com_cookies.txt` がセットされていて、Twitch URL リクエスト時に YouTube の auth-token が `--cookies` 経由で Twitch サーバへ送られ、Twitch 側が **不明なセッション** として 401 で拒否してた
+- 既存ロジックの問題:
+  - 優先順位: 「platform 別 > 汎用 > browser > なし」
+  - Twitch URL: `cookiesFileTwitch=null` → 次に `cookiesFile` を見る → YouTube cookies のパスが渡る → 401
+  - 汎用 cookies の意図(全 platform 共通)とユーザの実際の運用(platform 別ファイルを汎用に誤セット)の乖離
+- 修正:
+  - **`isPlatformMismatchedFile(filePath, requestPlatform)` 新設**:
+    - パス文字列に `youtube` 含む + 要求が `twitch` → mismatch
+    - パス文字列に `twitch` 含む + 要求が `youtube` → mismatch
+    - 要求が `unknown`(SoundCloud / Vimeo 等)→ パススルー(従来動作維持)
+    - 真にニュートラルなパス(`cookies/generic.txt` 等)→ パススルー
+  - **`getCookiesArgs` で mismatch 検知時**:汎用 cookies スキップ + 警告ログ + browser fallback に流す
+  - **ファイル中身は読まない**(CLAUDE.md 規約「クッキーファイル中身は読まない」を維持。パスは data として安全に検査可)
+- ログ追加(再発時の真因切り分け):
+  ```
+  [cookies] generic cookies file path looks YouTube-specific
+    (C:\dev\...\www.youtube.com_cookies.txt); skipping for twitch request to avoid 401
+  ```
+- 検証(9 ケース regex 単体テスト全 pass):
+  - YouTube パスを Twitch リクエストに → mismatch ✓
+  - Twitch パスを YouTube リクエストに → mismatch ✓
+  - 同 platform の正しい組み合わせ → match(passthrough)✓
+  - 真にニュートラル `generic.txt` → 両方 passthrough ✓
+  - 大文字混在(`Youtube_export.txt`)→ case-insensitive で検出 ✓
+  - `unknown` platform → 常に passthrough ✓
+- 影響:
+  - `src/main/urlDownload.ts`: `isPlatformMismatchedFile` ヘルパ追加 + `getCookiesArgs` でガード
+- ユーザ側のクイック対処(本修正前でも有効):
+  - 設定 → 動画ダウンロード → 「汎用 cookies ファイル」を空に
+  - または Twitch 専用 cookies を `C:\dev\jikkyou-cut\twitch-cookies\www.twitch.tv_cookies.txt` にセット(本来の意図)
+- やらないこと: cookies ファイル中身解析(CLAUDE.md 規約)/ 真にニュートラルな汎用 cookies の禁止(後方互換維持)/ UI 側で誤設定検知 + 警告(別タスク)
+- 残課題: ファイル名に platform 名を含まない誤設定(例: `~/Documents/cookies.txt` に YouTube cookies)はパス heuristic で検知できない。中身解析しないと無理。中身解析は別タスク
+- コミット: 未コミット
+
+---
+
+## 2026-05-04 - URL DL audio が Twitch VOD で失敗するバグ修正
+
+- 誰が: Claude Code(Opus 4.7)
+- 何を: `downloadAudioOnly` の format selector を platform 別に分岐。Twitch VOD は `Audio_Only` 形式 ID 優先、YouTube/その他は既存の m4a/webm/bestaudio チェーン維持
+- 真因(ユーザ調査済): PowerShell で `yt-dlp -f "Audio_Only" <Twitch VOD URL>` は成功(923 KB/s で DL)、jikkyou-cut の audio-DL は exit code 1。selector `bestaudio[ext=m4a]/bestaudio[ext=webm]/bestaudio` が Twitch にマッチせず「Requested format is not available」で死亡
+- 背景:
+  - Twitch VOD は audio stream を **literal format ID `Audio_Only`** で公開(大文字 A、アンダースコア)
+  - YouTube は codec id ベースの format(`140` = m4a / `251` = webm/opus 等)
+  - 両者を同じ selector で扱うと必ず片方が落ちる
+- 修正:
+  - **`buildAudioFormatSelector(platform)` 新設**:
+    - `twitch` → `'Audio_Only/bestaudio/best'`(literal id 優先 + 将来 ID rename への保険)
+    - `youtube` / `unknown` → `'bestaudio[ext=m4a]/bestaudio[ext=webm]/bestaudio'`(既存維持、SoundCloud 等の generic も同チェーン)
+  - **`downloadAudioOnly` で platform 判定 → selector 注入**
+  - **診断ログに `format=` 追加**:`[url-download] audio-only start: ... format=Audio_Only/bestaudio/best ...` で次回失敗時の真因切り分けが速い
+- 検証:
+  - **Twitch**: `yt-dlp --skip-download -f "Audio_Only/bestaudio/best" https://www.twitch.tv/videos/2763071051 --print "..."` → `vfmt=Audio_Only vcodec=none acodec=mp4a.40.2 ext=mp4` ✓
+  - **YouTube** リグレッション: 同コマンド YouTube URL で `vfmt=140 vcodec=none acodec=mp4a.40.2 ext=m4a` ✓
+- 影響:
+  - `src/main/urlDownload.ts`: `buildAudioFormatSelector(platform)` 追加 + `downloadAudioOnly` 内で利用
+- やらないこと: audio フォーマット変更(既存 m4a/mp4 維持)/ 動画 DL の修正(別経路、Twitch 動画 DL は別タスク)/ Twitch ライブの audio DL(URL DL は VOD 用、ライブは録画機能)
+- 残課題:
+  - **動画 DL も同様の問題を抱えている可能性**:Twitch VOD の動画 selector を別タスクで検証する余地(現状 `bestvideo+bestaudio/best/best` は `best` フォールバックで動くはずだが unverified)
+  - Twitch のクリップ URL(`/clip/...`)は format ID が違う可能性、未テスト
+- コミット: 未コミット
+
+---
+
+## 2026-05-04 - 新着動画カードのサムネ表示バグ修正 + 堅牢化
+
+- 誰が: Claude Code(Opus 4.7)
+- 何を: `RecentVideosSection` のサムネが H-H プレースホルダで出続けてた真因(`media://` URL 構築ミス)を修正 + ffmpeg サムネ生成の信頼性向上
+- 動機: ユーザ報告「サムネ無し、タイトル無し、配信者名無し」。デバッグ時に thumb.jpg は disk に生成されているのにレンダリングされない症状
+- 真因 1: `media://` URL の構築フォーマット違い
+  - 旧: `media://${path.replace(/\\/g, '/')}` → `media://C:/Users/...` → Chromium が `C:` を host として解釈 → pathname が `/Users/...` になり drive letter 消失 → protocol handler が 404
+  - 新: `media://localhost/${encodeURIComponent(absPath)}`(VideoPlayer.toMediaUrl と同フォーマット)
+- 真因 2: 成長中ライブ録画ファイルでの ffmpeg 0 byte 産出
+  - 録画継続中で moov atom 未確定 → ffmpeg "成功" するが 0 byte の thumb.jpg が残る
+  - 次回 `existsSync` で true → 0 byte ファイルを返す → `<img>` が壊れた画像表示
+  - 60 秒ポール毎に同じ ffmpeg 呼び出し再実行 → CPU 浪費 + ログ汚染
+- 修正:
+  - **`safeStat` ベースのサイズ確認**:既存 thumb の size > 0 を確認してから return、0 byte なら delete
+  - **5 MB 未満の source skip**:成長中ファイルで moov atom 不在の確率高い領域を最初から触らない
+  - **失敗キャッシュ 5 分 TTL**:`failedThumbCache: Map<thumbPath, ts>` で同ファイルの再試行抑制
+  - **0 byte 出力検知**:ffmpeg 完了後 stat、0 なら delete + 次の seek 位置試行
+  - **FFmpeg 8 対応**:`-update 1` 追加(単一画像出力時の必須フラグ、ない場合 warning)
+  - **`downloadAndCacheThumbnail` も同じ堅牢化**:0 byte リモートサムネ防止
+- 影響:
+  - `src/renderer/src/components/RecentVideosSection.tsx`: `toMediaUrl` ヘルパ追加(VideoPlayer と同フォーマット)
+  - `src/main/recentVideos.ts`: `getOrGenerateThumbnail` 全面書き換え + `downloadAndCacheThumbnail` 堅牢化(`safeStat` / size 検証 / 失敗キャッシュ / `-update 1`)
+- 動作確認: 既存 9 GB Twitch 録画で ffmpeg 60 秒抽出 → 167,876 bytes thumb 生成成功(0.15 秒、ディスク I/O ボトルネック)
+- 残課題: ライブ録画継続中は **5 MB に達するまでサムネなし**。これは仕様(成長中 MP4 の moov atom 不在で ffmpeg 失敗を回避するため)。録画完了後に正常生成される
+- コミット: 未コミット
+
+---
+
+## 2026-05-04 - 録画ファイル名から `.live` / `.vod` 二重拡張子を削除 + マイグレーション
+
+- 誰が: Claude Code(Opus 4.7)
+- 何を: 録画出力ファイル名を `<id>.live.mp4` / `<id>.vod.mp4` から `<id>.mp4` / `<id>_vod.mp4` に変更。Boot 時に既存ファイル + メタデータ JSON を自動マイグレーション
+- 動機:
+  - Windows メディアプレイヤーが `.live.mp4` の `.live` を**実拡張子と誤認**してエラー 0x80070323「ローカルストレージにアクセスできない」で再生失敗
+  - 一般的なメディアアプリでも同症状
+  - 編集画面の HTML5 `<video>` でも同様の risk(MIME type 推定が拡張子ベース)
+  - VOD 版の `.vod.mp4` も同じ問題を抱える
+- 設計:
+  - **新ファイル名規則**:
+    - ライブ録画: `<recordingId>.mp4`(または `.mkv` / `.webm`、source による)
+    - 分割再起動: `<recordingId>.001.mp4` / `<recordingId>.002.mp4`(以下同)
+    - VOD: `<recordingId>_vod.mp4`(アンダースコア区切り、二重拡張子回避)
+  - **メタデータ JSON 構造は維持**:`files.live` vs `files.vod` でライブ / VOD を区別(意味的役割は変わらず、ファイル名表現だけ変更)
+  - **マイグレーション**(`storage.migrateLegacyExtensions`、新規):
+    - 正規表現 `\.live(\.\d{3})?\.(mp4|mkv|webm)$` で旧ライブ系を捕捉 → `$1.$2` で `.live` 抜き
+    - 正規表現 `\.vod\.(mp4|mkv|webm)$` で旧 VOD を捕捉 → `_vod.$1` でアンダースコア化
+    - **両方を 1 関数で適用**(同名ファイル衝突は skip + 警告)
+    - 各 `<recordingId>.json` の `files.live` / `files.vod` / `liveSegments[]` も同regex で書き換え + `JSON.stringify` 上書き
+    - boot 時に `streamRecorder.boot()` から `recoverInterruptedRecordings` の前に呼ぶ(idempotent、すでに新形式なら no-op)
+- ファイルパターン例(マイグレーション結果):
+  - `twitch_545050196_2026-05-03_23-08-26.live.mp4` → `twitch_545050196_2026-05-03_23-08-26.mp4`
+  - `twitch_545050196_2026-05-03_23-08-26.live.001.mp4` → `twitch_545050196_2026-05-03_23-08-26.001.mp4`
+  - `twitch_xxx.vod.mp4` → `twitch_xxx_vod.mp4`
+  - `twitch_xxx.thumb.jpg`(サムネ)→ 変更なし
+  - `<id>.json`(メタ)→ 変更なし、中身だけ更新
+- 影響:
+  - `src/main/streamRecorder/recordSession.ts`: `buildLiveFilePath` から `.live` 削除 + コメント更新
+  - `src/main/streamRecorder/vodFetch.ts`: `outputTemplate` を `_vod` 形式に
+  - `src/main/streamRecorder/storage.ts`: `LIVE_RENAME` / `VOD_RENAME` 正規表現定数 + `migrateLegacyFilename` ヘルパ + `migrateOneCreatorFolder` + `migrateLegacyExtensions` 公開関数(~110 行追加)
+  - `src/main/streamRecorder/index.ts`: `boot()` で `recoverInterruptedRecordings` の前に `migrateLegacyExtensions(baseDir)` を呼ぶ
+- 動作確認: 11 ケースの regex 単体テスト全 pass(`.live.mp4` / `.live.001.mp4` / `.live.mkv` / `.vod.mp4` / `.vod.webm` / 既新形式 / json / thumb 全 OK)
+- やらないこと: format selector の変更(別タスク済)/ remux ロジックの変更(別タスク済)/ 編集画面の MIME type 強化(別タスク)
+- 残課題: マイグレーションは boot 時のみ実行。dev 中に手動で `_vod` をいじる use case は想定していない
+- コミット: 未コミット
+
+---
+
+## 2026-05-04 - 録画ファイルを編集可能な MP4 形式で出力(format selector + post-record remux)
+
+- 誰が: Claude Code(Opus 4.7)
+- 何を: yt-dlp の format selector を Twitch のみ avc1+m4a 強制、`--merge-output-format mp4` 全プラットフォーム適用、録画完了後に ffprobe + ffmpeg `-c copy` で自動 remux
+- 動機: 自動録画したファイルが編集画面の HTML5 `<video>` で読み込めないケース。renderer の `<video>` は H.264/AAC/MP4 と VP9/Opus/WebM のみネイティブ再生、yt-dlp が VP9/AV1/`.ts` 等で landed すると無音失敗
+- 設計:
+  - **format selector の platform 別最適化**:
+    - **Twitch**: `bestvideo[vcodec^=avc1]+bestaudio[acodec^=mp4a] / bestvideo[ext=mp4]+bestaudio[ext=m4a] / best / best`(HLS は元々 H.264/AAC、明示で安全側に倒す)
+    - **YouTube**: `bestvideo+bestaudio / best / best`(ライブは VP9 1080p60+ が普通、avc1 強制すると 720p に劣化するので緩和維持)
+  - **`--merge-output-format mp4`**:全 platform 共通。yt-dlp が複数 stream をマージする際の最終コンテナを MP4 強制
+  - **post-record remux**(`streamRecorder/remux.ts`、新規):
+    - `verifyAndRemuxIfNeeded(filePath)` が ffprobe → 状況分岐:
+      - `noop`(h264+aac+mp4 で既に OK):何もしない(Twitch では 100% こっち)
+      - `remuxed`(codec OK だが container が違う、`.ts` / `.mkv` 等):`ffmpeg -c copy -movflags +faststart` で MP4 に repack(数秒で完了、再エンコードなし)
+      - `incompatible`(VP9/AV1/Opus 等、`-c copy` ではどうにもならない):`meta.errorMessage` に警告追記、ファイル放置(VLC 等では再生可能)
+      - `failed`(ffprobe 不在 / 0 byte):警告ログ
+  - **per-segment 処理**:`liveSegments[]` 内の全ファイルに同じ remux ロジック適用、`meta.files.live` と `meta.liveSegments` を post-remux のファイル名に同期
+  - **発火タイミング**:`onStreamEnded` の `session.stop()` 完了直後 → VOD fetch の前。録画継続中の途中セグメントには触れない(growing MP4 を ffmpeg にかけると壊れる)
+- ffmpeg コマンド:
+  ```
+  ffmpeg -hide_banner -nostdin -y -i <src>
+    -c copy -movflags +faststart
+    -map 0:v:0? -map 0:a:0?       ← HLS の SCTE-35 等の補助 stream は除外
+    <baseNoExt>.remux.tmp.mp4
+  ```
+  原ファイル削除 → tmp を `<baseNoExt>.mp4` にリネーム。tmp 経由は ffmpeg 中断時の corruption 回避
+- 影響:
+  - `src/main/streamRecorder/recordSession.ts`: format selector を platform 別に分岐 + `--merge-output-format mp4` 追加
+  - `src/main/streamRecorder/remux.ts`(新規 130 行): `getCodecInfo` / `verifyAndRemuxIfNeeded` / `remuxInPlace` 実装
+  - `src/main/streamRecorder/index.ts`: `onStreamEnded` 内に `remuxSegments(meta)` 呼び出し + per-segment の filename 同期 + 非互換コーデックの warning メタ追記
+- やらないこと: 再エンコード(品質落ち + 時間)/ HLS playlist 直接処理 / 録画継続中ファイルの remux(growing MP4 は触らない)/ 過去の録画ファイル後追い remux(別タスク)
+- 残課題:
+  - 既存の不完全録画(柊ツルギ 6.4 GB / 加藤純一 554 MB)は手動 remux 必要(`scripts/` に migration スクリプトを追加する余地)
+  - VP9 の YouTube ライブを取り込んだ場合 `incompatible` で残ってしまう → renderer 側で WebM 直接再生サポート OR 再エンコード option を別タスクで検討
+- 動作確認: typecheck / build 通る、ffprobe / ffmpeg 共に PATH 経由(FFmpeg 8.1 winget)で確認済
+- コミット: 未コミット
+
+---
+
 ## 2026-05-04 - メイン画面に「新着動画」セクション追加(URL DL + 自動録画 統合 24h フィード)
 
 - 誰が: Claude Code(Opus 4.7)

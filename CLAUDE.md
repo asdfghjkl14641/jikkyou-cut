@@ -229,13 +229,22 @@ X3+X4 で固まった規約:
 - **yt-dlp 早期終了 = 自動再起動**: `proc.on('exit')` で `stopRequested=false` なら `deps.probeIsStillLive()` を呼んで判定。still live + restartCount < 5 → 5 秒クールダウン → `liveFilePath` を `<recordingId>.live.NNN.<ext>` でローテーション → respawn。`liveSegments[]` メタデータに記録(単一セグメント時は省略)
 - **probeIsStillLive は orchestrator 注入**: `streamRecorder/index.ts` の `onStreamStarted` でクロージャ作成。Twitch=`getLiveStreams([userId])`、YouTube=`fetchVideoLiveDetails([videoId])`. **probe 失敗時は `true` を返す**(transient API blip で誤って finalise しないため、MAX_RESTARTS=5 が backstop)
 - **streamMonitor の ended は 3 連続 missing で発火**: `ENDED_MISS_THRESHOLD=3`、`missingCounts` Map で grace カウント。Twitch API の 1-2 ポール blip では録画停止しない。grace 中は `liveStreams` Map に prior info を carry forward(UI / recorder が早期反応しないように)
+- **format selector は platform 別 + `--merge-output-format mp4`**: Twitch は `avc1+m4a` 明示(HLS は元々 H.264/AAC、安全側に倒す)、YouTube は緩和維持(VP9 1080p60 を保つため)。merge-output-format mp4 は全 platform 共通で MP4 強制
+- **post-record remux**: `streamRecorder/remux.ts` の `verifyAndRemuxIfNeeded(filePath)` が ffprobe → 必要なら ffmpeg `-c copy -movflags +faststart` で MP4 repack。`onStreamEnded` の `session.stop()` 完了直後 → VOD fetch 前に発火(成長中 MP4 は触らない)。VP9/AV1/Opus は `incompatible` 扱いで `meta.errorMessage` に警告追記、ファイル放置(再エンコードはコスト見合わない)
+- **ファイル名から `.live` / `.vod` 二重拡張子は使わない**: ライブ = `<id>.mp4` / `<id>.001.mp4`、VOD = `<id>_vod.mp4`(アンダースコア)。Windows Media Player が `.live.mp4` の `.live` を実拡張子と誤認してエラー 0x80070323 で再生失敗するため。Boot 時に `storage.migrateLegacyExtensions` が旧形式を自動 rename + メタ JSON 同期(idempotent)
 
 ### yt-dlp 関連の確定ルール(段階 6 系で固まった)
 
 - **`--js-runtimes node` を必ず付ける**: YouTube の nsig / SABR challenge 解決に Node.js が必要。yt-dlp が PATH 経由で自動検出。Electron 同梱の Node が常に有る前提。urlDownload.ts の 3 関数 + chatReplay.ts の 1 関数、計 4 箇所
-- **クッキーは `getCookiesArgs({ cookiesBrowser, cookiesFile })` 一本化**: 直接 args を組み立てない。priority `cookiesFile > cookiesBrowser > []`
+- **クッキーは `getCookiesArgs({ cookiesBrowser, cookiesFile })` 一本化**: 直接 args を組み立てない。priority `platform-specific > generic > browser > none`。**汎用 cookies のパスに「youtube」「twitch」が含まれる場合は要求 platform で path-heuristic ガードが発火**(他 platform に YouTube cookies を渡すと 401 になる事故防止、2026-05-04 修正)。中身解析はせず、パスの文字列のみで判定 = ファイル中身を読まない規約と両立
 - **クッキーファイル中身は読まない・ログに出さない・コピーしない**: `validateCookiesFile` は `fs.stat` のみ。パスはログ可
 - **format selector は `bestvideo<h>+bestaudio / best<h> / best` の 3 段**: avc1 / m4a 制約は撤廃済み、**この方針を維持**(復活させない)。codec / container 制約を入れると JS runtime 不在時の format 解決失敗で「Requested format is not available」を再発させる
+- **audio-only DL は platform 別 selector 必須**: Twitch VOD の audio は literal format ID `Audio_Only`(大文字 A、アンダースコア)で公開されているため YouTube 流の `bestaudio[ext=m4a]` 等の codec chain では解決できず exit 1。`urlDownload.buildAudioFormatSelector(platform)` で Twitch=`Audio_Only/bestaudio/best`、YouTube/unknown=`bestaudio[ext=m4a]/bestaudio[ext=webm]/bestaudio` に分岐。**新しい platform を追加するときは必ずこの helper を経由する**(直接 selector を組み立てない)
+- **URL DL は audio + video 真並列**: `startDownloadFlow` で `videoPromise = startVideoOnly(...)` を audio await の **前** に fire する。`downloadVideoOnly` の `sessionId` は optional(省略時は `deriveSessionId(url)` で main 側 derive、URL → sessionId は決定論的なので audio 側と必ず一致)。Twitch のように audio = HLS 全長になる platform で 2x 改善。**audio 失敗時は `cancelVideo()` で in-flight video を能動停止**してプロセス leak 防止
+- **comment 取得も同期 tick で fire**: `fetchUrlMetadata(url)`(yt-dlp `--skip-download --print '%(duration)s\n%(title)s'`、1-3 秒)で先行取得した `durationSec` を `commentAnalysis.start({sourceUrl, durationSec})` に渡す。renderer 側 `deriveSessionIdSync(url)` で session id を同期計算 → comment progress events の stale-session check が audio resolve を待たずに通る。`CommentAnalysisStartArgs.videoFilePath` は optional(実態未使用 dead field)
+- **Twitch GraphQL chat fetch では `Authorization: OAuth <auth-token>` ヘッダ必須**: cookies の Cookie ヘッダ送出だけだと integrity gateway が page 2 で reject → 1 ページ目しか取れない。`twitchGraphQL.readTwitchAuth` が cookies parse 中に `auth-token` の値を抜き出して `Authorization` ヘッダ用に保持(値は **絶対にログに出さない**、count + 名前のみ)。yt-dlp の twitch.py と同じ規約。**新しい platform の chat fetch を追加するときも cookies の Cookie ヘッダだけに頼らず該当する OAuth/Bearer/Authorization フローがないか調査する**
+- **Twitch chat の cache poisoning guard**: `fetchTwitchVodChat` は `{ messages, complete }` を返す。`complete=true` 時のみ `chatReplay.writeCache` が cache に書く。早期 bail(integrity / forbidden / error / rate-limit 諦め / cancelled / cursor 不一致)は `complete=false` で **キャッシュ書かない** = 部分結果でユーザを永久に閉じ込めない
+- **4 段進捗 UI**: `UrlDownloadProgressDialog` は audio / video / comment / scoring の 4 行 grid。各行 status は `waiting`(dimmed)/ `active`(青)/ `done`(緑 + ✓)。`buildDialogProgress(...)` ヘルパで既存 IPC progress events から DialogProgress 形に変換。dialog 自体は dumb(IPC awareness なし)
 
 ### 新着動画フィード(2026-05-04 から)
 
@@ -248,6 +257,13 @@ X3+X4 で固まった規約:
 クリック動作は `useEditorStore.setFile(filePath)` 経由 = 既存編集フローに合流。録画継続中(`recordingStatus === 'recording'`)は警告ダイアログ。
 
 新着動画セクションは「全部一覧」、登録チャンネル画面の「録画済み動画」は「録画専門」と役割分担。
+
+**サムネ生成の規約**(2026-05-04 サムネ表示バグ修正で固まった):
+- `media://` URL は **`media://localhost/${encodeURIComponent(absPath)}`** 一択(`VideoPlayer.toMediaUrl` と同フォーマット)。`media://${path}` は drive letter が host として解釈されて 404 になる
+- ffmpeg サムネ生成は `-update 1` 必須(FFmpeg 8 で単一画像出力に必要)
+- 成長中ライブ録画は 5 MB 未満は skip(moov atom 未確定領域)
+- 0 byte サムネは disk 上で検知次第 unlink + 失敗キャッシュ 5 分 TTL
+- 録画 = `<recordingId>.thumb.jpg`(録画フォルダ内)、URL DL = `<filename>.thumb.jpg`(DL ディレクトリ内)
 
 ### 配信者検索 = Gemini 主導 + API フォールバック(2026-05-04 から)
 
