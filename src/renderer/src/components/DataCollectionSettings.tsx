@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { X, Database, Play, Pause, Square } from 'lucide-react';
+import { X, Database, Play, Pause, Square, BarChart3 } from 'lucide-react';
 import styles from './SettingsDialog.module.css';
 
 // Hosted under SettingsDialog. As of the API-management refactor,
@@ -95,6 +95,27 @@ export default function DataCollectionSettings() {
     }
   };
 
+  const handleRunPatternAnalysis = async () => {
+    setBusy(true);
+    try {
+      const r = await window.api.dataCollection.runPatternAnalysis();
+      const lines: string[] = ['パターン分析が完了しました', ''];
+      lines.push(
+        `全動画統合: ${r.globalGenerated ? `✅(${r.globalAnalyzed} 動画)` : '❌(動画なし)'}`,
+      );
+      lines.push(`個別: ${r.generatedCreators.length} creators${r.generatedCreators.length > 0 ? ` (${r.generatedCreators.join(', ')})` : ''}`);
+      lines.push(`スキップ: ${r.skippedCreators} creators(サンプル < 20)`);
+      lines.push(`グループ別: ${r.generatedGroups.length} グループ${r.generatedGroups.length > 0 ? ` (${r.generatedGroups.join(', ')})` : ''}`);
+      lines.push('');
+      lines.push('出力先: userData/patterns/');
+      window.alert(lines.join('\n'));
+    } catch (err) {
+      window.alert(`パターン分析に失敗: ${err instanceof Error ? err.message : String(err)}`);
+    } finally {
+      setBusy(false);
+    }
+  };
+
   const handleCancelCurrent = async () => {
     if (!stats?.isBatchActive) return;
     const ok = window.confirm(
@@ -141,12 +162,13 @@ export default function DataCollectionSettings() {
     return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
   };
 
-  // "次のサイクルまで N 分 M 秒" — UX-friendly countdown for the
-  // 待機中 status. < 1 minute drops to seconds for clarity.
+  // "次のサイクルまで N 分" — UX-friendly countdown for the 待機中
+  // status. <= 60s collapses to "間もなく" (the 2026-05-03 dynamic-
+  // cycle change made the shortest tier 3 min, so a sub-minute
+  // precision readout no longer carries useful information).
   const formatNextBatch = (sec: number | null): string => {
     if (sec == null) return '';
-    if (sec <= 0) return '間もなく';
-    if (sec < 60) return `次まで ${sec} 秒`;
+    if (sec <= 60) return '間もなく';
     const minutes = Math.floor(sec / 60);
     const remSec = sec % 60;
     if (minutes < 60) return `次まで ${minutes} 分${remSec > 0 ? ` ${remSec} 秒` : ''}`;
@@ -299,6 +321,24 @@ export default function DataCollectionSettings() {
         >
           <Square size={12} />
           取得を停止
+        </button>
+        {/* Phase 2a — sweep accumulated videos and emit per-creator
+            + per-group pattern JSON files. Synchronous on the main
+            side, ~1s for the current data volume. */}
+        <button
+          type="button"
+          className={styles.cancelButton}
+          onClick={handleRunPatternAnalysis}
+          disabled={busy || (stats?.videoCount ?? 0) === 0}
+          title={
+            (stats?.videoCount ?? 0) === 0
+              ? '先に動画を蓄積してください(videos が 0 件)'
+              : 'userData/patterns/ にパターン JSON を生成(配信者ごと + グループごと)'
+          }
+          style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}
+        >
+          <BarChart3 size={12} />
+          パターン分析を実行
         </button>
       </div>
 

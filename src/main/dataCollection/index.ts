@@ -7,13 +7,15 @@ import {
   upsertVideoFull,
   videoExists,
 } from './database';
-import { hasYoutubeApiKeys } from '../secureStorage';
+import { countYoutubeApiKeys, hasYoutubeApiKeys } from '../secureStorage';
+import { getTotalQuotaUsedToday } from './database';
 import { fetchVideoDetails, parseIsoDuration, refreshKeys, searchVideos } from './youtubeApi';
 import { extractVideoData } from './ytDlpExtractor';
 import { BROAD_QUERIES, SEARCH_DEFAULTS, buildPerCreatorQueries } from './searchQueries';
 import { loadCreatorList } from './creatorList';
 import { resolveCreatorChannelIds } from './seedCreators';
 import { logError, logInfo, logWarn } from './logger';
+import { shuffleArray } from './utils';
 
 // Background data-collection orchestrator. Single instance per main
 // process. Auto-starts ~5 s after `start()` is called (giving the rest
@@ -25,22 +27,75 @@ import { logError, logInfo, logWarn } from './logger';
 
 type ManagerState = 'idle' | 'running' | 'paused';
 
-// Cycle interval — bumped 1h → 2h on 2026-05-03 alongside the seed
-// expansion to 75 creators. With per-creator multi-angle queries
-// (75 × 3 = 225 search.list = 22.5K units / cycle plus broad +
-// channelId resolve), a 1-hour cadence would burn through the
-// 50-key 500K daily budget after ~12 cycles. 2 hours = 12 cycles/day
-// for ~285K, leaving comfortable headroom for one-off resolution
-// passes and 403/quota-exceeded retries.
-const COLLECTION_INTERVAL_MS = 2 * 60 * 60 * 1000;   // 2 hours between cycles
+// Cycle pacing — switched from a 2h fixed interval to dynamic on
+// 2026-05-03. Rationale: the 50-key budget gives 500K units/day; the
+// 2h cadence burned only ~32K (7%) leaving 92% wasted. Sleep is now
+// driven by the previous batch's "new rate" (newCount / candidateCount).
+// High new-rate ⇒ YouTube has fresh material ⇒ fast cadence; low
+// new-rate ⇒ wait longer to let the upload pool refill. Quota
+// exhaustion is acceptable (operator adds new keys when it happens).
+// Initial pacing 3/10/20/30 (2026-05-03) had < 5% tier firing the
+// 30-min sleep too often — operator reported "待ちすぎ". Tightened
+// to 1/3/5/10 same day. Worst case 480 batch/day × ~700 units = 336K
+// / 500K daily budget = 67%, still comfortable.
+const SLEEP_TIERS = [
+  { minRate: 0.20, sleepMs: 1 * 60_000 },
+  { minRate: 0.10, sleepMs: 3 * 60_000 },
+  { minRate: 0.05, sleepMs: 5 * 60_000 },
+  { minRate: 0.00, sleepMs: 10 * 60_000 },
+] as const;
+// Fallback delay used when a batch was cancelled, errored, or returned
+// zero candidates — pinned to the lowest tier so the abnormal path
+// doesn't sit on a stale longer interval.
+const FALLBACK_SLEEP_MS = 10 * 60_000;
 const STARTUP_DELAY_MS = 5_000;                       // delay after start()
 const MAX_VIDEOS_PER_BATCH = 200;                     // cap a single cycle
+// Per-batch ceiling per creator. Prevents a single creator from
+// monopolising the global cap when their queries return rich pools
+// — pre-fix bug had 99.4% of 340 videos concentrated on the top
+// 3 creators because the fixed-order loop exhausted MAX_VIDEOS_PER_BATCH
+// before reaching the long tail. Combined with shuffleArray on the
+// creator order, this gives every creator a fair shot per batch.
+const PER_CREATOR_QUOTA_PER_BATCH = 3;
 const NETWORK_RETRY_COOLDOWN_MS = 5 * 60 * 1000;      // 5 min between hard fails
 const PER_VIDEO_DELAY_MS = 200;                       // gentle on yt-dlp
+const QUOTA_WARN_THRESHOLD = 0.80;                    // log warning past 80% daily
+
+type BatchResult = {
+  // True when the batch exited early via cancelRequested. Partial
+  // counters reflect work done up to that point.
+  cancelled: boolean;
+  // candidateIds.size — every distinct videoId surfaced by per-creator
+  // + broad search. Used as the denominator for new-rate.
+  candidateCount: number;
+  // newIds.length — candidates that survived `videoExists` and made
+  // it into the enrichment loop. The numerator for new-rate.
+  newCount: number;
+  // Successful upserts. Lower-bound on real DB growth this batch.
+  savedCount: number;
+  // yt-dlp / DB upsert failures during enrichment.
+  failures: number;
+};
+
+function pickNextDelay(result: BatchResult): number {
+  // Cancelled or empty pools: no signal to pace from, fall back to
+  // the longest tier so we don't churn the quota.
+  if (result.cancelled) return FALLBACK_SLEEP_MS;
+  if (result.candidateCount === 0) return FALLBACK_SLEEP_MS;
+
+  const newRate = result.newCount / result.candidateCount;
+  for (const tier of SLEEP_TIERS) {
+    if (newRate >= tier.minRate) return tier.sleepMs;
+  }
+  return SLEEP_TIERS[SLEEP_TIERS.length - 1]!.sleepMs;
+}
 
 class DataCollectionManager {
   private state: ManagerState = 'idle';
-  private currentBatch: Promise<void> | null = null;
+  // Held as Promise<unknown> so callers (triggerNow / cancelCurrentBatch
+  // / pause) can `await` it without inheriting BatchResult — they only
+  // care about completion, not the result shape.
+  private currentBatch: Promise<unknown> | null = null;
   private timer: ReturnType<typeof setTimeout> | null = null;
   // Reset at the top of every batch so a previous cancel doesn't bleed
   // into the next run. Toggled true by pause() and cancelCurrentBatch();
@@ -87,9 +142,10 @@ class DataCollectionManager {
   async triggerNow(): Promise<void> {
     if (this.currentBatch) {
       // Already running — caller can poll getStats() until completion.
-      return this.currentBatch;
+      await this.currentBatch;
+      return;
     }
-    return this.runOneBatch();
+    await this.runOneBatch();
   }
 
   /** Stop the in-flight batch without changing the persistent
@@ -138,35 +194,104 @@ class DataCollectionManager {
     this.nextBatchAt = Date.now() + delayMs;
     this.timer = setTimeout(() => {
       this.nextBatchAt = null;
-      void this.runOneBatch().finally(() => {
-        if (this.state === 'running') this.scheduleNext(COLLECTION_INTERVAL_MS);
-      });
+      this.runOneBatch()
+        .then((result) => {
+          if (this.state !== 'running') return;
+          const nextDelay = pickNextDelay(result);
+          this.scheduleNext(nextDelay);
+        })
+        .catch((err) => {
+          // runOneBatch already swallows _collectBatch errors, so this
+          // .catch is defensive: any unexpected throw still lets the
+          // schedule keep ticking on a long delay.
+          logError(`runOneBatch unexpectedly threw: ${err instanceof Error ? err.message : String(err)}`);
+          if (this.state === 'running') this.scheduleNext(FALLBACK_SLEEP_MS);
+        });
     }, delayMs);
   }
 
-  private async runOneBatch(): Promise<void> {
-    if (this.currentBatch) return this.currentBatch;
+  private async runOneBatch(): Promise<BatchResult> {
+    if (this.currentBatch) {
+      // Re-entrancy guard: another caller already started a batch.
+      // Wait for it to finish and re-use its result if it was a
+      // BatchResult; otherwise return a "no work done" sentinel.
+      const r = await this.currentBatch;
+      return isBatchResult(r) ? r : emptyResult(false);
+    }
     // Fresh start — clear any cancel flag left over from a previous
     // pause / cancelCurrentBatch invocation. The batch will re-set the
     // flag while running if pause / cancel fires mid-batch.
     this.cancelRequested = false;
-    const batch = this._collectBatch().catch((err) => {
+    const promise = this._collectBatch().catch((err): BatchResult => {
       logError(`batch error: ${err instanceof Error ? err.message : String(err)}`);
+      return emptyResult(false);
     });
-    this.currentBatch = batch as Promise<void>;
+    this.currentBatch = promise;
     try {
-      await batch;
-    } finally {
+      const result = await promise;
       if (this.cancelRequested) {
         logInfo('batch ended — cancelled by user / pause');
       }
+      // Quota check on completion. Logged regardless of cancel state
+      // because partial batches still consume API units.
+      await this.maybeWarnOnQuota();
+      // Operator-facing summary line. The new-rate + sleep are the
+      // signal we use to debug pacing decisions later.
+      const nextDelay = pickNextDelay(result);
+      const newRate = result.candidateCount > 0 ? result.newCount / result.candidateCount : 0;
+      logInfo(
+        `batch summary — new rate ${(newRate * 100).toFixed(1)}% ` +
+          `(${result.newCount}/${result.candidateCount}), ` +
+          `saved=${result.savedCount}, failures=${result.failures}, ` +
+          `sleeping ${Math.round(nextDelay / 60_000)}min`,
+      );
+      return result;
+    } finally {
       this.currentBatch = null;
     }
   }
 
-  private async _collectBatch(): Promise<void> {
+  /** Log a warning when daily quota usage crosses QUOTA_WARN_THRESHOLD.
+   * No UI notification — operator can spot it in the log viewer.
+   * Caps total at keyCount × 10000 (= the daily limit per key). */
+  private async maybeWarnOnQuota(): Promise<void> {
+    try {
+      const keyCount = await countYoutubeApiKeys();
+      if (keyCount === 0) return;
+      const used = getTotalQuotaUsedToday();
+      const limit = keyCount * 10000;
+      const ratio = used / limit;
+      if (ratio >= QUOTA_WARN_THRESHOLD) {
+        logInfo(
+          `⚠ quota at ${(ratio * 100).toFixed(0)}% (${used}/${limit}) — ` +
+            `consider adding new API keys`,
+        );
+      }
+    } catch {
+      // Best-effort; key-count read failure shouldn't break the loop.
+    }
+  }
+
+  private async _collectBatch(): Promise<BatchResult> {
     const startedAt = Date.now();
     logInfo('batch start');
+
+    // Counters threaded through the function so early-return paths
+    // (cancelRequested checkpoints) can build a partial BatchResult
+    // reflecting the work already done. `buildResult` closes over
+    // candidateIds / newIds / saved / failures declared below.
+    const candidateIds = new Set<string>();
+    const candidateMeta = new Map<string, { creatorName: string | null }>();
+    const newIds: string[] = [];
+    let saved = 0;
+    let failures = 0;
+    const buildResult = (cancelled: boolean): BatchResult => ({
+      cancelled,
+      candidateCount: candidateIds.size,
+      newCount: newIds.length,
+      savedCount: saved,
+      failures,
+    });
 
     // Step 0: backfill missing channelIds for seeded creators. No-op
     // when everything is already resolved (the helper skips creators
@@ -179,42 +304,77 @@ class DataCollectionManager {
     }
 
     // Step 1: search to build a candidate ID pool.
-    const candidateIds = new Set<string>();
-    const candidateMeta = new Map<string, { creatorName: string | null }>();
+    // (candidateIds / candidateMeta declared above so buildResult can
+    // observe their sizes from any early-return path.)
 
     // Per-creator queries first — these are the targeted slice the
     // user explicitly cares about, so they get priority budget.
     // Three angles per creator (切り抜き / 神回 / 名場面) — see
     // searchQueries.buildPerCreatorQueries for rationale.
+    //
+    // Order is shuffled per batch and each creator is capped at
+    // PER_CREATOR_QUOTA_PER_BATCH. Pre-fix the fixed order + no quota
+    // meant the first ~3 creators consumed the entire MAX_VIDEOS_PER_BATCH
+    // budget, leaving 95% of the seed list at zero. Round-robin via
+    // quota guarantees fair distribution across batches.
     const creators = await loadCreatorList();
-    for (const c of creators) {
-      if (this.cancelRequested) return;
-      let creatorTotalHits = 0;
+    const shuffledCreators = shuffleArray(creators);
+    const sampleNames = shuffledCreators
+      .slice(0, 5)
+      .map((c) => c.name)
+      .join(', ');
+    logInfo(`per-creator order (shuffled): ${sampleNames}, ...`);
+
+    const perCreatorCount = new Map<string, number>();
+    for (const c of shuffledCreators) perCreatorCount.set(c.name, 0);
+
+    outer: for (const c of shuffledCreators) {
+      if (this.cancelRequested) return buildResult(true);
+      if (candidateIds.size >= MAX_VIDEOS_PER_BATCH) break;
+
       const queries = buildPerCreatorQueries(c.name);
+      // Track API hits separately from slot fills: dedup against the
+      // running candidate pool can legitimately drop a creator's slots
+      // to 0 even when the API returned items, so only "all queries
+      // ran AND zero items came back" is a typo signal.
+      let queriesRun = 0;
+      let totalApiHits = 0;
+
       for (const q of queries) {
-        if (this.cancelRequested) return;
+        if (this.cancelRequested) return buildResult(true);
+        if ((perCreatorCount.get(c.name) ?? 0) >= PER_CREATOR_QUOTA_PER_BATCH) break;
+        if (candidateIds.size >= MAX_VIDEOS_PER_BATCH) break outer;
+
         const items = await searchVideos(q, {
           maxResults: SEARCH_DEFAULTS.maxResultsPerQuery,
           order: SEARCH_DEFAULTS.order,
           regionCode: SEARCH_DEFAULTS.regionCode,
           relevanceLanguage: SEARCH_DEFAULTS.relevanceLanguage,
         });
+        queriesRun += 1;
+        totalApiHits += items.length;
         logInfo(`search per-creator "${q}" → ${items.length} items`);
-        creatorTotalHits += items.length;
+
         for (const it of items) {
+          if ((perCreatorCount.get(c.name) ?? 0) >= PER_CREATOR_QUOTA_PER_BATCH) break;
+          if (candidateIds.size >= MAX_VIDEOS_PER_BATCH) break outer;
+
           if (!candidateIds.has(it.videoId)) {
             candidateIds.add(it.videoId);
             candidateMeta.set(it.videoId, { creatorName: c.name });
+            perCreatorCount.set(c.name, (perCreatorCount.get(c.name) ?? 0) + 1);
           }
         }
       }
+
       // Across all angles for this creator, no hits at all is a
       // strong signal of a typo / outdated handle. Loud-warn so the
       // user can spot it in the API management → 収集ログ tab and
       // fix creators.json. We don't auto-correct — the right
       // replacement is a human judgement call (especially for fluid
-      // groups like neoporte).
-      if (creatorTotalHits === 0) {
+      // groups like neoporte). Skip the warning when we exited early
+      // (quota / global cap) — that's not a typo signal.
+      if (queriesRun === queries.length && totalApiHits === 0) {
         logWarn(
           `creator "${c.name}" は全 ${queries.length} クエリで 0 件 — ` +
             `表記揺れ / 脱退 / 改名の可能性。creators.json を見直してください` +
@@ -223,9 +383,21 @@ class DataCollectionManager {
       }
     }
 
+    // Distribution summary — the whole point of the round-robin
+    // rewrite. If "withZero" stays high across batches, bump
+    // PER_CREATOR_QUOTA_PER_BATCH or revisit the queries.
+    const counts = Array.from(perCreatorCount.values());
+    const withVideos = counts.filter((n) => n >= 1).length;
+    const withZero = counts.filter((n) => n === 0).length;
+    const maxPerCreator = counts.length > 0 ? Math.max(...counts) : 0;
+    logInfo(
+      `per-creator distribution: with≥1=${withVideos}, with=0=${withZero}, ` +
+        `max=${maxPerCreator}/${PER_CREATOR_QUOTA_PER_BATCH}`,
+    );
+
     // Then broad queries for the long-tail discovery pool.
     for (const q of BROAD_QUERIES) {
-      if (this.cancelRequested) return;
+      if (this.cancelRequested) return buildResult(true);
       const items = await searchVideos(q, {
         maxResults: SEARCH_DEFAULTS.maxResultsPerQuery,
         order: SEARCH_DEFAULTS.order,
@@ -243,7 +415,8 @@ class DataCollectionManager {
 
     // Step 2: drop already-collected. The "is it worth re-collecting"
     // question is a separate weekly job; in the hot path we just skip.
-    const newIds: string[] = [];
+    // (newIds is hoisted to the top of the function so buildResult can
+    // observe partial progress on cancel.)
     for (const id of candidateIds) {
       if (!videoExists(id)) newIds.push(id);
       if (newIds.length >= MAX_VIDEOS_PER_BATCH) break;
@@ -255,11 +428,9 @@ class DataCollectionManager {
     const detailById = new Map(details.map((d) => [d.id, d]));
 
     // Step 4 + 5: yt-dlp per video for heatmap + chapters + thumb,
-    // then DB upsert.
-    let saved = 0;
-    let failures = 0;
+    // then DB upsert. (saved / failures hoisted to top.)
     for (const id of newIds) {
-      if (this.cancelRequested) return;
+      if (this.cancelRequested) return buildResult(true);
       const detail = detailById.get(id);
       if (!detail) {
         // Video disappeared between search.list and videos.list
@@ -351,16 +522,36 @@ class DataCollectionManager {
     logInfo(`batch done in ${elapsedSec}s — saved=${saved}, failures=${failures}`);
 
     // If we hit a hard wall (nothing saved + many failures), back off
-    // longer before the next cycle.
+    // longer before the next cycle. The dynamic-cycle delay tier picks
+    // up from here, but this extra in-band sleep prevents tight retry
+    // when the network / yt-dlp itself is broken.
     if (saved === 0 && failures >= 5) {
       logWarn('zero saves with failures — long cooldown');
       await sleep(NETWORK_RETRY_COOLDOWN_MS);
     }
+
+    return buildResult(false);
   }
 }
 
 function sleep(ms: number): Promise<void> {
   return new Promise((r) => setTimeout(r, ms));
+}
+
+function emptyResult(cancelled: boolean): BatchResult {
+  return { cancelled, candidateCount: 0, newCount: 0, savedCount: 0, failures: 0 };
+}
+
+function isBatchResult(v: unknown): v is BatchResult {
+  return (
+    v != null &&
+    typeof v === 'object' &&
+    'cancelled' in v &&
+    'candidateCount' in v &&
+    'newCount' in v &&
+    'savedCount' in v &&
+    'failures' in v
+  );
 }
 
 // yt-dlp's upload_date is YYYYMMDD; convert to ISO 8601 date so the

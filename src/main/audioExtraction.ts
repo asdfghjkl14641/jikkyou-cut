@@ -11,15 +11,20 @@ type ExtractArgs = {
   durationSec: number;
   signal: AbortSignal;
   onRatio: (ratio: number) => void;
+  // Filename prefix in tmpDir. Defaults to `jcut-audio-` (Gladia path);
+  // Gemini path passes `jcut-gemini-audio-` so concurrent extractions
+  // by the two pipelines don't fight over the same temp file and so a
+  // crash leaves recognisable orphans.
+  filenamePrefix?: string;
 };
 
 // Pulls audio from the video into a temp MP3 (mono, 16 kHz, 64 kbps) — the
 // shape Gemini downsamples to internally, so we minimise upload bytes.
 export async function extractAudioToTemp(args: ExtractArgs): Promise<string> {
-  const { videoFilePath, durationSec, signal, onRatio } = args;
+  const { videoFilePath, durationSec, signal, onRatio, filenamePrefix = 'jcut-audio-' } = args;
   const tmpDir = app.getPath('temp');
   const id = nanoid(8);
-  const tmpPath = path.join(tmpDir, `jcut-audio-${id}.mp3`);
+  const tmpPath = path.join(tmpDir, `${filenamePrefix}${id}.mp3`);
 
   const ffmpegArgs = [
     '-hide_banner', '-nostdin', '-y',

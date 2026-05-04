@@ -1,16 +1,21 @@
 import { app } from 'electron';
 import { promises as fs } from 'node:fs';
+import { createHash } from 'node:crypto';
 import path from 'node:path';
 import type {
   AutoExtractProgress,
   AutoExtractResult,
   ChatMessage,
   ClipSegment,
+  GeminiHighlightCandidate,
+  GeminiTimelineSegment,
   RawBucket,
 } from '../common/types';
 import type { ReactionCategory } from '../common/commentAnalysis/keywords';
 import { loadAnthropicSecret } from './secureStorage';
 import { detectPeakCandidates, type PeakCandidate } from './commentAnalysis/peakDetection';
+import type { GlobalPatterns } from './dataCollection/analyzer';
+import { videoKeyToFilenameStem } from './utils';
 
 // Anthropic title-summarisation: per-segment one-line headlines for the
 // clip-select edit flow. Uses the Haiku tier which is cheap enough that
@@ -54,8 +59,13 @@ type CacheEntry = {
 type CacheFile = Record<string, CacheEntry>;
 
 const cacheDir = () => path.join(app.getPath('userData'), 'comment-analysis');
+
+// videoKeyToFilenameStem moved to utils.ts (shared with gemini.ts).
+// Same purpose: flatten an absolute videoKey to a Windows-safe stem so
+// path.join doesn't keep the right-hand side as an absolute and write
+// to a malformed location.
 const cacheFilePath = (videoKey: string) =>
-  path.join(cacheDir(), `${videoKey}-summaries.json`);
+  path.join(cacheDir(), `${videoKeyToFilenameStem(videoKey)}-summaries.json`);
 
 // `videoKey` is whatever discriminates one analysis from another — we
 // reuse the same cache file across all generations for a given video.
@@ -357,6 +367,13 @@ export type RefinedCandidate = {
   endSec: number;
   reason: string;
   predictedTitle: string;
+  // Source attribution from the AI's `candidateIndex` field. Format:
+  // 'C2' (comment peak only) / 'G1' (Gemini highlight only) /
+  // 'C1+G3' (both pointed to roughly the same area). Used downstream
+  // to decide which candidate pool to consult for messages and
+  // dominantCategory. May be undefined for legacy / malformed
+  // responses — downstream falls back to fuzzy bound matching.
+  candidateIndex?: string;
 };
 
 // How many comments per candidate go into the refine prompt. Cap is
@@ -371,7 +388,7 @@ const REFINE_MAX_MSGS_PER_AUTHOR = 2;
 const REFINE_MAX_TOKENS = 800;
 
 const refineCacheFilePath = (videoKey: string): string =>
-  path.join(cacheDir(), `${videoKey}-extractions.json`);
+  path.join(cacheDir(), `${videoKeyToFilenameStem(videoKey)}-extractions.json`);
 
 type RefineCacheEntry = {
   refined: RefinedCandidate[];
@@ -393,15 +410,111 @@ async function writeRefineCache(videoKey: string, cache: RefineCacheFile): Promi
   await fs.writeFile(refineCacheFilePath(videoKey), JSON.stringify(cache, null, 2), 'utf8');
 }
 
-// Cheap deterministic hash of the candidate pool. We only care that the
-// same {startSec, endSec, msgLen} pool produces the same key — picking
-// up rounding noise on startSec is fine because peakDetection uses
-// bucket boundaries (multiples of 5s).
-function refineCacheKey(candidates: PeakCandidate[], targetCount: number): string {
+// Cheap deterministic hash of the candidate pool + globalPatterns
+// version + Gemini analysis. Task 2 (2026-05-03) folds in a hash of
+// the Gemini highlights so a fresh Gemini run invalidates the cache.
+// `geminiHash` is sha256 of JSON(highlights) sliced to 8 hex chars,
+// or 'no-gemini' when the analysis didn't run.
+function refineCacheKey(
+  videoFileBasename: string,
+  candidates: PeakCandidate[],
+  targetCount: number,
+  globalPatternsTs: string | null,
+  geminiHash: string,
+): string {
   const sig = candidates
     .map((c) => `${c.startSec.toFixed(1)}-${c.endSec.toFixed(1)}-${c.messages.length}`)
     .join('|');
-  return `t${targetCount}-${sig}`;
+  const ts = globalPatternsTs ?? 'no-pattern';
+  return createHash('sha256')
+    .update(`${videoFileBasename}|${sig}|t${targetCount}|${ts}|g=${geminiHash}`)
+    .digest('hex')
+    .slice(0, 12);
+}
+
+function geminiHashFor(highlights: GeminiHighlightCandidate[] | undefined): string {
+  if (!highlights || highlights.length === 0) return 'no-gemini';
+  const sig = highlights
+    .map((h) => `${h.startSec.toFixed(1)}-${h.endSec.toFixed(1)}-${h.contentType}`)
+    .join('|');
+  return createHash('sha256').update(sig).digest('hex').slice(0, 8);
+}
+
+// Read userData/patterns/global.json. Returns null when the file
+// doesn't exist (pattern analysis hasn't been run yet) or when the
+// content is unparseable. Callers degrade to a prompt without the
+// pattern section in either case — same observable behaviour as M1.0.
+export async function loadGlobalPatterns(): Promise<GlobalPatterns | null> {
+  try {
+    const p = path.join(app.getPath('userData'), 'patterns', 'global.json');
+    const raw = await fs.readFile(p, 'utf8');
+    const parsed = JSON.parse(raw) as GlobalPatterns;
+    if (!parsed || typeof parsed !== 'object') return null;
+    return parsed;
+  } catch {
+    return null;
+  }
+}
+
+// View-boost gate — keep only keywords that correlate with above-
+// average view counts. Replaced the earlier `freq >= 0.5` filter on
+// 2026-05-03 because at the global-aggregate scale (1552 videos × 75
+// creators × 5 groups) no single word reaches 50% — the freq filter
+// admitted everything including boilerplate. Switching to the boost
+// axis is also more semantically aligned: "伸びる動画にはこういう
+// 単語が多い" is what the AI actually wants to know.
+//
+// 0.7 is calibrated against the current global.json: it admits the
+// hashtag cluster (#切り抜き 1.70 / #shorts 1.49 / #にじさんじ 1.15)
+// and "ぶいすぽ" (0.93) while rejecting the under-performers
+// ("切り抜き" 0.65, "にじさんじ" 0.59, channel-name like "葛葉" 0.62).
+const VIEW_BOOST_THRESHOLD = 0.7;
+const PROMPT_KEYWORD_LIMIT = 5;
+
+function buildPatternBlock(gp: GlobalPatterns): string {
+  const tp = gp.patterns.titlePatterns;
+  const dp = gp.patterns.durationPatterns;
+  const pl = gp.patterns.peakLocationPatterns;
+
+  // Keep keywords that lift view counts above average. The finite-
+  // check protects against analyzer outputs where avg-view came out
+  // 0 / NaN / Infinity — those land below threshold or get filtered
+  // out outright, never reaching the prompt.
+  //
+  // Sort the survivors by viewBoost DESC so the highest-impact words
+  // lead the section. The analyzer hands them in freq order, which
+  // would put low-boost-but-frequent words first after filter.
+  const filteredKeywords = tp.frequentKeywords
+    .filter((k) => Number.isFinite(k.viewBoost) && k.viewBoost >= VIEW_BOOST_THRESHOLD)
+    .slice()
+    .sort((a, b) => b.viewBoost - a.viewBoost)
+    .slice(0, PROMPT_KEYWORD_LIMIT);
+
+  const keywordLines = filteredKeywords
+    .map(
+      (k) =>
+        `  - ${k.word}: 出現率 ${(k.freq * 100).toFixed(1)}%, 視聴ブースト x${k.viewBoost.toFixed(2)}`,
+    )
+    .join('\n');
+
+  const keywordSection = keywordLines
+    ? `- 頻出キーワード(伸びる傾向のあるもの):\n${keywordLines}`
+    : '- 頻出キーワード: (該当語なし)';
+
+  return `
+
+# 切り抜き動画一般の伸びパターン(過去 ${gp.totalAnalyzed} 動画から学習)
+- タイトル長中央値: ${tp.lengthDist.median} 文字
+- タイトル長 p90: ${tp.lengthDist.p90} 文字
+- 絵文字使用率: ${(tp.emojiUsage * 100).toFixed(1)}%
+${keywordSection}
+- 切り抜き動画長中央値: ${dp.p50} 秒
+- 切り抜き動画長 p90: ${dp.p90} 秒
+- ピーク位置傾向:
+  - 序盤フック(0-20%): ${(pl.earlyHook * 100).toFixed(1)}%
+  - 中盤スパイク(20-70%): ${(pl.midSpike * 100).toFixed(1)}%
+  - 終盤クライマックス(70-100%): ${(pl.endingClimax * 100).toFixed(1)}%
+`;
 }
 
 // Sample up to `cap` messages evenly distributed across a window, with
@@ -431,7 +544,23 @@ function sampleMessagesForPrompt(messages: ChatMessage[]): ChatMessage[] {
   return out;
 }
 
-function buildRefinePrompt(candidates: PeakCandidate[], targetCount: number): string {
+function buildRefinePrompt(
+  candidates: PeakCandidate[],
+  targetCount: number,
+  globalPatterns: GlobalPatterns | null,
+  geminiHighlights?: GeminiHighlightCandidate[],
+  geminiTimeline?: GeminiTimelineSegment[],
+  // Kept as legacy plumbing — no current caller passes it. Reserved
+  // for a possible per-creator follow-up if global aggregation ever
+  // proves too coarse. Default undefined ⇒ unused.
+  _creator?: { name: string; group: string },
+): string {
+  // M1.5b — global pattern context, when available. Filtered to drop
+  // boilerplate keywords (freq >= 0.5) and defended against bad numerics
+  // on viewBoost (NaN / Infinity slip through if the analyzer ran on
+  // a video set with all-zero view counts).
+  const patternBlock = globalPatterns ? buildPatternBlock(globalPatterns) : '';
+
   const candidateBlocks = candidates.map((c, i) => {
     const startMin = Math.floor(c.startSec / 60);
     const startSec = Math.floor(c.startSec) % 60;
@@ -452,39 +581,94 @@ function buildRefinePrompt(candidates: PeakCandidate[], targetCount: number): st
     );
   }).join('\n\n');
 
+  // Optional 5th selection criterion that references the pattern
+  // block. Only emitted when patterns are present — without them the
+  // criterion has nothing to anchor to.
+  const patternCriterion = globalPatterns
+    ? '\n5. **切り抜き動画一般の伸びパターンと整合する区間長・位置を優先**(下記パターンセクション参照)'
+    : '';
+
+  // Task 2 — Gemini integration. Build the highlight + timeline
+  // sections + integration directive only when Gemini results are
+  // present. When absent, the prompt falls back to the M1.5b shape
+  // (just C-prefixed candidates).
+  const hasGemini = !!geminiHighlights && geminiHighlights.length > 0;
+  const geminiHighlightBlock = hasGemini
+    ? `\n\n# 音声内容ベースのハイライト候補(Gemini 構造理解)\n` +
+      `配信音声を分析した結果、以下が「内容として面白い」候補です。\n` +
+      `コメント反応より内容そのものを重視した判定。\n\n` +
+      geminiHighlights!
+        .map((g, i) => {
+          const dur = Math.max(0, Math.round(g.endSec - g.startSec));
+          return (
+            `候補 G${i + 1}: ${formatTimeShort(g.startSec)}-${formatTimeShort(g.endSec)} (${dur} 秒, ` +
+            `start=${g.startSec}, end=${g.endSec})\n` +
+            `  カテゴリ: ${g.contentType}\n` +
+            `  自信度: ${g.confidence.toFixed(2)}\n` +
+            `  理由: ${g.reason}`
+          );
+        })
+        .join('\n\n')
+    : '';
+
+  const geminiTimelineBlock =
+    hasGemini && geminiTimeline && geminiTimeline.length > 0
+      ? `\n\n# 動画全体の構造(Gemini)\n` +
+        geminiTimeline
+          .map(
+            (t) =>
+              `- ${formatTimeShort(t.startSec)}-${formatTimeShort(t.endSec)}: ${t.description}`,
+          )
+          .join('\n')
+      : '';
+
+  const integrationCriterion = hasGemini
+    ? `\n\n# 統合判断の指示\nコメントベース候補(C1, C2, ...)と音声ベース候補(G1, G2, ...)の両方を\n` +
+      `考慮し、以下の観点で ${targetCount} 個を選んでください:\n` +
+      `- 両方で言及されている区間は最優先(コメント + 内容の両軸で面白い)\n` +
+      `- Gemini ハイライトのみ(コメント密度低めだが内容が面白い)= スポンサー後の盛り上がり、地味な神プレイ等を拾える\n` +
+      `- コメントピークのみ(内容平凡だがコメントが盛り上がっている)= 通常は除外、ただし confidence が極端に高い場合のみ採用検討\n` +
+      `- 既存の選定基準(カテゴリ多様性、区間長 15-90 秒、隣接重複回避、動画全体に分散)も維持`
+    : '';
+
+  // Output format — candidateIndex always required (string),
+  // suggestedStart/End for the AI's preferred final bounds.
   return `あなたはゲーム実況・配信切り抜きのプロ編集者です。
 以下は「視聴者の盛り上がりが大きかった候補区間」のリスト(全 ${candidates.length} 個)です。
 この中から「**切り抜き動画として独立して面白く、視聴者を引き込める**」ベスト ${targetCount} 個を選んでください。
-
+${patternBlock}
 選定基準(優先度順):
 1. **起承転結がある**: 展開が完結していて、見終わった時に納得感がある
 2. **ネタバレ的キャッチコピーがつけやすい**: 「神プレイ集」「死亡フラグ回収」等の物語性
 3. **視聴者反応の質**: 単に密度が高いだけでなく、笑い・驚き・感動など感情の起伏がある
-4. **配信文脈に依存しない**: この区間だけ見ても何が起きたか分かる
+4. **配信文脈に依存しない**: この区間だけ見ても何が起きたか分かる${patternCriterion}
 
 避けるべき:
 - 配信導入 / 雑談繋ぎ
 - 視聴者反応が少ないが盛り上がりに見える区間
 - 同じパターンの繰り返し(似たシーンばかり選ばない)
 
-候補リスト:
-${candidateBlocks}
+候補リスト(コメント反応ベース):
+${candidateBlocks}${geminiHighlightBlock}${geminiTimelineBlock}${integrationCriterion}
 
 出力形式:
 JSON 配列のみで出力。説明文・前置き・コードフェンス禁止。
 
 [
   {
-    "startSec": <候補の start 値をそのまま>,
-    "endSec": <候補の end 値をそのまま>,
+    "candidateIndex": "<C1 / G1 / C1+G2 のいずれか>",
     "reason": "<なぜ選んだか、20 字程度>",
+    "confidence": <0.0-1.0>,
+    "suggestedStart": <秒、AI 判断で前後 5-10 秒の調整可>,
+    "suggestedEnd": <秒、同上>,
     "predictedTitle": "<15 字以内のキャッチータイトル>"
   },
   ...
 ]
 
 重要:
-- 必ず候補リストの startSec / endSec をそのまま使う(±0.1 秒の差も不可)
+- candidateIndex は必ず候補リストの番号を引用(C1..C${candidates.length}${hasGemini ? ` / G1..G${geminiHighlights!.length}` : ''})
+- suggestedStart / suggestedEnd は秒数で、対応候補の start/end を基準に前後 5-10 秒調整可
 - ベスト ${targetCount} 個ピッタリ選ぶ(候補が少ない場合は候補数まで)
 - predictedTitle は 15 文字以内、句点・カギカッコ・絵文字なし`;
 }
@@ -506,36 +690,89 @@ function tryParseRefineJson(text: string): unknown {
   }
 }
 
-// Validate that each refined item references a real candidate by
-// startSec/endSec (within ±0.1s) and clean its title. Items that don't
-// match any candidate are dropped — the model will sometimes hallucinate
-// timestamps even with explicit instructions.
+// Bound-tolerance for "this output is anchored to a real candidate".
+// Task 2 prompt explicitly invites the AI to extend by ±5-10s for
+// context, and we want to allow up to ~30s of latitude before rejecting
+// as a hallucination. Any output outside this window of every C and G
+// candidate is dropped.
+const HALLUCINATION_TOLERANCE_SEC = 30;
+
+// Validate that each refined item references a real candidate (by
+// startSec ±tolerance OR by candidateIndex) and clean its title. Items
+// outside tolerance of every candidate are dropped — the model still
+// occasionally hallucinates timestamps even with explicit instructions.
 function validateRefinedItems(
   parsed: unknown,
   candidates: PeakCandidate[],
+  geminiHighlights?: GeminiHighlightCandidate[],
 ): RefinedCandidate[] {
   if (!Array.isArray(parsed)) return [];
   const out: RefinedCandidate[] = [];
   for (const raw of parsed) {
     if (!raw || typeof raw !== 'object') continue;
     const r = raw as Record<string, unknown>;
-    const startSec = typeof r['startSec'] === 'number' ? r['startSec'] : NaN;
-    const endSec = typeof r['endSec'] === 'number' ? r['endSec'] : NaN;
-    if (!Number.isFinite(startSec) || !Number.isFinite(endSec)) continue;
-    const matched = candidates.find(
-      (c) => Math.abs(c.startSec - startSec) < 0.1 && Math.abs(c.endSec - endSec) < 0.1,
-    );
-    if (!matched) continue;
+
+    // Prefer suggestedStart/End (task 2 schema); fall back to legacy
+    // startSec/endSec when an old cache entry replays through here.
+    const start = pickFiniteNumber(r, 'suggestedStart', 'startSec');
+    const end = pickFiniteNumber(r, 'suggestedEnd', 'endSec');
+    if (!Number.isFinite(start) || !Number.isFinite(end) || end <= start) continue;
+
+    // Anchor check: must be within tolerance of at least one C or G
+    // candidate's start. This blocks gross hallucinations while
+    // accepting the AI's ±5-10s context-extension nudges.
+    const anchored = anyCandidateNear(start, candidates, geminiHighlights);
+    if (!anchored) continue;
+
     const reasonRaw = typeof r['reason'] === 'string' ? r['reason'] : '';
     const titleRaw = typeof r['predictedTitle'] === 'string' ? r['predictedTitle'] : '';
+    const idxRaw = typeof r['candidateIndex'] === 'string' ? r['candidateIndex'] : undefined;
     out.push({
-      startSec: matched.startSec,
-      endSec: matched.endSec,
+      startSec: start,
+      endSec: end,
       reason: reasonRaw.slice(0, 80),
       predictedTitle: cleanTitle(titleRaw) || '(タイトル未生成)',
+      candidateIndex: idxRaw,
     });
   }
   return out;
+}
+
+// Parse the C-prefixed segment of a candidateIndex. Accepts "C3",
+// "c3", "C1+G2" (returns 0 for the C1 part), or undefined. Returns
+// null if no C-prefixed component is found. 1-based AI indices are
+// converted to 0-based for direct array access.
+function parseCommentIndex(idx: string | undefined): number | null {
+  if (!idx) return null;
+  const m = idx.match(/[Cc](\d+)/);
+  if (!m) return null;
+  const n = Number(m[1]);
+  if (!Number.isFinite(n) || n < 1) return null;
+  return n - 1;
+}
+
+function pickFiniteNumber(r: Record<string, unknown>, ...keys: string[]): number {
+  for (const k of keys) {
+    const v = r[k];
+    if (typeof v === 'number' && Number.isFinite(v)) return v;
+  }
+  return NaN;
+}
+
+function anyCandidateNear(
+  start: number,
+  candidates: PeakCandidate[],
+  geminiHighlights: GeminiHighlightCandidate[] | undefined,
+): boolean {
+  for (const c of candidates) {
+    if (Math.abs(c.startSec - start) <= HALLUCINATION_TOLERANCE_SEC) return true;
+  }
+  if (geminiHighlights) {
+    for (const g of geminiHighlights) {
+      if (Math.abs(g.startSec - start) <= HALLUCINATION_TOLERANCE_SEC) return true;
+    }
+  }
+  return false;
 }
 
 // Stage 2 fallback: when the AI step fails (parse error, network, etc.)
@@ -561,6 +798,9 @@ export async function refineCandidatesWithAI(
   videoKey: string,
   candidates: PeakCandidate[],
   targetCount: number,
+  globalPatterns: GlobalPatterns | null,
+  geminiHighlights?: GeminiHighlightCandidate[],
+  geminiTimeline?: GeminiTimelineSegment[],
 ): Promise<{ refined: RefinedCandidate[]; usedFallback: boolean; warning?: string }> {
   if (candidates.length === 0) {
     return { refined: [], usedFallback: false };
@@ -588,9 +828,17 @@ export async function refineCandidatesWithAI(
     };
   }
 
-  // Cache check.
+  // Cache check. Folds in globalPatterns.lastUpdated and a hash of
+  // Gemini highlights so a fresh pattern OR a fresh Gemini run forces
+  // re-extraction (the prompt content changed).
   const cache = await readRefineCache(videoKey);
-  const cacheKey = refineCacheKey(candidates, targetCount);
+  const cacheKey = refineCacheKey(
+    videoKey,
+    candidates,
+    targetCount,
+    globalPatterns?.lastUpdated ?? null,
+    geminiHashFor(geminiHighlights),
+  );
   const cached = cache[cacheKey];
   if (cached) {
     return { refined: cached.refined, usedFallback: false };
@@ -599,7 +847,13 @@ export async function refineCandidatesWithAI(
   const ac = new AbortController();
   activeAc = ac;
   try {
-    const prompt = buildRefinePrompt(candidates, targetCount);
+    const prompt = buildRefinePrompt(
+      candidates,
+      targetCount,
+      globalPatterns,
+      geminiHighlights,
+      geminiTimeline,
+    );
     const outcome = await callAnthropicRaw(apiKey, prompt, REFINE_MAX_TOKENS, ac.signal);
     if (outcome.kind === 'error') {
       console.warn('[ai-extract] refine API failed, falling back to score-order:', outcome.message);
@@ -610,7 +864,10 @@ export async function refineCandidatesWithAI(
       };
     }
     const parsed = tryParseRefineJson(outcome.text);
-    const refined = validateRefinedItems(parsed, candidates).slice(0, targetCount);
+    const refined = validateRefinedItems(parsed, candidates, geminiHighlights).slice(
+      0,
+      targetCount,
+    );
     if (refined.length === 0) {
       console.warn('[ai-extract] refine produced 0 valid items, falling back');
       return {
@@ -632,7 +889,7 @@ export async function refineCandidatesWithAI(
 }
 
 // ===========================================================================
-// Stage 1 + Stage 2 + Stage 4 in one shot: "give me 3-5 clip segments"
+// Stage 1 + Stage 2 + Stage 4 in one shot: "give me 3-10 clip segments"
 // ===========================================================================
 
 const BUCKET_SIZE_SEC_DEFAULT = 5;
@@ -645,9 +902,24 @@ export async function autoExtractClipCandidates(
     hasViewerStats: boolean;
     videoDurationSec: number;
     targetCount: number;
+    // Reserved for future use — surfaced so renderer can keep sending
+    // them without a wire-format change. M1.5b doesn't read them; the
+    // global pattern feed replaces the per-creator prompt context.
+    videoTitle?: string;
+    channelName?: string;
+    // Task 2 — Gemini structural understanding output, fed in by the
+    // IPC handler after running the audio analysis (or null/undefined
+    // when the user has no Gemini key or the analysis failed).
+    geminiHighlights?: GeminiHighlightCandidate[];
+    geminiTimeline?: GeminiTimelineSegment[];
   },
   onProgress: (p: AutoExtractProgress) => void,
 ): Promise<AutoExtractResult> {
+  // M1.5b — load the global pattern snapshot once per call. Falls back
+  // to null when pattern analysis hasn't been run; refine prompt then
+  // omits the pattern section entirely (M1.0 behaviour).
+  const globalPatterns = await loadGlobalPatterns();
+
   // Stage 1 — synchronous, sub-millisecond at typical sizes.
   onProgress({ phase: 'detect', percent: 0 });
   const candidates = detectPeakCandidates(
@@ -666,12 +938,16 @@ export async function autoExtractClipCandidates(
     };
   }
 
-  // Stage 2 — AI refine (10 → N).
+  // Stage 2 — AI refine (10 → N). Gemini highlights/timeline (if any)
+  // get folded into the prompt so the AI weighs both axes.
   onProgress({ phase: 'refine', percent: 0 });
   const { refined, usedFallback, warning } = await refineCandidatesWithAI(
     args.videoKey,
     candidates,
     args.targetCount,
+    globalPatterns,
+    args.geminiHighlights,
+    args.geminiTimeline,
   );
   onProgress({ phase: 'refine', percent: 100 });
 
@@ -684,10 +960,31 @@ export async function autoExtractClipCandidates(
   // button so titles look consistent regardless of which entry-point
   // produced them.
   onProgress({ phase: 'titles', percent: 0 });
+  // Resolve a "matching candidate" for messages + dominantCategory.
+  // Task 2 prompts allow ±5-10s bound nudges, so the strict ±0.1s
+  // match would miss legitimate adjustments. Use candidateIndex when
+  // available (e.g. "C2"), else fall back to the closest C candidate
+  // by start time within HALLUCINATION_TOLERANCE_SEC. G-only picks
+  // get null (no comment messages exist for them) — Stage 4 falls
+  // back to the AI's predictedTitle.
+  const findMatchingCandidate = (r: RefinedCandidate): PeakCandidate | null => {
+    const cIdx = parseCommentIndex(r.candidateIndex);
+    if (cIdx != null && cIdx >= 0 && cIdx < candidates.length) {
+      return candidates[cIdx]!;
+    }
+    let best: PeakCandidate | null = null;
+    let bestDelta = HALLUCINATION_TOLERANCE_SEC;
+    for (const c of candidates) {
+      const d = Math.abs(c.startSec - r.startSec);
+      if (d <= bestDelta) {
+        bestDelta = d;
+        best = c;
+      }
+    }
+    return best;
+  };
   const summarySegments: SummarySegment[] = refined.map((r) => {
-    const original = candidates.find(
-      (c) => Math.abs(c.startSec - r.startSec) < 0.1 && Math.abs(c.endSec - r.endSec) < 0.1,
-    );
+    const original = findMatchingCandidate(r);
     return {
       id: `auto-${r.startSec.toFixed(2)}`,
       startSec: r.startSec,
@@ -711,15 +1008,15 @@ export async function autoExtractClipCandidates(
   const segments: Array<Omit<ClipSegment, 'id'>> = refined.map((r, i) => {
     const fromStage4 = titleResults[i]?.title ?? null;
     const fromStage2 = r.predictedTitle ? r.predictedTitle : null;
-    const original = candidates.find(
-      (c) => Math.abs(c.startSec - r.startSec) < 0.1 && Math.abs(c.endSec - r.endSec) < 0.1,
-    );
+    const original = findMatchingCandidate(r);
     const dominantCategory: ReactionCategory | null = original?.dominantCategory ?? null;
     return {
       startSec: r.startSec,
       endSec: r.endSec,
       title: fromStage4 ?? fromStage2,
       dominantCategory,
+      aiSource: 'auto-extract',
+      aiReason: r.reason,
     };
   });
 

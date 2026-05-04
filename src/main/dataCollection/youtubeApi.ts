@@ -214,6 +214,169 @@ export async function searchChannelByName(
   return null;
 }
 
+// 2026-05-04 (hybrid creator search) — multi-result variant. Reuses the
+// same 100-quota search.list call but returns up to `maxResults`
+// candidates with thumbnails + descriptions, so the registration UI
+// can show the user a picker when Gemini didn't surface a YouTube
+// handle. Caller is responsible for any subscriber-count enrichment
+// via getChannelById() / getChannelByHandle() (1 quota each).
+type ChannelSearchRespFull = {
+  items?: Array<{
+    id?: { channelId?: string };
+    snippet?: {
+      title?: string;
+      description?: string;
+      channelId?: string;
+      thumbnails?: Record<string, { url?: string }>;
+    };
+  }>;
+};
+
+export type ChannelSearchHit = {
+  channelId: string;
+  channelTitle: string;
+  description: string;
+  profileImageUrl: string | null;
+};
+
+export async function searchChannelsByName(
+  query: string,
+  maxResults: number = 5,
+): Promise<ChannelSearchHit[]> {
+  const trimmed = query.trim();
+  if (!trimmed) return [];
+  const params = new URLSearchParams({
+    part: 'snippet',
+    type: 'channel',
+    q: trimmed,
+    maxResults: String(Math.max(1, Math.min(50, maxResults))),
+    regionCode: 'JP',
+    relevanceLanguage: 'ja',
+  });
+  const json = await callApi<ChannelSearchRespFull>(`search?${params.toString()}`, COST_SEARCH_LIST);
+  if (!json) return [];
+  const out: ChannelSearchHit[] = [];
+  for (const it of json.items ?? []) {
+    const cid = it.id?.channelId ?? it.snippet?.channelId;
+    if (!cid) continue;
+    out.push({
+      channelId: cid,
+      channelTitle: it.snippet?.title ?? '',
+      description: it.snippet?.description ?? '',
+      profileImageUrl: pickThumbnailUrl(it.snippet?.thumbnails),
+    });
+  }
+  return out;
+}
+
+// ---- channels.list ---------------------------------------------------------
+//
+// Used by the auto-record creator search flow. Single entry point:
+// `getChannelByHandle('@xxx')`, 1 quota unit per call. We deliberately
+// do NOT fall back to `search.list` (100 units) when the handle misses
+// — the cost ratio is 100× and we'd burn the 50-key × 10K/day budget
+// fast on speculative searches. If Gemini's handle guess is wrong,
+// returning null is the right answer.
+
+type ChannelsListResp = {
+  items?: Array<{
+    id?: string;
+    snippet?: {
+      title?: string;
+      customUrl?: string; // "@handle" or legacy "/c/Name"
+      thumbnails?: Record<string, { url?: string }>;
+      publishedAt?: string;
+    };
+    statistics?: {
+      subscriberCount?: string;
+      hiddenSubscriberCount?: boolean;
+      videoCount?: string;
+    };
+  }>;
+};
+
+export type ChannelLookup = {
+  channelId: string;
+  channelName: string;
+  handle: string | null; // normalised "@xxx"
+  profileImageUrl: string | null;
+  // ISO 8601 channel creation timestamp from snippet.publishedAt.
+  // Empty string when the field isn't returned (defensive — should
+  // always be set by the API for valid channels).
+  createdAt: string;
+  // YouTube rounds subscriberCount publicly (1.23M etc.) — the
+  // numeric value here matches what's shown on the channel page.
+  // null when statistics weren't returned OR the channel hides its
+  // subscriber count (`hiddenSubscriberCount: true`).
+  subscriberCount: number | null;
+};
+
+function normaliseHandle(raw: string): string {
+  const trimmed = raw.trim();
+  return trimmed.startsWith('@') ? trimmed : `@${trimmed}`;
+}
+
+function pickThumbnailUrl(thumbs: Record<string, { url?: string }> | undefined): string | null {
+  if (!thumbs) return null;
+  // Prefer larger thumbnails — high (480) → medium (240) → default (88).
+  // The Settings UI renders ~40px so even default works, but high gives
+  // crisp retina rendering.
+  return thumbs['high']?.url ?? thumbs['medium']?.url ?? thumbs['default']?.url ?? null;
+}
+
+function toChannelLookup(item: NonNullable<ChannelsListResp['items']>[number]): ChannelLookup | null {
+  if (!item.id) return null;
+  const customUrl = item.snippet?.customUrl ?? null;
+  // hiddenSubscriberCount is the API's signal that the user opted to
+  // hide their subscriber number. Treat as null even if a numeric
+  // value also got returned.
+  const hidden = item.statistics?.hiddenSubscriberCount === true;
+  const rawCount = item.statistics?.subscriberCount;
+  const subscriberCount =
+    !hidden && typeof rawCount === 'string' && rawCount !== '' && Number.isFinite(Number(rawCount))
+      ? Number(rawCount)
+      : null;
+  return {
+    channelId: item.id,
+    channelName: item.snippet?.title ?? '',
+    handle: customUrl && customUrl.startsWith('@') ? customUrl : null,
+    profileImageUrl: pickThumbnailUrl(item.snippet?.thumbnails),
+    createdAt: item.snippet?.publishedAt ?? '',
+    subscriberCount,
+  };
+}
+
+export async function getChannelByHandle(handle: string): Promise<ChannelLookup | null> {
+  // forHandle accepts the leading @, but the API is forgiving — pass
+  // it normalised so logs are uniform.
+  // `statistics` adds subscriberCount + videoCount; same 1-quota cost
+  // as snippet-only.
+  const params = new URLSearchParams({
+    part: 'snippet,statistics',
+    forHandle: normaliseHandle(handle),
+  });
+  const json = await callApi<ChannelsListResp>(`channels?${params.toString()}`, COST_CHANNELS_LIST);
+  if (!json) return null;
+  const item = json.items?.[0];
+  return item ? toChannelLookup(item) : null;
+}
+
+// Lookup by channel ID (UCxxx form). Used by the manual-input
+// fallback path when the user types a channelId directly into the
+// register-creators UI. Same 1-quota cost.
+export async function getChannelById(channelId: string): Promise<ChannelLookup | null> {
+  const trimmed = channelId.trim();
+  if (!trimmed) return null;
+  const params = new URLSearchParams({
+    part: 'snippet,statistics',
+    id: trimmed,
+  });
+  const json = await callApi<ChannelsListResp>(`channels?${params.toString()}`, COST_CHANNELS_LIST);
+  if (!json) return null;
+  const item = json.items?.[0];
+  return item ? toChannelLookup(item) : null;
+}
+
 // ---- videos.list -----------------------------------------------------------
 
 type VideosApiResp = {
@@ -262,6 +425,75 @@ export async function fetchVideoDetails(videoIds: string[]): Promise<VideoDetail
         likeCount: it.statistics?.likeCount ? Number(it.statistics.likeCount) : null,
         commentCount: it.statistics?.commentCount ? Number(it.statistics.commentCount) : null,
         thumbnails: thumbs,
+      });
+    }
+  }
+  return out;
+}
+
+// ---- liveStreamingDetails (段階 X2: live-stream polling) ------------------
+//
+// `videos.list?part=liveStreamingDetails` is 1 quota unit per call (up
+// to 50 ids per request, like the regular videos.list path). It's
+// what stream-monitor's YouTube branch uses to confirm whether the
+// IDs it harvested from a channel's RSS feed are currently live.
+//
+// `actualStartTime` is set when the stream began airing.
+// `actualEndTime` is set when it ended.
+// → currently live = actualStartTime present AND actualEndTime absent.
+
+export type VideoLiveDetail = {
+  id: string;
+  title: string;
+  channelId: string;
+  thumbnailUrl: string | null;
+  // ISO 8601 timestamps from the API. Both `null` if Google reports
+  // no liveStreamingDetails block (= regular VOD upload).
+  actualStartTime: string | null;
+  actualEndTime: string | null;
+  scheduledStartTime: string | null;
+};
+
+type VideosLiveApiResp = {
+  items?: Array<{
+    id: string;
+    snippet?: {
+      title?: string;
+      channelId?: string;
+      thumbnails?: Record<string, { url?: string }>;
+    };
+    liveStreamingDetails?: {
+      actualStartTime?: string;
+      actualEndTime?: string;
+      scheduledStartTime?: string;
+    };
+  }>;
+};
+
+export async function fetchVideoLiveDetails(videoIds: string[]): Promise<VideoLiveDetail[]> {
+  const out: VideoLiveDetail[] = [];
+  if (videoIds.length === 0) return out;
+  for (let off = 0; off < videoIds.length; off += 50) {
+    const chunk = videoIds.slice(off, off + 50);
+    const params = new URLSearchParams({
+      part: 'snippet,liveStreamingDetails',
+      id: chunk.join(','),
+      maxResults: '50',
+    });
+    const json = await callApi<VideosLiveApiResp>(
+      `videos?${params.toString()}`,
+      COST_VIDEOS_LIST,
+    );
+    if (!json) continue;
+    for (const it of json.items ?? []) {
+      out.push({
+        id: it.id,
+        title: it.snippet?.title ?? '',
+        channelId: it.snippet?.channelId ?? '',
+        thumbnailUrl: pickThumbnailUrl(it.snippet?.thumbnails),
+        actualStartTime: it.liveStreamingDetails?.actualStartTime ?? null,
+        actualEndTime: it.liveStreamingDetails?.actualEndTime ?? null,
+        scheduledStartTime: it.liveStreamingDetails?.scheduledStartTime ?? null,
       });
     }
   }

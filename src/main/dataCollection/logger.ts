@@ -1,6 +1,6 @@
 import { app } from 'electron';
 import path from 'node:path';
-import { promises as fs, mkdirSync } from 'node:fs';
+import { appendFileSync, mkdirSync } from 'node:fs';
 
 // Append-only structured log for the Phase 1 data-collection pipeline.
 // Format on disk:
@@ -31,21 +31,28 @@ try {
   // We'll surface any actual write failures via the catch in writeLine.
 }
 
-// Coalesce concurrent appends through a sequential promise chain.
-// Otherwise interleaved fs.appendFile calls can produce torn lines on
-// Windows when multiple log calls fire from concurrent yt-dlp/API
-// callbacks within a single tick.
-let writeQueue: Promise<void> = Promise.resolve();
-
+// Synchronous append. The previous chained-promise design (2026-05-02
+// pre-fix) deadlocked when a single fs.appendFile call never settled
+// — typical Windows trigger is AV / OneDrive / Search indexer holding
+// a transient exclusive lock. With the chain, one stuck head froze
+// every subsequent write while the rest of the orchestrator (DB
+// inserts via better-sqlite3, also sync) kept running, leaving the
+// log file at 13:06Z while the DB grew at 16-26 videos/min.
+//
+// appendFileSync opens-writes-closes per call, atomically for a single
+// line. No queue head to stall, no torn lines, and the per-call cost
+// (~50-200µs) is dwarfed by the surrounding yt-dlp / API I/O. The
+// event-loop block isn't a regression — better-sqlite3 already runs
+// sync on the same loop.
 function writeLine(line: string): void {
-  writeQueue = writeQueue
-    .then(() => fs.appendFile(logFilePath(), line + '\n', 'utf8'))
-    .catch((err) => {
-      // We do NOT log via the logger here — that would loop. Use stderr
-      // directly so the user can at least see disk failures in the dev
-      // terminal.
-      console.error('[data-collection-log] failed to write log line:', err);
-    });
+  try {
+    appendFileSync(logFilePath(), line + '\n', 'utf8');
+  } catch (err) {
+    // Don't loop through the logger; stderr is enough for the dev
+    // terminal. Don't re-throw — a log failure must not crash the
+    // collection pipeline.
+    console.error('[data-collection-log] failed to write log line:', err);
+  }
 }
 
 function format(level: LogLevel, message: string): string {

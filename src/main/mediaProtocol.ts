@@ -30,6 +30,9 @@ const MIME_BY_EXT: Record<string, string> = {
   '.avi': 'video/x-msvideo',
   '.ts': 'video/mp2t',
   '.m2ts': 'video/mp2t',
+  '.jpg': 'image/jpeg',
+  '.jpeg': 'image/jpeg',
+  '.png': 'image/png',
 };
 
 const mimeOf = (filePath: string): string =>

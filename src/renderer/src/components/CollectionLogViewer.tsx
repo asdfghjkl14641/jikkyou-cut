@@ -35,10 +35,11 @@ export default function CollectionLogViewer() {
   const containerRef = useRef<HTMLDivElement>(null);
   const [scrollTop, setScrollTop] = useState(0);
   const [containerHeight, setContainerHeight] = useState(360);
-  // Track whether the user is parked at the bottom — if yes, new
-  // entries auto-scroll into view; if they've scrolled up to read
+  // Track whether the user is parked at the top — if yes, new entries
+  // (which now appear at the top after the 2026-05-03 chronological
+  // flip) auto-scroll into view; if they've scrolled down to read
   // older lines, we leave their position alone.
-  const stickToBottomRef = useRef(true);
+  const stickToTopRef = useRef(true);
 
   const refresh = useCallback(async () => {
     setLoading(true);
@@ -71,25 +72,28 @@ export default function CollectionLogViewer() {
     return () => ro.disconnect();
   }, []);
 
+  // Reversed for display: newest at index 0. The underlying file is
+  // append-only (oldest first) per `appendFileSync` in logger.ts; the
+  // flip is purely a UI concern — chat-app style "newest on top".
   const filtered = useMemo(() => {
-    if (filter === 'all') return entries;
-    return entries.filter((e) => e.level === filter);
+    const base = filter === 'all' ? entries : entries.filter((e) => e.level === filter);
+    // Shallow copy before reverse so we don't mutate the source array.
+    return [...base].reverse();
   }, [entries, filter]);
 
-  // Auto-scroll to bottom on new entries when stuck-to-bottom.
+  // Auto-scroll to top on new entries when stuck-to-top.
   useEffect(() => {
     const el = containerRef.current;
-    if (!el || !stickToBottomRef.current) return;
-    el.scrollTop = el.scrollHeight;
+    if (!el || !stickToTopRef.current) return;
+    el.scrollTop = 0;
   }, [filtered.length]);
 
   const handleScroll = (e: UIEvent<HTMLDivElement>) => {
     const el = e.target as HTMLDivElement;
     setScrollTop(el.scrollTop);
-    // Threshold: within 20 px of the bottom = "stuck". This survives
+    // Threshold: within 20 px of the top = "stuck". This survives
     // a small wheel flick without thrashing the flag.
-    const distFromBottom = el.scrollHeight - el.scrollTop - el.clientHeight;
-    stickToBottomRef.current = distFromBottom < 20;
+    stickToTopRef.current = el.scrollTop < 20;
   };
 
   // Virtual-scroll math (same pattern as LiveCommentFeed).

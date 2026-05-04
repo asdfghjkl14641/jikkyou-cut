@@ -3,9 +3,24 @@ import type {
   CommentAnalysisProgress,
   CommentAnalysisStartArgs,
 } from '../../common/types';
+import type { YtdlpCookiesBrowser } from '../../common/config';
 import { fetchChatReplay, cancelChatReplay } from './chatReplay';
 import { fetchViewerStats } from './viewerStats';
 import { analyze } from './scoring';
+
+export type AnalyzeCommentsOptions = {
+  // Forwarded to yt-dlp's chat replay fetch (YouTube only — Twitch
+  // routes through GraphQL and ignores all cookie fields for now).
+  // 'none' keeps anonymous behaviour; the user opts in via
+  // SettingsDialog when YouTube's bot detection blocks the anonymous
+  // path.
+  cookiesBrowser: YtdlpCookiesBrowser;
+  // Manual cookies.txt paths. Priority is platform-specific > generic
+  // > browser — see urlDownload.getCookiesArgs.
+  cookiesFile: string | null;
+  cookiesFileYoutube: string | null;
+  cookiesFileTwitch: string | null;
+};
 
 /**
  * Runs the full comment-analysis pipeline:
@@ -32,17 +47,33 @@ import { analyze } from './scoring';
 export async function analyzeComments(
   args: CommentAnalysisStartArgs,
   onProgress: (p: CommentAnalysisProgress) => void,
+  options: AnalyzeCommentsOptions,
 ): Promise<CommentAnalysis> {
+  console.log('[comment-debug] analyzeComments entry, full args:', JSON.stringify(args));
   console.log(
-    `[comment-analysis] start url=${args.sourceUrl} duration=${args.durationSec.toFixed(1)}s`,
+    `[comment-debug] sourceUrl resolved: ${args.sourceUrl} (typeof=${typeof args.sourceUrl})`,
+  );
+  console.log(
+    `[comment-analysis] start url=${args.sourceUrl} duration=${args.durationSec.toFixed(1)}s, ` +
+      `cookiesBrowser=${options.cookiesBrowser}, cookiesFile=${options.cookiesFile ?? '<none>'}, ` +
+      `cookiesFileYT=${options.cookiesFileYoutube ?? '<none>'}, cookiesFileTW=${options.cookiesFileTwitch ?? '<none>'}`,
   );
   onProgress({ phase: 'chat', percent: 0 });
-  const messages = await fetchChatReplay(args.sourceUrl);
+  const messages = await fetchChatReplay(args.sourceUrl, {
+    cookiesBrowser: options.cookiesBrowser,
+    cookiesFile: options.cookiesFile,
+    cookiesFileYoutube: options.cookiesFileYoutube,
+    cookiesFileTwitch: options.cookiesFileTwitch,
+  });
+  console.log(`[comment-debug] fetchChatReplay returned: ${messages.length} messages`);
   console.log(`[comment-analysis] chat: ${messages.length} messages`);
   onProgress({ phase: 'chat', percent: 100 });
 
   onProgress({ phase: 'viewers', percent: 0 });
   const viewers = await fetchViewerStats(args.sourceUrl);
+  console.log(
+    `[comment-debug] fetchViewerStats returned: source=${viewers.source}, samples=${viewers.samples.length}`,
+  );
   console.log(
     `[comment-analysis] viewers: source=${viewers.source} samples=${viewers.samples.length}`,
   );
@@ -54,6 +85,9 @@ export async function analyzeComments(
     viewers,
     durationSec: args.durationSec,
   });
+  console.log(
+    `[comment-debug] analyze() done: buckets=${analysis.buckets.length}, allMessages=${analysis.allMessages.length}`,
+  );
   console.log(
     `[comment-analysis] bucketize done: ${analysis.buckets.length} buckets, hasViewerStats=${analysis.hasViewerStats}`,
   );

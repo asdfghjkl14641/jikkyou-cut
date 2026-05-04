@@ -74,10 +74,25 @@ CREATE TABLE IF NOT EXISTS api_quota_log (
   UNIQUE(api_key_index, date)
 );
 
+-- Per-request log for Gemini API calls. Distinct from api_quota_log
+-- because the quota model is different — Gemini counts requests per
+-- day (RPD) per key, not unit-weighted by call type. api_key_hash is
+-- sha256(plaintext_key)[:12] so the DB never holds the raw key.
+CREATE TABLE IF NOT EXISTS gemini_request_log (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  api_key_hash TEXT NOT NULL,
+  requested_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  success INTEGER NOT NULL,
+  status_code INTEGER,
+  model TEXT
+);
+
 CREATE INDEX IF NOT EXISTS idx_videos_creator ON videos(creator_id);
 CREATE INDEX IF NOT EXISTS idx_videos_view ON videos(view_count DESC);
 CREATE INDEX IF NOT EXISTS idx_heatmap_video ON heatmap_peaks(video_id);
 CREATE INDEX IF NOT EXISTS idx_chapters_video ON chapters(video_id);
+CREATE INDEX IF NOT EXISTS idx_gemini_request_log_key_time
+  ON gemini_request_log(api_key_hash, requested_at);
 `;
 
 export function openDb(): Database.Database {
@@ -363,6 +378,67 @@ export function getQuotaPerKeyToday(): Array<{ keyIndex: number; unitsUsed: numb
     )
     .all(todayStr()) as Array<{ keyIndex: number; unitsUsed: number }>;
   return rows;
+}
+
+// ---- Gemini request log ---------------------------------------------------
+
+// SQLite's CURRENT_TIMESTAMP is UTC in the form "YYYY-MM-DD HH:MM:SS",
+// so this returns the same shape for string-comparison filtering.
+function utcMidnightTodayStr(): string {
+  const d = new Date();
+  const y = d.getUTCFullYear();
+  const m = String(d.getUTCMonth() + 1).padStart(2, '0');
+  const dd = String(d.getUTCDate()).padStart(2, '0');
+  return `${y}-${m}-${dd} 00:00:00`;
+}
+
+export function logGeminiRequest(args: {
+  apiKeyHash: string;
+  success: boolean;
+  statusCode: number | null;
+  model: string;
+}): void {
+  openDb()
+    .prepare(
+      'INSERT INTO gemini_request_log (api_key_hash, success, status_code, model) ' +
+        'VALUES (?, ?, ?, ?)',
+    )
+    .run(args.apiKeyHash, args.success ? 1 : 0, args.statusCode, args.model);
+}
+
+// Today's success count + most recent recoverable error (429/401)
+// within the last 24 h. Caller passes the keyHash; rows for unknown
+// hashes return zero / null cleanly.
+export function getGeminiKeyUsage(apiKeyHash: string): {
+  todayCount: number;
+  lastError: string | null;
+} {
+  const conn = openDb();
+  const startToday = utcMidnightTodayStr();
+  const countRow = conn
+    .prepare(
+      'SELECT COUNT(*) AS n FROM gemini_request_log ' +
+        'WHERE api_key_hash = ? AND requested_at >= ? AND success = 1',
+    )
+    .get(apiKeyHash, startToday) as { n: number };
+
+  // 24 h sliding window for the "still in time-out" indicator. We only
+  // surface 401/429 since 5xx is server-side flake (transient, not a
+  // key-quality signal). datetime('now', '-24 hours') resolves UTC
+  // because SQLite defaults to UTC for CURRENT_TIMESTAMP / datetime().
+  const errRow = conn
+    .prepare(
+      'SELECT requested_at FROM gemini_request_log ' +
+        "WHERE api_key_hash = ? AND success = 0 AND status_code IN (401, 429) " +
+        "AND requested_at > datetime('now', '-24 hours') " +
+        'ORDER BY requested_at DESC LIMIT 1',
+    )
+    .get(apiKeyHash) as { requested_at: string } | undefined;
+
+  return {
+    todayCount: countRow.n,
+    lastError: errRow?.requested_at ?? null,
+  };
 }
 
 // ---- Stats for Settings UI -------------------------------------------------

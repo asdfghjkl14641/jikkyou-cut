@@ -2,7 +2,11 @@ import { app } from 'electron';
 import { spawn, ChildProcess } from 'node:child_process';
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
+import { nanoid } from 'nanoid';
 import type { ChatMessage } from '../../common/types';
+import type { YtdlpCookiesBrowser } from '../../common/config';
+import { getCookiesArgs } from '../urlDownload';
+import { fetchTwitchVodChat, cancelTwitchVodChat } from './twitchGraphQL';
 
 let activeProcess: ChildProcess | null = null;
 
@@ -106,64 +110,69 @@ function parseYouTubeLine(line: string): ChatMessage | null {
   }
 }
 
-// Twitch's `rechat` json from yt-dlp is a single JSON document with a
-// `comments[]` array. Each entry has `content_offset_seconds`,
-// `message.body`, `commenter.display_name` per the v5 API shape.
-function parseTwitchJson(text: string): ChatMessage[] {
-  try {
-    const obj = JSON.parse(text) as Record<string, unknown>;
-    const comments = obj['comments'] as Array<Record<string, unknown>> | undefined;
-    if (!Array.isArray(comments)) return [];
-    const out: ChatMessage[] = [];
-    for (const c of comments) {
-      const offset = c['content_offset_seconds'];
-      if (typeof offset !== 'number') continue;
-      const message = c['message'] as Record<string, unknown> | undefined;
-      const body = message?.['body'];
-      if (typeof body !== 'string' || !body.trim()) continue;
-      const commenter = c['commenter'] as Record<string, unknown> | undefined;
-      const author = commenter?.['display_name'];
-      out.push({
-        timeSec: offset,
-        text: body,
-        author: typeof author === 'string' ? author : '',
-        platform: 'twitch',
-      });
-    }
-    return out;
-  } catch {
-    return [];
-  }
-}
+// Twitch's `rechat` JSON parser was retired in 段階 7 — the rechat
+// endpoint started returning HTTP 404 in 2026-05 (Twitch deprecation),
+// and Twitch chat now flows through the GraphQL path in
+// `./twitchGraphQL.ts`. Kept this comment as a tombstone so the
+// removal is visible in `git blame` if someone goes hunting for the
+// old shape.
 
-async function downloadChatJson(args: {
+async function downloadYouTubeChatJson(args: {
   url: string;
-  platform: 'youtube' | 'twitch';
   outDir: string;
+  cookiesBrowser: YtdlpCookiesBrowser;
+  cookiesFile: string | null;
+  cookiesFileYoutube: string | null;
 }): Promise<string | null> {
-  // yt-dlp's --sub-langs token differs per platform: live_chat for YT,
-  // rechat for Twitch.
-  const subLang = args.platform === 'youtube' ? 'live_chat' : 'rechat';
+  // YouTube-only after 段階 7. Twitch was split out to twitchGraphQL.
   await fs.mkdir(args.outDir, { recursive: true });
   const outputTemplate = path.join(args.outDir, '%(id)s.%(ext)s');
 
+  const ytArgs = [
+    args.url,
+    // platform='youtube' so the YouTube-specific cookie file (if set)
+    // wins over the generic one. Twitch path runs through GraphQL —
+    // it never reaches this function.
+    ...getCookiesArgs({
+      cookiesBrowser: args.cookiesBrowser,
+      cookiesFile: args.cookiesFile,
+      cookiesFileYoutube: args.cookiesFileYoutube,
+      cookiesFileTwitch: null,
+      platform: 'youtube',
+    }),
+    // YouTube's chat-replay subtitle resolution depends on the same
+    // nsig pipeline that the format extraction uses. Without a JS
+    // runtime, yt-dlp will sometimes return zero chat entries on videos
+    // where chat IS published — same root cause as the audio/video
+    // "Requested format is not available" issue. Forwarding `node`
+    // keeps this on the supported path. See urlDownload.downloadVideo
+    // for the broader rationale.
+    '--js-runtimes', 'node',
+    '--write-subs',
+    '--sub-langs', 'live_chat',
+    '--skip-download',
+    '--no-playlist',
+    '--no-warnings',
+    '-o', outputTemplate,
+  ];
+  console.log('[comment-debug] yt-dlp command:', ytdlpPath(), ytArgs.join(' '));
+
   return new Promise<string | null>((resolve) => {
-    const proc = spawn(ytdlpPath(), [
-      args.url,
-      '--write-subs',
-      '--sub-langs', subLang,
-      '--skip-download',
-      '--no-playlist',
-      '--no-warnings',
-      '-o', outputTemplate,
-    ]);
+    const proc = spawn(ytdlpPath(), ytArgs);
     activeProcess = proc;
     let stderr = '';
+    let stdout = '';
+    proc.stdout?.on('data', (d: Buffer) => {
+      stdout += d.toString();
+    });
     proc.stderr?.on('data', (d: Buffer) => {
       stderr += d.toString();
     });
     proc.on('exit', (code) => {
       activeProcess = null;
+      console.log('[comment-debug] yt-dlp exit code:', code);
+      console.log('[comment-debug] yt-dlp stdout (first 500):', stdout.slice(0, 500));
+      console.log('[comment-debug] yt-dlp stderr (first 500):', stderr.slice(0, 500));
       if (code !== 0) {
         console.warn(`[chat-replay] yt-dlp exited ${code}: ${stderr.slice(-500)}`);
         resolve(null);
@@ -174,13 +183,11 @@ async function downloadChatJson(args: {
       // Find the freshest matching file.
       fs.readdir(args.outDir)
         .then(async (entries) => {
+          console.log('[comment-debug] outDir entries:', entries);
           const candidates = entries
-            .filter((e) =>
-              args.platform === 'youtube'
-                ? e.endsWith('.live_chat.json')
-                : e.endsWith('.json'),
-            )
+            .filter((e) => e.endsWith('.live_chat.json'))
             .map((e) => path.join(args.outDir, e));
+          console.log('[comment-debug] chat file candidates:', candidates);
           if (candidates.length === 0) {
             console.warn(`[chat-replay] no chat file found in ${args.outDir}`);
             resolve(null);
@@ -191,13 +198,26 @@ async function downloadChatJson(args: {
             candidates.map(async (p) => ({ path: p, mtime: (await fs.stat(p)).mtimeMs })),
           );
           stats.sort((a, b) => b.mtime - a.mtime);
-          resolve(stats[0]?.path ?? null);
+          const winner = stats[0]?.path ?? null;
+          if (winner) {
+            try {
+              const st = await fs.stat(winner);
+              console.log('[comment-debug] chat file picked:', winner, 'size:', st.size);
+            } catch {
+              console.log('[comment-debug] chat file picked but stat failed:', winner);
+            }
+          }
+          resolve(winner);
         })
-        .catch(() => resolve(null));
+        .catch((err) => {
+          console.warn('[comment-debug] readdir failed:', err);
+          resolve(null);
+        });
     });
     proc.on('error', (err) => {
       activeProcess = null;
       console.warn('[chat-replay] yt-dlp error:', err.message);
+      console.log('[comment-debug] yt-dlp spawn error:', err.message);
       resolve(null);
     });
   });
@@ -213,8 +233,24 @@ async function downloadChatJson(args: {
  * intentionally infinite — chat replay is immutable for archived
  * videos.
  */
-export async function fetchChatReplay(url: string): Promise<ChatMessage[]> {
+export async function fetchChatReplay(
+  url: string,
+  options: {
+    cookiesBrowser: YtdlpCookiesBrowser;
+    cookiesFile: string | null;
+    cookiesFileYoutube: string | null;
+    cookiesFileTwitch: string | null;
+  },
+): Promise<ChatMessage[]> {
+  console.log(
+    '[comment-debug] fetchChatReplay entry, url:', url,
+    'cookiesBrowser:', options.cookiesBrowser,
+    'cookiesFile:', options.cookiesFile ?? '<none>',
+    'cookiesFileYT:', options.cookiesFileYoutube ?? '<none>',
+    'cookiesFileTW:', options.cookiesFileTwitch ?? '<none>',
+  );
   const meta = extractVideoId(url);
+  console.log('[comment-debug] extractVideoId result:', meta);
   if (!meta) {
     console.warn('[chat-replay] could not extract video id from URL:', url);
     return [];
@@ -222,36 +258,71 @@ export async function fetchChatReplay(url: string): Promise<ChatMessage[]> {
 
   const cached = await readCache(meta.id);
   if (cached) {
+    console.log('[comment-debug] cache HIT for', meta.id, 'messages:', cached.length);
     console.log(`[chat-replay] cache hit ${meta.id}: ${cached.length} messages`);
     return cached;
   }
+  console.log('[comment-debug] cache MISS for', meta.id, '- fetching');
 
-  const tmpDir = path.join(app.getPath('temp'), `jcut-chat-${meta.id}`);
+  let messages: ChatMessage[];
+  if (meta.platform === 'twitch') {
+    // 段階 7: GraphQL direct fetch. Twitch's rechat endpoint started
+    // returning HTTP 404 in 2026-05; the public GraphQL gateway with
+    // a hardcoded persisted-query hash is the path yt-dlp itself has
+    // also been using internally.
+    //
+    // 段階 8: forward Twitch cookies to bypass the integrity gateway
+    // that 1-pages most unauthenticated runs. Priority follows the
+    // same rule as yt-dlp's getCookiesArgs: platform-specific file
+    // beats the generic file. The browser-cookie path is intentionally
+    // NOT honoured here — `--cookies-from-browser` is a yt-dlp-only
+    // surface and reusing it would require reimplementing DPAPI/
+    // Chrome cookie-DB extraction in this codebase.
+    const twitchCookiesFile = options.cookiesFileTwitch ?? options.cookiesFile;
+    messages = await fetchTwitchVodChat(meta.id, { cookiesFile: twitchCookiesFile });
+    if (messages.length > 0) {
+      // Cache only on non-empty result. Empty might mean transient
+      // failure (rate limit, hash rotation) where we'd rather re-try
+      // on the next session than serve stale "no chat" forever.
+      await writeCache(meta.id, messages);
+    } else {
+      console.log('[comment-debug] twitch graphql returned 0 messages, NOT writing cache');
+    }
+    console.log(`[chat-replay] twitch ${meta.id}: ${messages.length} messages`);
+    return messages;
+  }
+
+  // YouTube path — yt-dlp `--sub-langs live_chat`. Per-invocation
+  // tmpDir suffix prevents WinError 32 (sharing violation) from
+  // back-to-back invocations on the same videoId; see comment in the
+  // setDuration drift guard for the related upstream bug.
+  const tmpDir = path.join(app.getPath('temp'), `jcut-chat-${meta.id}-${nanoid(8)}`);
   let downloadedPath: string | null = null;
   try {
-    downloadedPath = await downloadChatJson({
+    downloadedPath = await downloadYouTubeChatJson({
       url,
-      platform: meta.platform,
       outDir: tmpDir,
+      cookiesBrowser: options.cookiesBrowser,
+      cookiesFile: options.cookiesFile,
+      cookiesFileYoutube: options.cookiesFileYoutube,
     });
-    if (!downloadedPath) return [];
+    console.log('[comment-debug] downloadYouTubeChatJson result:', downloadedPath);
+    if (!downloadedPath) {
+      console.log('[comment-debug] returning [] without writing cache');
+      return [];
+    }
 
     const raw = await fs.readFile(downloadedPath, 'utf8');
-    let messages: ChatMessage[];
-    if (meta.platform === 'youtube') {
-      messages = raw
-        .split(/\r?\n/)
-        .map(parseYouTubeLine)
-        .filter((m): m is ChatMessage => m != null);
-    } else {
-      messages = parseTwitchJson(raw);
-    }
-    // Sort by timeSec just in case yt-dlp emits out of order.
+    console.log('[comment-debug] chat file raw length:', raw.length, 'first 200 chars:', raw.slice(0, 200));
+    const allLines = raw.split(/\r?\n/);
+    console.log('[comment-debug] youtube parse: raw lines =', allLines.length);
+    messages = allLines
+      .map(parseYouTubeLine)
+      .filter((m): m is ChatMessage => m != null);
+    console.log('[comment-debug] youtube parsed messages =', messages.length);
     messages.sort((a, b) => a.timeSec - b.timeSec);
 
-    console.log(
-      `[chat-replay] ${meta.platform} ${meta.id}: ${messages.length} messages`,
-    );
+    console.log(`[chat-replay] youtube ${meta.id}: ${messages.length} messages`);
     await writeCache(meta.id, messages);
     return messages;
   } finally {
@@ -261,6 +332,10 @@ export async function fetchChatReplay(url: string): Promise<ChatMessage[]> {
 }
 
 export async function cancelChatReplay(): Promise<void> {
+  // Cancel both transports — only one is in flight at any time, but
+  // cancellation is idempotent on both so calling unconditionally is
+  // simpler than tracking which platform is active.
+  cancelTwitchVodChat();
   if (activeProcess) {
     activeProcess.kill();
     activeProcess = null;
